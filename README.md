@@ -124,7 +124,7 @@ For details, see EnshroudedVR\README.txt in the package.
 
 ---
 
-This mod draws heavily on ValheimVR.
+This mod is based on ValheimVR. I have played that mod for 300 hours - I love it.
 This mod was made with AI. I cannot read code.
 I made it for my friends and myself. There will be no long-term support.
 Anyone is free to edit it - if updates have stopped, please fix the bugs yourself.
