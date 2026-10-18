@@ -81,6 +81,11 @@ inline std::atomic<uint64_t> unknownWorlds{0},mineAnswers{0};
 // Whether any World has the player's Actor bound (a host: the server's World does; a client never - its own Actor is not a
 // component of a World this process runs, 2026-10-19 friend's log: only the render binding, action_sequence world 0).
 inline bool actorBound(){std::lock_guard<std::mutex> lock(mutex);for(const auto& b:bindings)if(b.second.actor>=0)return true;return false;}
+// EVR_FORCE_CLIENT_TICKS=1 (test, 2026-10-19): a single player's updates for the player (targets, action bar, equipment, the
+// fog timer) run the way a client's do - from the camera's World (inputActor::clientWorldTicks) - and not from the server's
+// World the player's Actor is bound to. The guest's throwing and bow (headset 01:09, the friend: no action bar seen at all,
+// so no throwable in the hand) depend on that path, which a single player never takes otherwise.
+inline const bool forceClientTicks=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FORCE_CLIENT_TICKS",v,sizeof v);return n==1&&v[0]=='1';}();
 inline uintptr_t resolveWorld(uint32_t entity,uintptr_t pointer,unsigned bytes) noexcept {
  if(!requested||!entity||!pointer||(bytes!=176&&bytes!=3104))return 0;
  try{

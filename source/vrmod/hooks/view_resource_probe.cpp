@@ -1432,6 +1432,22 @@ void skipLiveFrame(PairResources& pair,bool early=false){
     logFile->event("world_warmup_frame_ended","\"frame\":"+std::to_string(liveFrame.frame)+
         ",\"serial\":"+std::to_string(pair.serial)+",\"layers\":0,\"warmup_frames\":"+std::to_string(pair.warmupFrames));
 }
+// The right eye and the desktop refresh's original View draw with the left eye's View streaming object (2026-10-19;
+// EVR_SHARE_EYE_STREAMING=0 for each View's own): the object's chunks become ready only through the terrain update, which
+// one View a frame runs (worldSharedStages: the left eye, the original View on the refresh frames), so the other objects
+// fell behind whenever the view moved fast - the right eye's fine detail radius (+0xc444, the distance to the nearest
+// chunk not ready, 0x1e3f56) fell from 33 m to 4 m while falling (Mock game-20261019-055216) and the ruins below went
+// see-through in the right eye on every picture and in the left on 4 of 6; lent to the right eye alone, both eyes lost
+// the tower only on the picture right after a refresh (-060125, the original View's own object 30 frames old). Running
+// the update for the right eye as well crashes (the brick jobs write through the closed frame arena, 0x13ab449 <-
+// 0x5875b, -055635 and 10-18). With the left eye's object every View picks its bricks and detail from one state.
+inline const bool shareStreaming=[]{char v[8]{};return GetEnvironmentVariableA("EVR_SHARE_EYE_STREAMING",v,sizeof v)!=1||v[0]!='0';}();
+struct StreamingLend {uintptr_t view=0,own=0;bool lent=false;
+    StreamingLend(uintptr_t to,uintptr_t left,bool want){if(!want||!to||!left)return;
+        try{own=read<uintptr_t>(to+layout::viewStreaming);const auto l=read<uintptr_t>(left+layout::viewStreaming);
+            if(own&&l&&own!=l){*reinterpret_cast<uintptr_t*>(to+layout::viewStreaming)=l;view=to;lent=true;}}catch(...){}}
+    StreamingLend(const StreamingLend&)=delete;StreamingLend& operator=(const StreamingLend&)=delete;
+    ~StreamingLend(){if(lent)*reinterpret_cast<uintptr_t*>(view+layout::viewStreaming)=own;}};
 void recordPair(PairResources &pair,void* context,void* parameters,void* target){
     const cpuTiming::Span timed(cpuTiming::Record);
     if(pair.pairPending)throw std::runtime_error("previous native eye pair still pending");
@@ -1658,6 +1674,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         struct ReadyScope {ReadyScope(worldReadyDiagnostic::Scope* scope){worldReadyDiagnostic::current=scope;}~ReadyScope(){worldReadyDiagnostic::current=nullptr;}};
         // Kept until the eye's CPU tasks finished (finishEyeCpuTasks below), not just until f7c50 returns.
         std::optional<giShare::Scope> giScope;
+        std::optional<StreamingLend> streamingLend;   // until the eye's CPU work is done (finishEyeCpuTasks)
         std::optional<giShare::BorrowScope> giBorrow;   // the right eye lit by the left eye's screen GI (borrow-screen form)
         std::optional<DofScope> dofScope; // also kept until the eye CPU tasks finished
         worldSharedStages::Context sharedStage;
@@ -1720,7 +1737,11 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
                 const auto from=read<uintptr_t>(pair.created[0]+layout::viewPost),to=read<uintptr_t>(pair.created[1]+layout::viewPost);
                 if(from&&to&&from!=to)exposurePair.emplace(from,to);
             }catch(...){}
+            // The right eye draws with the left eye's View streaming object (StreamingLend above).
             {const cpuTiming::Span eyeTimed(eye?cpuTiming::Eye1:cpuTiming::Eye0);
+             streamingLend.emplace(eye==1?pair.created[1]:0,pair.created[0],shareStreaming&&eye==1&&(liveFrame.eyeMask&1));
+             {static std::atomic<uint64_t> lends{0};if(streamingLend->lent){const auto n=++lends;if(n<=3||n%1800==0)logFile->event("eye_streaming_lent","\"serial\":"+std::to_string(pair.serial)+
+                 ",\"lends\":"+std::to_string(n)+",\"own\":"+hex(streamingLend->own)+",\"left\":"+hex(read<uintptr_t>(pair.created[1]+layout::viewStreaming)));}}
              original(pair.results[eye].data(),context,reinterpret_cast<void*>(pair.created[eye]),pair.parameters[eye].data(),pair.targetArguments[eye].data());}}
         if(stableFrustumBridge::observeEyes&&(eyeFrustum.failed||(projectionCalls==1&&(eyeFrustum.calls!=2||eyeFrustum.mask!=3))))
             throw std::runtime_error("eye frustum diagnostic boundary differs");
@@ -1790,8 +1811,24 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         // ending the series there left the headset without the world.
         {const cpuTiming::Span tasksTimed(eye?cpuTiming::Tasks1:cpuTiming::Tasks0);
          finishEyeCpuTasks(pair.scene);}
-        giScope.reset();giBorrow.reset();dofScope.reset();
+        streamingLend.reset();giScope.reset();giBorrow.reset();dofScope.reset();
         worldSharedStages::detailRadius::finishEye(int(eye),pair.serial);   // the right eye's terrain detail radius (2026-10-18)
+        // Diagnostic (2026-10-19, EVR_DUMP_STREAMING_AT=<frame>[,<frame>...]): at those live frames, after the right eye, the
+        // View streaming objects ([View+0x978], 128 KB each - the terrain detail radius sits at +0xc444) of both eyes and of the
+        // original View, and both eye Views (256 KB): which per-View values differ between the eyes while the right eye alone
+        // shows the ruins see-through while falling (Mock game-20261019-053537: left eye and original View drew them).
+        if(eye==1){static const std::vector<uint64_t> dumpAt=[]{std::vector<uint64_t> r;char v[256]{};const auto n=GetEnvironmentVariableA("EVR_DUMP_STREAMING_AT",v,sizeof v);
+                if(n&&n<sizeof v){std::istringstream in(v);std::string t;while(std::getline(in,t,','))try{r.push_back(std::stoull(t));}catch(...){}}return r;}();
+            static size_t dumped=0;
+            if(dumped<dumpAt.size()&&liveFrame.frame>=dumpAt[dumped]){
+                const auto tag=std::to_string(dumpAt[dumped++]);
+                auto save=[&](const std::string& name,uintptr_t at,size_t bytes){if(!at)return;std::vector<uint8_t> b(bytes);SIZE_T got=0;
+                    ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(at),b.data(),b.size(),&got);
+                    std::ofstream out(calibrationDirectory/("streaming-"+tag+"-"+name+".bin"),std::ios::binary);out.write(reinterpret_cast<const char*>(b.data()),std::streamsize(got));};
+                const uintptr_t s0=read<uintptr_t>(pair.created[0]+layout::viewStreaming),s1=streamingLend&&streamingLend->lent?streamingLend->own:read<uintptr_t>(pair.created[1]+layout::viewStreaming),so=read<uintptr_t>(pair.originalView+layout::viewStreaming);
+                save("eye0",s0,0x20000);save("eye1",s1,0x20000);save("orig",so,0x20000);save("view0",pair.created[0],0x40000);save("view1",pair.created[1],0x40000);
+                logFile->event("streaming_dump","\"frame\":"+std::to_string(liveFrame.frame)+",\"serial\":"+std::to_string(pair.serial)+",\"tag\":"+jsonString(tag)+
+                    ",\"eye0\":"+hex(s0)+",\"eye1\":"+hex(s1)+",\"orig\":"+hex(so)+",\"radius\":["+std::to_string(s0?read<float>(s0+0xc444):0.f)+","+std::to_string(s1?read<float>(s1+0xc444):0.f)+","+std::to_string(so?read<float>(so+0xc444):0.f)+"]");}}
         // Diagnostic (2026-10-18 21:50, EVR_DUMP_VIEWS_ON_DIFF=1): both eye Views (256 KB each) on frames where the right eye's
         // terrain detail radius differed from the left eye's (the 1st, 30th and 150th such frame) and once where they agreed -
         // to find the per-View values behind it (the user: the trees' LOD distance differs between the eyes as well).
@@ -2587,6 +2624,15 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
                 if(vfxAside.vfx){vfxAside.view=pair->originalView;*reinterpret_cast<uintptr_t*>(vfxAside.view+layout::viewVfx)=0;++refreshVfxAside;
                     if(refreshVfxAside<=3||refreshVfxAside%500==0)logFile->event("desktop_refresh_vfx_to_eye","\"serial\":"+std::to_string(sharedStage.serial)+
                         ",\"frame\":"+std::to_string(liveFrame.frame)+",\"eye\":"+std::to_string(worldSharedStages::vfxOwnerEye)+",\"frames\":"+std::to_string(refreshVfxAside));}}
+            // The original View drawn beside the eyes (the refresh, -DesktopRender) with the left eye's streaming object;
+            // not while the world loads (the game's own original View then, as without the mod).
+            const bool lendOriginal=shareStreaming&&!loadingWorld&&active.load()&&pair&&!pair->failed&&!done.load()&&
+                reinterpret_cast<uintptr_t>(view)==pair->originalView&&pair->pairedFrames>=desktopSkipWarmupPairs;
+            StreamingLend originalLend(lendOriginal?pair->originalView:0,lendOriginal?pair->created[0]:0,lendOriginal);
+            struct UpdateSkip {bool was=worldSharedStages::detailRadius::streamingUpdate::skip;explicit UpdateSkip(bool on){if(on)worldSharedStages::detailRadius::streamingUpdate::skip=true;}
+                ~UpdateSkip(){worldSharedStages::detailRadius::streamingUpdate::skip=was;}} updateSkip(originalLend.lent&&worldSharedStages::detailRadius::streamingUpdate::enabled);
+            {static std::atomic<uint64_t> lends{0};if(originalLend.lent){const auto n=++lends;if(n<=3||n%300==0)logFile->event("original_streaming_lent","\"serial\":"+std::to_string(sharedStage.serial)+
+                ",\"frame\":"+std::to_string(liveFrame.frame)+",\"lends\":"+std::to_string(n)+",\"own\":"+hex(originalLend.own));}}
             result=original(out,context,view,originalRenderParameters,target);
             if(desktopSkip&&pair&&reinterpret_cast<uintptr_t>(view)==pair->originalView)++desktopRendered;
             if(refreshDesktop&&desktopRefreshDiscard&&!desktopDiscard&&active.load()&&pair&&!pair->failed&&!done.load()){

@@ -884,7 +884,7 @@ __declspec(noinline) uintptr_t __fastcall select(void* output,const void* actor,
     if(world){before=read<std::array<uint8_t,3104>>(reinterpret_cast<uintptr_t>(actor));observe=(before[0x1b1]&1)!=0;
      if(liveStill||hideAmmunition){stillWorld=world;stillEntity=entity;stillActor=reinterpret_cast<uintptr_t>(actor);}
      noteActor(actor);   // every call (headset run 11: with the still experiment alone the slots were never found)
-     liveTargets::tick(world,entity);liveActionbars::tick(world,entity);liveEquipment::tick(world,entity);fogTimer::tick(world,entity);}
+     if(!nativeImpactComponents::forceClientTicks){liveTargets::tick(world,entity);liveActionbars::tick(world,entity);liveEquipment::tick(world,entity);fogTimer::tick(world,entity);}}
    }
   }catch(const std::exception& e){if(failures.fetch_add(1)<3)logFile->event("motion_event_selection_failure","\"reason\":"+jsonString(e.what()));}
  }

@@ -77,4 +77,29 @@ class Recentre {
         since=0;return true;
     }
 };
+// The plate also goes back level with the eyes (2026-10-19, a friend's headset run with Virtual Desktop: "the start
+// menu is shown far down"; the plate was placed 1.2 s after the start at the head of that moment - 57 degrees down,
+// the headset not yet on - and turning was the only thing that moved it again):
+//  - the head is more than 25 cm above or below the plate's middle for 1 s without a break (the headset was put on,
+//    the player stood up or sat down);
+//  - the plate was placed while the head looked more than 40 degrees up or down (no one reads a plate that way: the
+//    headset lay on a desk or hung at the neck), and the head looks within 30 degrees of level for 0.5 s.
+class Level {
+    uint64_t since=0;bool steepPlaced=false;
+  public:
+    static constexpr float metres=.25f;
+    static constexpr uint64_t hold=1000,holdLevel=500;
+    static constexpr float steepSine=.6428f,levelSine=.5f;   // sin 40, sin 30 degrees
+    // aheadY: the vertical part of where the head looks (unit vector); call placed() whenever the plate is placed.
+    void placed(float aheadY){steepPlaced=std::isfinite(aheadY)&&std::abs(aheadY)>steepSine;since=0;}
+    bool update(float headAbovePlate,float aheadY,uint64_t ms){
+        if(!std::isfinite(headAbovePlate)||!std::isfinite(aheadY)){since=0;return false;}
+        const bool off=std::abs(headAbovePlate)>metres,looksLevel=std::abs(aheadY)<levelSine;
+        const bool wanted=off||(steepPlaced&&looksLevel);
+        if(!wanted){since=0;return false;}
+        if(!since){since=ms?ms:1;return false;}
+        if(ms-since<(off?hold:holdLevel))return false;
+        since=0;return true;
+    }
+};
 } // namespace evr::screen

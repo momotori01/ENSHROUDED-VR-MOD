@@ -42,5 +42,16 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(!r.update(0,-2,1,0,6000)&&!r.update(0,-2,1,0,7400)&&r.update(0,-2,1,0,7500));   // 90 degrees off, for 1.5 s
   ck(!r.update(0,-2,1,0,7600)&&!r.update(0,-2,0,-1,8000)&&!r.update(0,-2,0,1,8100)&&!r.update(0,-2,0,1,9500)&&r.update(0,-2,0,1,9600));
   ck(!r.update(0,-2,0,0,10000)&&!r.update(0,0,1,0,10000));}             // straight up or down, or standing in the plate
+ {Level l;l.placed(-.1f);                                                 // placed looking nearly level
+  ck(!l.update(.1f,-.1f,0)&&!l.update(-.2f,.3f,100));                     // within 25 cm, any look: stays
+  ck(!l.update(.4f,0,1000)&&!l.update(.4f,0,1900)&&l.update(.4f,0,2000));  // 40 cm above for 1 s: level again
+  ck(!l.update(-.3f,0,3000)&&!l.update(.1f,0,3500)&&!l.update(-.3f,0,3600)&&!l.update(-.3f,0,4500)&&l.update(-.3f,0,4600));  // a break starts it again
+  ck(!l.update(.1f,0,6000)&&!l.update(.1f,0,9000));                       // placed level: looking level does nothing
+  // the friend's run: placed 57 degrees down (headset on the desk), then worn - looking 20 degrees down, 8 cm higher
+  l.placed(-.84f);ck(!l.update(.08f,-.81f,10000)&&!l.update(.08f,-.81f,12000));   // still steep: stays
+  ck(!l.update(.08f,-.34f,13000)&&!l.update(.08f,-.34f,13400)&&l.update(.08f,-.34f,13500));   // level enough for 0.5 s
+  l.placed(-.34f);ck(!l.update(.08f,-.34f,14000)&&!l.update(.08f,-.34f,16000));    // placed there: stays
+  l.placed(.9f);ck(!l.update(0,.9f,17000)&&!l.update(0,.2f,17100)&&l.update(0,.2f,17600));   // placed looking up as well
+  ck(!l.update(NAN,0,18000)&&!l.update(0,NAN,18000));}                     // no pose: nothing
  std::cout<<"screen_keys "<<n<<" PASS\n";return 0;}
  catch(const std::exception& e){std::cerr<<"screen_keys FAIL "<<e.what()<<"\n";return 1;}}

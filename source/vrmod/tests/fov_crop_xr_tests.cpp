@@ -149,6 +149,16 @@ int main(int argc,char** argv)
             std::cout<<"turned pixel saving "<<(*mask?"(mask) ":"(corners) ")<<saving<<'\n';
             if(recordedFov)require(*mask?saving>.2:saving>.1,*mask?"the user's headset with a lens mask saves over 20 %":"the user's headset without a mask saves over 10 %");
         }
+        // The visible area kept for the next start (fovCache): a start with the mask writes it, a start without uses it.
+        {
+            std::filesystem::remove("fov-crop-validation/fov-cache.txt");
+            _putenv_s("EVR_FOV_CACHE_FILE","fov-crop-validation/fov-cache.txt");_putenv_s("EVR_SYMMETRIC_FOV","1");
+            _putenv_s("EVR_MOCK_VISIBILITY_MASK","1");const auto measured=run("canted-cache-write.jsonl",true);
+            require(std::filesystem::exists("fov-crop-validation/fov-cache.txt"),"a start with the lens mask keeps it for the next start");
+            _putenv_s("EVR_MOCK_VISIBILITY_MASK","0");const auto reused=run("canted-cache-read.jsonl",true);
+            require(reused.width[0]==measured.width[0]&&reused.height[0]==measured.height[0],"a start without the mask takes the kept one: the same extent");
+            _putenv_s("EVR_FOV_CACHE_FILE","");_putenv_s("EVR_SYMMETRIC_FOV","");
+        }
         _putenv_s("EVR_MOCK_VISIBILITY_MASK","0.85");
         std::cout << checks << " checks passed\n";
         return 0;

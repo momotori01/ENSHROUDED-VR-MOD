@@ -2,6 +2,7 @@
 #include <iomanip>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <evr/log.hpp>
 #include <evr/math.hpp>
 #include <evr/fov_crop.hpp>
@@ -77,7 +78,9 @@ class OpenXrClient : private OpenXrDispatch
     bool cantedFov = true;
     // masked: the turned frustums of the first frame hold the lens' visible area (cantedEnvelope with the mask) and are
     // used while the runtime fov stays that of the first frame; a changed mask or fov goes back to the corners' frustum.
-    struct Cant {bool decided = false, masked = false; std::array<uint32_t, 2> fullWidth{}, fullHeight{};
+    // cacheWritten: the lens' visible area came later than the first frame and was kept for the next start (fovCache)
+    struct Cant {bool decided = false, masked = false, cacheWritten = false, lateGaveUp = false; std::string lateWhy;
+        std::array<uint32_t, 2> fullWidth{}, fullHeight{};
         std::array<XrFovf, 2> runtime{}; std::array<CantedFov, 2> turned{};} cant;
     bool running = false, exit = false, loss = false;
     XrSessionState state = XR_SESSION_STATE_UNKNOWN;
@@ -151,6 +154,83 @@ class OpenXrClient : private OpenXrDispatch
     // crop below: the pixels per tangent unit of the plain envelope at the full extent, for the smaller turned frustum.
     // One extent for both eyes (the larger of the two), as the layer's eye passes expect (the GI and fog copies find
     // the other eye by its extent, the eye warp needs both alike); the swapchain images keep their full size.
+    // The turned frustums held to the lens of this headset, kept for the next start (2026-10-19; the user: "as EDF6 does,
+    // measured for each headset at the first start and trimmed from the second - from the first, if possible"). When the
+    // runtime gives no visible area at the first frame (the headset of 10-19 04:26: "mask none"), it is asked again for a
+    // while (lateMask); what it then gives is written to EVR_FOV_CACHE_FILE (the package: EnshroudedVR\run\fov-cache.txt)
+    // with the runtime fovs it belongs to, and the next start whose runtime fovs are the same uses it from its first frame.
+    // A line: EVR_FOV_CACHE_1 <margin degrees> <8 runtime fov angles> <4 tangents: eye 0 x y, eye 1 x y> <mask kind>.
+    static std::filesystem::path fovCacheFile()
+    {
+        const wchar_t *v = _wgetenv(L"EVR_FOV_CACHE_FILE");   // wide: the game folder may have any name
+        return v && *v ? std::filesystem::path(v) : std::filesystem::path();
+    }
+    bool readFovCache(const std::array<XrView, 2> &views, std::array<double, 4> &tangents, std::string &kind)
+    {
+        const auto path = fovCacheFile();
+        if (path.empty()) return false;
+        std::ifstream in(path);
+        std::string magic;
+        float margin = 0;
+        std::array<float, 8> fov{};
+        if (!(in >> magic >> margin) || magic != "EVR_FOV_CACHE_1" || std::abs(margin - fovCropMarginDegrees()) > 1e-3f) return false;
+        for (auto &a : fov) if (!(in >> a)) return false;
+        for (auto &t : tangents) if (!(in >> t) || !std::isfinite(t) || t < .2 || t > 6) return false;
+        if (!(in >> kind)) kind = "?";
+        for (uint32_t eye = 0; eye < 2; ++eye)
+        {
+            const auto &f = views[eye].fov;
+            const std::array<float, 4> now{f.angleLeft, f.angleRight, f.angleUp, f.angleDown};
+            for (size_t i = 0; i < 4; ++i) if (std::abs(now[i] - fov[eye * 4 + i]) > 1e-4f) return false;
+        }
+        return true;
+    }
+    void writeFovCache(const std::array<XrView, 2> &views, const std::array<CantedFov, 2> &turned, const char *kind)
+    {
+        const auto path = fovCacheFile();
+        if (path.empty()) return;
+        try
+        {
+            const auto& p = path;
+            if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path());
+            std::ofstream out(p, std::ios::trunc);
+            out << std::setprecision(9) << "EVR_FOV_CACHE_1 " << fovCropMarginDegrees();
+            for (uint32_t eye = 0; eye < 2; ++eye)
+            {
+                const auto &f = views[eye].fov;
+                out << ' ' << f.angleLeft << ' ' << f.angleRight << ' ' << f.angleUp << ' ' << f.angleDown;
+            }
+            for (uint32_t eye = 0; eye < 2; ++eye) out << ' ' << std::tan(turned[eye].fov.angleRight) << ' ' << std::tan(turned[eye].fov.angleUp);
+            out << ' ' << kind << '\n';
+            log.event("canted_fov_cache_written", "\"file\":" + jsonString(path.filename().string()) + ",\"ok\":" + (out ? "true" : "false"));
+        }
+        catch (const std::exception &e)
+        {
+            log.event("canted_fov_cache_written", "\"ok\":false,\"reason\":" + jsonString(e.what()));
+        }
+    }
+    // Asked again every 30 frames for the first 3000 when the first frame had no visible area (lateMask): kept for the next
+    // start only - this session's eyes keep the extent decided at their first frame.
+    void lateMask(const std::array<XrView, 2> &views)
+    {
+        std::array<std::vector<XrVector2f>, 2> visible;
+        const char *kind = "none";
+        std::string why;
+        for (uint32_t eye = 0; eye < 2; ++eye)
+            if (!visiblePoints(eye, fovcrop::fromFov(views[eye].fov), visible[eye], kind, &why)) { cant.lateWhy = "eye " + std::to_string(eye) + ": " + why; return; }
+        std::array<CantedFov, 2> turned;
+        try
+        {
+            for (uint32_t eye = 0; eye < 2; ++eye) turned[eye] = cantedEnvelope(views[eye].fov, &visible[eye], fovCropMarginDegrees() * pi / 180.f);
+        }
+        catch (const std::exception &e) { cant.lateWhy = e.what(); return; }
+        cant.cacheWritten = true;
+        std::ostringstream d;
+        d << std::setprecision(6) << "\"frame\":" << frames << ",\"mask\":\"" << kind << "\",\"turned_fov\":[" << turned[0].fov.angleRight << ','
+          << turned[0].fov.angleUp << ',' << turned[1].fov.angleRight << ',' << turned[1].fov.angleUp << "],\"from_the_next_start\":true";
+        log.event("canted_fov_mask_late", d.str());
+        writeFovCache(views, turned, kind);
+    }
     void decideCant(const std::array<XrView, 2> &views)
     {
         cant.decided = true;
@@ -163,14 +243,32 @@ class OpenXrClient : private OpenXrDispatch
             std::array<std::vector<XrVector2f>, 2> visible;
             bool masked = xrGetVisibilityMaskKHR && fovCropRequested();
             const char *kind = "none";
+            // why there is no mask (the headset of 10-19 04:26 gave "none" and nothing more): recorded for the next run
+            std::string maskWhy = !xrGetVisibilityMaskKHR ? "runtime_without_visibility_mask" : !fovCropRequested() ? "disabled_by_EVR_FOV_CROP" : "";
             for (uint32_t eye = 0; eye < 2 && masked; ++eye)
-                masked = visiblePoints(eye, fovcrop::fromFov(views[eye].fov), visible[eye], kind);
+            {
+                std::string why;
+                masked = visiblePoints(eye, fovcrop::fromFov(views[eye].fov), visible[eye], kind, &why);
+                if (!masked) maskWhy = "eye " + std::to_string(eye) + ": " + why;
+            }
             const float margin = fovCropMarginDegrees() * pi / 180.f;
-            detail << "\"mask\":\"" << (masked ? kind : "none") << "\",\"margin_deg\":" << fovCropMarginDegrees() << ",\"eyes\":[";
+            // no visible area now: the one this headset gave at an earlier start (fovCache), when its fovs are the same
+            std::array<double, 4> cached{};
+            std::string cachedKind;
+            const bool fromCache = !masked && readFovCache(views, cached, cachedKind);
+            detail << "\"mask\":\"" << (masked ? kind : fromCache ? "cache" : "none") << "\",\"mask_why\":" << jsonString(maskWhy)
+                   << ",\"cache\":" << (fromCache ? jsonString(cachedKind) : std::string("null"))
+                   << ",\"margin_deg\":" << fovCropMarginDegrees() << ",\"eyes\":[";
             for (uint32_t eye = 0; eye < 2; ++eye)
             {
                 const auto plain = symmetricEnvelope(views[eye].fov);
-                const auto turned = cantedEnvelope(views[eye].fov, masked ? &visible[eye] : nullptr, margin);
+                auto turned = cantedEnvelope(views[eye].fov, masked ? &visible[eye] : nullptr, margin);
+                if (fromCache)   // the same turn (it follows the runtime fov); never wider than the corners' frustum
+                {
+                    const float x = float(std::atan(std::min(cached[eye * 2], double(std::tan(turned.fov.angleRight)))));
+                    const float y = float(std::atan(std::min(cached[eye * 2 + 1], double(std::tan(turned.fov.angleUp)))));
+                    turned.fov = {-x, x, y, -y};
+                }
                 cant.runtime[eye] = views[eye].fov; cant.turned[eye] = turned;
                 const double sx = std::tan(plain.angleRight), sy = std::tan(plain.angleUp);
                 const double cx = std::tan(turned.fov.angleRight), cy = std::tan(turned.fov.angleUp);
@@ -182,7 +280,9 @@ class OpenXrClient : private OpenXrDispatch
                        << plain.angleRight << ',' << plain.angleUp << "],\"turn\":[" << turned.turn.x << ',' << turned.turn.y << ','
                        << turned.turn.z << ',' << turned.turn.w << "]}";
             }
-            cant.masked = masked;
+            cant.masked = masked || fromCache;   // the frames keep these frustums while the runtime fov stays the same
+            if (masked) { writeFovCache(views, cant.turned, kind); cant.cacheWritten = true; }
+            else if (!fromCache) cant.lateWhy = maskWhy;
         }
         catch (const std::exception &e)
         {
@@ -211,11 +311,20 @@ class OpenXrClient : private OpenXrDispatch
     // The lens' visible area as points (tangents on z = -1 of the runtime eye) for cantedEnvelope: the vertices of a
     // visible mesh or line loop, or for a hidden mesh the corners of the visible cells of a grid. Only a plausible area
     // (fovcrop::plausible: inside the fov, most of each axis, around the centre); false leaves the corners' frustum.
-    bool visiblePoints(uint32_t eye, const fovcrop::TanRect &fov, std::vector<XrVector2f> &out, const char *&kind)
+    bool visiblePoints(uint32_t eye, const fovcrop::TanRect &fov, std::vector<XrVector2f> &out, const char *&kind, std::string *why = nullptr)
     {
         out.clear();
         fovcrop::TanRect bounds{};
-        if (!fov.valid() || !visibleBounds(eye, fov, bounds, kind) || !fovcrop::plausible(fov, bounds)) return false;
+        const auto no = [&](const std::string &reason) { if (why) *why = reason; return false; };
+        if (!fov.valid()) return no("fov invalid");
+        if (!visibleBounds(eye, fov, bounds, kind)) return no("no mask from the runtime (all three types empty or failed)");
+        if (!fovcrop::plausible(fov, bounds))
+        {
+            std::ostringstream b;
+            b << std::setprecision(5) << "mask " << kind << " not plausible: bounds [" << bounds.left << ',' << bounds.right << ',' << bounds.up << ','
+              << bounds.down << "] in fov [" << fov.left << ',' << fov.right << ',' << fov.up << ',' << fov.down << ']';
+            return no(b.str());
+        }
         for (auto type : {XR_VISIBILITY_MASK_TYPE_VISIBLE_TRIANGLE_MESH_KHR, XR_VISIBILITY_MASK_TYPE_LINE_LOOP_KHR,
                           XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR})
         {
@@ -257,7 +366,7 @@ class OpenXrClient : private OpenXrDispatch
             if (out.size() >= 3) return true;
             out.clear();
         }
-        return false;
+        return no(std::string("mask ") + kind + " plausible but gave no points");
     }
     void decideFovCrop(const std::array<XrView, 2> &views)
     {
@@ -936,6 +1045,12 @@ class OpenXrClient : private OpenXrDispatch
             }
             pending.snapshot.shouldRender = true;
             if (!crop.decided) decideFovCrop(views);
+            if (symmetricFov && cantedFov && cant.decided && !cant.masked && !cant.cacheWritten && !cant.lateGaveUp && xrGetVisibilityMaskKHR &&
+                fovCropRequested() && frames % 30 == 0)
+            {
+                if (frames <= 3000) lateMask(views);
+                else { cant.lateGaveUp = true; log.event("canted_fov_mask_never", "\"frames\":" + std::to_string(frames) + ",\"why\":" + jsonString(cant.lateWhy)); }
+            }
             if (crop.active)
                 for (uint32_t eye = 0; eye < 2; ++eye) views[eye].fov = fovcrop::apply(views[eye].fov, crop.rect[eye]);
             if (symmetricFov) for(uint32_t eye=0;eye<2;++eye) {

@@ -227,8 +227,10 @@ __declspec(noinline) bool __fastcall advance(void* context,void* query,uint32_t 
             const auto actorWorld=nativeImpactComponents::resolveWorld(entity,baseActor,3104);
             // after 5 s without any Actor bound: a host binds the server's World within the first ticks
             static uint64_t firstQuery=0;if(!firstQuery)firstQuery=GetTickCount64();
-            if(!actorWorld&&clientWorldTicks&&local.world&&GetTickCount64()-firstQuery>5000&&!nativeImpactComponents::actorBound()){
-                if(clientTicks.fetch_add(1)==0)logFile->event("client_world_ticks","\"world\":"+hex(local.world)+",\"entity\":"+std::to_string(entity)+",\"reason\":\"no World has the player's Actor (a client)\"");
+            const bool forced=nativeImpactComponents::forceClientTicks;
+            if((!actorWorld||forced)&&clientWorldTicks&&local.world&&GetTickCount64()-firstQuery>5000&&(forced||!nativeImpactComponents::actorBound())){
+                if(clientTicks.fetch_add(1)==0)logFile->event("client_world_ticks","\"world\":"+hex(local.world)+",\"entity\":"+std::to_string(entity)+
+                    ",\"reason\":"+(forced?"\"forced (EVR_FORCE_CLIENT_TICKS=1)\"":"\"no World has the player's Actor (a client)\""));
                 clientWorldTicks(local.world,entity);}
             actionSequenceObserver::capture(baseActor,entity,local.entity,tick,input,actor,actorWorld,slots);
             localJump::sample(actorWorld,entity);

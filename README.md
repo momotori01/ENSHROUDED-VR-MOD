@@ -120,7 +120,7 @@ For details, see EnshroudedVR\README.txt in the package.
 
 ## Known issues
 - Now and then some objects do not line up between the eyes (wrong parallax).
-- While falling or gliding high above the ground, distant buildings and ruins seen from above can turn see-through for a moment (being looked into).
+- While falling or gliding high above the ground, distant buildings and ruins seen from above can turn see-through for a single frame in the right eye (much rarer since 0.9.1; being looked into).
 
 ---
 

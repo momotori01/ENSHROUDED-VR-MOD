@@ -36,7 +36,7 @@ struct State {
     VkBuffer dot{};VkDeviceMemory dotMemory{};uint8_t* dotBytes=nullptr;int dotLook=-1;
     VkBuffer text{};VkDeviceMemory textMemory{};uint32_t textWidth=0,textHeight=0;   // "VR Now Loading..." as pixels
     bool failed=false,formatTold=false,threadTold=false;unsigned failures=0;uint64_t frames=0,saves=0,worldPlates=0;
-    bool plateSet=false;Pose origin=identityPose();evr::screen::Recentre recentre;uint64_t lastFrameTick=0;
+    bool plateSet=false;Pose origin=identityPose();evr::screen::Recentre recentre;evr::screen::Level level;uint64_t lastFrameTick=0;
     evr::menu::Buttons buttons;evr::menu::ClickSlack slack;POINT lastClient{-1,-1};HWND window{};uint64_t windowLooked=0;int pointerHand=-1;
     evr::screen::Keys keys;uint64_t moves=0,clicks=0,keysPosted=0;int lastState=-1;uint64_t lastLog=0;
 };
@@ -333,13 +333,17 @@ inline void frame(LiveNativeXr& live,bool own){
     if(!snapshot.shouldRender){xr.finishFrame();return;}
     const auto now=GetTickCount64();const auto& head=xr.headLocation;const bool headValid=(head.locationFlags&3)==3;
     // Where the plate stands: ahead of where the player looked when it was first shown, or shown again after the
-    // world's eyes, or after they turned away from it for a while.
+    // world's eyes, or after they turned away from it for a while, or level with the eyes again (evr::screen::Level).
     if(headValid){
         const auto ahead=rotate(head.pose.orientation,{0,0,-1});const auto centre=compose(state.origin,Pose{{0,0,0,1},{0,0,-plateDistance}}).position;
-        const bool again=!state.plateSet||(own&&now-state.lastFrameTick>3000)||(own&&state.recentre.update(centre.x-head.pose.position.x,centre.z-head.pose.position.z,ahead.x,ahead.z,now));
-        if(again){state.origin=evr::menu::plateOrigin(head.pose);state.plateSet=true;
+        const bool turned=own&&state.recentre.update(centre.x-head.pose.position.x,centre.z-head.pose.position.z,ahead.x,ahead.z,now);
+        const bool levelled=own&&!turned&&state.plateSet&&state.level.update(head.pose.position.y-centre.y,ahead.y,now);
+        const bool again=!state.plateSet||(own&&now-state.lastFrameTick>3000)||turned||levelled;
+        if(again){const char* why=!state.plateSet?"first":turned?"turned_away":levelled?"level_with_the_eyes":"shown_again";
+            state.origin=evr::menu::plateOrigin(head.pose);state.plateSet=true;state.level.placed(ahead.y);
             std::ostringstream o;o<<std::setprecision(6)<<"\"frame\":"<<snapshot.frame<<",\"origin_position\":["<<state.origin.position.x<<','<<state.origin.position.y<<','<<state.origin.position.z<<"],\"origin_orientation\":["<<state.origin.orientation.x<<','
-                <<state.origin.orientation.y<<','<<state.origin.orientation.z<<','<<state.origin.orientation.w<<"],\"distance_m\":"<<plateDistance<<",\"width_m\":"<<plateWidth<<",\"space\":\"LOCAL\"";
+                <<state.origin.orientation.y<<','<<state.origin.orientation.z<<','<<state.origin.orientation.w<<"],\"distance_m\":"<<plateDistance<<",\"width_m\":"<<plateWidth<<",\"space\":\"LOCAL\""
+                <<",\"head_looks_up\":"<<ahead.y<<",\"why\":\""<<why<<'"';
             live.log->event("screen_plate_placed",o.str());}
     }
     if(own)state.lastFrameTick=now;

@@ -87,6 +87,9 @@ inline Environment vrEnvironment(const Paths& p,const Shaders& s,bool online,dou
         // The first-person height that settled in an earlier session (hooks/root_camera_bridge.hpp): the first pair of
         // eyes does not wait half a minute for the game's idle camera again.
         {L"EVR_KNOWN_HEIGHT_FILE",p.mod+L"\\run\\known-height.txt"},
+        // The lens' visible area of this headset, kept from an earlier start when the runtime gives it only after the
+        // first frame (include/evr/openxr_client.hpp fovCache): the picture fits the lens from the next start.
+        {L"EVR_FOV_CACHE_FILE",p.mod+L"\\run\\fov-cache.txt"},
         {L"EVR_LAYER_OUTPUT",p.log},{L"VK_LAYER_PATH",p.bin},{L"VK_INSTANCE_LAYERS",L"VK_LAYER_EVR_diagnostic"},
         {L"EVR_PREPARE_OPENXR",L"1"},{L"EVR_PREPARE_LOADER",p.bin+L"\\openxr_loader.dll"},{L"EVR_PREPARE_FIXTURE",L"0"},{L"EVR_PREPARE_FAIL_DEVICE",L"0"},
         {L"EVR_PREPARE_SESSION_FIXTURE",L"0"},{L"EVR_PREPARE_GAME_SESSION",L"0"},{L"EVR_LIVE_NATIVE_XR",L"1"},

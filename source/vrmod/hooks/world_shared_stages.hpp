@@ -109,11 +109,33 @@ using Fn=void*(__fastcall*)(void*,void*,void*);
 inline Fn original=nullptr;inline bool enabled=false;
 inline thread_local int role=0;   // 1: the owner's update (its result is kept), 2: the other eye's own update (the step is left out)
 inline std::atomic<uint64_t> keptSerial{0},lent{0},kept{0};inline std::atomic<uint32_t> keptStatus{0},keptWord{0};
+// EVR_BRICK_STEP_LOG=1 (diagnostic, 2026-10-19; buildings seen from above while falling turn see-through for a few
+// seconds, fewer since the headset ran at 36 pairs a second instead of 25): what each step returns and what the bricks'
+// frame arena holds around it, 30 steps a line - does the brick system run at a limit while the view falls? Pass-through.
+inline const bool logWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_BRICK_STEP_LOG",v,sizeof v);return n==1&&v[0]=='1';}();
+struct Sample {uint64_t frame=0;uint32_t status=0,word=0,calls=0;std::array<uint64_t,6> before{},after{};};
+inline std::array<Sample,30> samples{};inline size_t sampleCount=0;inline uint64_t lines=0;
+inline void record(void* bricks,void* result,const std::array<uint64_t,6>& before,uint64_t frame){
+    Sample s;s.frame=frame;s.before=before;
+    if(result){s.status=*static_cast<uint8_t*>(result);std::memcpy(&s.word,static_cast<uint8_t*>(result)+4,4);}
+    try{const auto buffer=read<uintptr_t>(reinterpret_cast<uintptr_t>(bricks)+0x10300);if(buffer)s.after=read<std::array<uint64_t,6>>(buffer+0x58);}catch(...){}
+    samples[sampleCount++]=s;
+    if(sampleCount<samples.size())return;
+    sampleCount=0;
+    std::ostringstream f;f<<"\"line\":"<<++lines<<",\"frames\":["<<samples.front().frame<<','<<samples.back().frame<<"],\"steps\":[";
+    for(size_t i=0;i<samples.size();++i){const auto& x=samples[i];if(i)f<<',';
+        f<<'['<<x.status<<','<<x.word;for(auto v:x.before)f<<','<<v;for(auto v:x.after)f<<','<<v;f<<']';}
+    f<<"],\"arena_words_at\":\"buffer+0x58..+0x80 before, then after\"";
+    try{logFile->event("brick_step_stats",f.str());}catch(...){}
+}
 inline void* __fastcall invoke(void* out,void* bricks,void* third){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());
     if(caller==baseAddress+callReturn&&role==2&&current&&keptSerial.load()==current->serial){
         auto* o=static_cast<uint8_t*>(out);o[0]=uint8_t(keptStatus.load());const uint32_t w=keptWord.load();std::memcpy(o+4,&w,4);++lent;return out;}
+    std::array<uint64_t,6> before{};
+    if(logWanted&&caller==baseAddress+callReturn)try{const auto buffer=read<uintptr_t>(reinterpret_cast<uintptr_t>(bricks)+0x10300);if(buffer)before=read<std::array<uint64_t,6>>(buffer+0x58);}catch(...){}
     void* r=original(out,bricks,third);
+    if(logWanted&&caller==baseAddress+callReturn)record(bricks,r,before,liveFrame.frame);
     if(caller==baseAddress+callReturn&&role==1&&current&&r){
         uint32_t w=0;std::memcpy(&w,static_cast<uint8_t*>(r)+4,4);keptStatus=*static_cast<uint8_t*>(r);keptWord=w;keptSerial=current->serial;++kept;}
     return r;
@@ -205,6 +227,18 @@ inline float __fastcall invoke(const void* object){
     return value;
 }
 }
+// The View streaming object's update 0x1e2d20 (rcx the object, called at 0x12a3ba by each View's world render: "mov rcx,
+// [rdi+0x978]; call"). It takes the View's camera, rebuilds the object's item lists and may start the object's job (+0x368
+// set: the later updates leave early until it is done). While a refresh's original View draws with the left eye's object
+// (view_resource_probe.cpp StreamingLend), skip says to leave the object as the eyes made it (2026-10-19 experiment,
+// EVR_SKIP_ORIGINAL_STREAMING_UPDATE=1: the right eye lost bricks on every refresh frame, Mock game-20261019-061432).
+namespace streamingUpdate {
+constexpr uintptr_t rva=0x1e2d20,callReturn=0x12a3bf;constexpr const char* pattern="48 89 5C 24 10 4C 89 44 24 18 55 56 57 41 54 41 55 41 56 41 57";
+using Fn=void(__fastcall*)(void*,void*,void*);inline Fn original=nullptr;inline bool enabled=false;
+inline const bool wanted=[]{char v[4]{};return GetEnvironmentVariableA("EVR_SKIP_ORIGINAL_STREAMING_UPDATE",v,sizeof v)==1&&v[0]=='1';}();
+inline thread_local bool skip=false;inline std::atomic<uint64_t> skipped{0},passed{0};
+inline void __fastcall invoke(void* object,void* a,void* b){if(skip){++skipped;return;}++passed;original(object,a,b);}
+}
 // 5, 1 / radius, 1023 at 0x110 of a block (the GPU's write-combined memory: read once, 12 bytes)
 inline bool radiusOf(uintptr_t block,float& inv){uint32_t u[3]{};SIZE_T got=0;
     if(!ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(block+0x110),u,12,&got)||got!=12)return false;
@@ -284,7 +318,7 @@ inline void install(){
         terrain::arena::install();
         // the step: left out of the other eye's own update (optional - without it the other eye skips the update as before);
         // only with that update (EVR_EYE_TERRAIN=1) - otherwise it only passed calls through (2026-10-18 19:30)
-        if(terrain::eyeOwnWanted)try{const auto sp=parsePattern(terrain::step::pattern);const auto st=baseAddress+terrain::step::rva,sc=baseAddress+terrain::step::callReturn-5;
+        if(terrain::eyeOwnWanted||terrain::step::logWanted)try{const auto sp=parsePattern(terrain::step::pattern);const auto st=baseAddress+terrain::step::rva,sc=baseAddress+terrain::step::callReturn-5;
             if(scan(reinterpret_cast<const uint8_t*>(st),sp.size(),sp)!=std::vector<size_t>{0}||read<uint8_t>(sc)!=0xe8||uintptr_t(int64_t(sc+5)+read<int32_t>(sc+1))!=st)
                 throw std::runtime_error("brick step signature/caller mismatch");
             if(MH_CreateHook(reinterpret_cast<void*>(st),reinterpret_cast<void*>(&terrain::step::invoke),reinterpret_cast<void**>(&terrain::step::original))!=MH_OK||
@@ -307,12 +341,22 @@ inline void install(){
             MH_EnableHook(reinterpret_cast<void*>(target))!=MH_OK)throw std::runtime_error("terrain radius getter hook failed");
         detailRadius::getter::enabled=true;logFile->event("terrain_radius_getter_hook_enabled","\"rva\":"+hex(detailRadius::getter::rva)+",\"right_eye_reads_the_left\":true");}
     catch(const std::exception& e){logFile->event("terrain_radius_getter_hook_skipped","\"reason\":"+jsonString(e.what()));}
+    if(detailRadius::streamingUpdate::wanted)try{const auto p=parsePattern(detailRadius::streamingUpdate::pattern);const auto target=baseAddress+detailRadius::streamingUpdate::rva,call=baseAddress+detailRadius::streamingUpdate::callReturn-5;
+        if(scan(reinterpret_cast<const uint8_t*>(target),p.size(),p)!=std::vector<size_t>{0}||read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=target||
+           read<uint32_t>(call-7)!=0x788f8b48u||read<uint16_t>(call-3)!=0x0009u)   // mov rcx,[rdi+0x978]
+            throw std::runtime_error("streaming update signature/caller mismatch");
+        if(MH_CreateHook(reinterpret_cast<void*>(target),reinterpret_cast<void*>(&detailRadius::streamingUpdate::invoke),reinterpret_cast<void**>(&detailRadius::streamingUpdate::original))!=MH_OK||
+            MH_EnableHook(reinterpret_cast<void*>(target))!=MH_OK)throw std::runtime_error("streaming update hook failed");
+        detailRadius::streamingUpdate::enabled=true;logFile->event("streaming_update_hook_enabled","\"rva\":"+hex(detailRadius::streamingUpdate::rva)+",\"original_view_skips_when_lent\":true");}
+    catch(const std::exception& e){logFile->event("streaming_update_hook_skipped","\"reason\":"+jsonString(e.what()));}
 }
 inline void disable() noexcept {
     for(auto& e:entries)if(e.enabled){const auto status=MH_DisableHook(reinterpret_cast<void*>(baseAddress+e.rva));if(status==MH_OK)e.enabled=false;
         try{logFile->event("world_shared_stage_hook_removed","\"function\":"+hex(e.rva)+",\"status\":"+std::to_string(status));}catch(...){}
     }
     if(terrain::step::enabled&&MH_DisableHook(reinterpret_cast<void*>(baseAddress+terrain::step::rva))==MH_OK)terrain::step::enabled=false;
+    if(detailRadius::streamingUpdate::enabled&&MH_DisableHook(reinterpret_cast<void*>(baseAddress+detailRadius::streamingUpdate::rva))==MH_OK){detailRadius::streamingUpdate::enabled=false;
+        try{logFile->event("streaming_update_hook_removed","\"skipped\":"+std::to_string(detailRadius::streamingUpdate::skipped.load())+",\"passed\":"+std::to_string(detailRadius::streamingUpdate::passed.load()));}catch(...){}}
     if(detailRadius::getter::enabled&&MH_DisableHook(reinterpret_cast<void*>(baseAddress+detailRadius::getter::rva))==MH_OK){detailRadius::getter::enabled=false;
         try{logFile->event("terrain_radius_getter_hook_removed","\"own\":"+std::to_string(detailRadius::getter::own.load())+",\"lent\":"+std::to_string(detailRadius::getter::lentCalls.load()));}catch(...){}}
     if(detailRadius::enabled&&MH_DisableHook(reinterpret_cast<void*>(baseAddress+detailRadius::rva))==MH_OK){detailRadius::enabled=false;
