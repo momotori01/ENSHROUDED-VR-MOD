@@ -1,0 +1,5 @@
+cmake==4.4.3
+pefile==2024.8.26
+capstone==5.0.9
+clang-format==23.1.1
+unicorn==2.1.4

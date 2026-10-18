@@ -1,0 +1,13 @@
+// Execute only in authorized node_repl after selecting and inspecting a unique current Sky window.
+// Requires existing sky and evrFs imports; no shell, no native exit call, one ordinary UI close.
+globalThis.evrWatchAttackExit=async function(probePath,launchPath,observation,maxMs=50000){
+ const anchor=JSON.parse((await evrFs.readFile(launchPath+'/ui-exit-clock-anchor.json','utf8')).replace(/^\uFEFF/,'')), path=probePath+'/view-resource-probe.jsonl', tracePath=launchPath+'/ui-attack-exit.json';
+ const file=await evrFs.open(path,'r'),buffer=new Uint8Array(65536),deadline=Date.now()+Math.min(maxMs,55000);let position=0,carry='',trigger=null;
+ try{while(Date.now()<deadline&&!trigger){const r=await file.read(buffer,0,buffer.length,position);position+=r.bytesRead;if(r.bytesRead){carry+=String.fromCharCode(...buffer.subarray(0,r.bytesRead));const lines=carry.split('\n');carry=lines.pop();for(const line of lines){if(!line.includes('"event":"motion_event_retime"'))continue;const row=JSON.parse(line);if(row.operation==='append'&&row.applied&&row.actor_and_storage_unchanged){trigger=row;break;}}}else await new Promise(resolve=>setTimeout(resolve,20));}}finally{await file.close();}
+ if(!trigger){nodeRepl.write('WAITING: no native append yet. No UI input sent.');return 'WAITING';}
+ const qpcUs=Number(anchor.qpc_ticks)*1e6/anchor.frequency,eventUtc=Date.parse(anchor.utc_before)+(trigger.us-qpcUs)/1000,observed=Date.now(),age=observed-eventUtc;
+ const trace={status:'DETECTED',probe:path,window:observation.window,anchor,trigger,observed_utc:new Date(observed).toISOString(),estimated_detection_age_ms:age,action:'Sky Alt_L+F4 ordinary window close',native_action_invoked:false,force_kill:false};
+ if(age< -15||age>250){trace.status='MISSED_FRESH_WINDOW';await evrFs.writeFile(tracePath,JSON.stringify(trace,null,2),{flag:'wx'});nodeRepl.write(JSON.stringify({status:trace.status,age_ms:age}));return trace.status;}
+ trace.request_begin_utc=new Date().toISOString();await evrFs.writeFile(tracePath,JSON.stringify(trace,null,2),{flag:'wx'});
+ try{await sky.press_key({window:observation.window,key:'Alt_L+F4'});trace.request_end_utc=new Date().toISOString();trace.status='UI_CLOSE_SENT';await evrFs.writeFile(tracePath,JSON.stringify(trace,null,2));globalThis.evrAttackTimedState=await sky.get_window_state({window:observation.window,include_screenshot:false,include_text:true});nodeRepl.write(JSON.stringify({status:trace.status,detection_age_ms:age,request_begin:trace.request_begin_utc,request_end:trace.request_end_utc}));nodeRepl.write(String(evrAttackTimedState.accessibility?.tree||''));return trace.status;}catch(error){trace.error=String(error);await evrFs.writeFile(tracePath,JSON.stringify(trace,null,2));throw error;}
+};

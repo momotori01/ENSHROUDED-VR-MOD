@@ -1,0 +1,4 @@
+EXPORTS
+    vkNegotiateLoaderLayerInterfaceVersion
+    evrGetInstanceProcAddr
+    evrGetDeviceProcAddr

@@ -1,0 +1,47 @@
+#version 450
+// Stands in for the game's "vfx_write_decals_sort_data_back" compute shader: record i of the target is the source record
+// that the sort data names, for i below the counter that the first word of the payload points at. Compiled with the
+// entry point named cs_main, as the game's pipeline asks.
+// 1.0 (2026-10-17; capture game-20261016-061640, shader_5c2f916ec78fc508, 2016 bytes, sha256 a4627b86...): groups of
+// 64, the sort data {key, index} of 8 bytes; the 112-byte record is the same. (June's: 2072 bytes, groups of 128, the
+// sort data {key, key, index, spare}.)
+// The game's own call hands a payload of one word and gets exactly that.
+//
+// The other eye (hooks/vfx_decal_rebase.hpp, 2026-10-13): the decals are written once, for the View that runs the
+// effects, in that View's camera-relative space (keen::ForwardDecalData: decalTransform as three rows of four at +0,
+// worldBoundingSphere at +48). The eye that borrowed that list saw every mark displaced by the distance between the
+// eyes (headset run game-20261013-105615: "the scorch marks are out of line between left and right"). With a payload
+// of five words - counter offset, marker, and delta = owner's camera position - this eye's - the same copy goes to
+// the eye's own buffer, moved into the eye's space:
+//   'EVRD'  the transform takes a camera-relative position to the decal's space: row.w -= dot(row.xyz, delta)
+//   'EVRd'  the transform's fourth column is the decal's camera-relative place:   row.w += delta[row]
+// The bounding sphere stays: in 1.0 it is a world place, not camera-relative (June moved it by delta too).
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+struct Sorted { uint key; uint index; };
+struct Decal { uint word[28]; };
+layout(set = 0, binding = 0, std430) readonly buffer Payload { uint word[]; } payload;
+layout(set = 0, binding = 1, std430) readonly buffer SortData { Sorted item[]; } sorted;
+layout(set = 0, binding = 2, std430) readonly buffer Source { Decal item[]; } source;
+layout(set = 0, binding = 3, std430) buffer Target { Decal item[]; } target;
+layout(set = 0, binding = 4, std430) readonly buffer Counters { uint value[]; } counters;
+float at(Decal d, int i) { return uintBitsToFloat(d.word[i]); }
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= counters.value[payload.word[0] >> 2u]) return;
+    Decal d = source.item[sorted.item[i].index];
+    if (payload.word.length() >= 5) {
+        uint marker = payload.word[1];
+        vec3 delta = vec3(uintBitsToFloat(payload.word[2]), uintBitsToFloat(payload.word[3]), uintBitsToFloat(payload.word[4]));
+        if (marker == 0x45565244u || marker == 0x45565264u) {
+            for (int row = 0; row < 3; ++row) {
+                float moved = marker == 0x45565244u
+                    ? at(d, row * 4 + 3) - dot(vec3(at(d, row * 4), at(d, row * 4 + 1), at(d, row * 4 + 2)), delta)
+                    : at(d, row * 4 + 3) + delta[row];
+                d.word[row * 4 + 3] = floatBitsToUint(moved);
+            }
+            // 1.0: the bounding sphere is a world place (its centre = the camera + the decal's camera-relative centre,
+            // RenderDoc ha 2026-10-17), the same for both eyes - it stays. (June's was camera-relative and moved.)
+        }
+    }
+    target.item[i] = d;
+}

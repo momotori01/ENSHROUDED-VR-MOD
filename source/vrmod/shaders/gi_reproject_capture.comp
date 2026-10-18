@@ -1,0 +1,28 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+// The eyes' indirect light made one (layer/gi_reproject.hpp, 2026-10-17; headset reports 3/5/16/20: "the darkness of
+// the shadows differs between the eyes, or one eye has no shadow"). Each eye computes its own GI and the two converge
+// on their own (RenderDoc gq: the rock face under an overhang dark in the left eye's irradiance, bright in the right's;
+// the sun's shadow mask and the other lighting inputs alike in both eyes).
+// Pass 1, recorded just before the first eye's lighting dispatch: that eye's depth and irradiance words, as the
+// lighting reads them, are copied into the layer's own images, and its world-to-clip matrix (_32_m5 of the lighting
+// constants, c7..c10) into the layer's buffer. Nothing of the game is written.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D sourceDepth;           // the game's view (lighting set 2 binding 33)
+layout(set = 0, binding = 1) uniform utexture2D sourceIrradiance;     // the layer's R32_UINT view of binding 32's image
+layout(set = 0, binding = 2, std140) uniform Lighting { vec4 c[128]; } lighting;   // binding 24's range
+layout(set = 0, binding = 3, r32f) uniform writeonly image2D keptDepth;
+layout(set = 0, binding = 4, r32ui) uniform writeonly uimage2D keptIrradiance;
+layout(set = 0, binding = 5, std430) buffer Kept { vec4 rows[4]; vec4 scale; uint frame; } kept;
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = textureSize(sourceDepth, 0);
+    if (p.x == 0 && p.y == 0) {
+        for (int r = 0; r < 4; ++r) kept.rows[r] = lighting.c[7 + r];
+        kept.scale = vec4(lighting.c[2].zw, vec2(size));
+        kept.frame += 1u;
+    }
+    if (p.x >= size.x || p.y >= size.y) return;
+    imageStore(keptDepth, p, vec4(texelFetch(sourceDepth, p, 0).x));
+    imageStore(keptIrradiance, p, uvec4(texelFetch(sourceIrradiance, p, 0).x));
+}

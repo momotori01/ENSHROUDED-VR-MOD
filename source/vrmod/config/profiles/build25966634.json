@@ -1,0 +1,15 @@
+{
+  "steam_build_id": "25966634",
+  "exe_sha256": "4d6d43ea4a91e71c82d60b045dde932179c99e32e40657efe374688b2933589a",
+  "allow_render_hooks": false,
+  "status": "Enshrouded Hotfix 1.0.0.1 (2026-10-16): the hooks' addresses carried from build 25936191 with tools/shift_rematch.py",
+  "camera_probe": {
+    "enabled": false,
+    "disabled_reason": "2026-09-12: hardware single-step escaped debugger and reached game crash handler; use offline dump or non-debug observation",
+    "rva": "(not re-matched for this build; the camera probe is off)",
+    "pattern": "48 8B 5C 24 68 48 8D 95 48 01 00 00",
+    "query_stack_offset": "0x50",
+    "query_pointer_count": 10,
+    "sample_bytes_per_component": 192
+  }
+}

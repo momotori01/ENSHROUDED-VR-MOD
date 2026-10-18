@@ -1,0 +1,15 @@
+{
+  "steam_build_id": "23966345",
+  "exe_sha256": "af2f5a1227911d8aa06b3908d6bd0211838211cae14ea91099cb57d0df990781",
+  "allow_render_hooks": false,
+  "status": "Camera query Root/Camera slots observed; projection/view math emulated; game stereo hooks disabled",
+  "camera_probe": {
+    "enabled": false,
+    "disabled_reason": "2026-09-12: hardware single-step escaped debugger and reached game crash handler; use offline dump or non-debug observation",
+    "rva": "0x266380",
+    "pattern": "48 8B 5C 24 68 48 8D 95 48 01 00 00",
+    "query_stack_offset": "0x50",
+    "query_pointer_count": 10,
+    "sample_bytes_per_component": 192
+  }
+}

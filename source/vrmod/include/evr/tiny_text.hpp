@@ -1,0 +1,37 @@
+#pragma once
+// A line of text as RGBA pixels, from a 5 x 8 pixel font of the few letters the mod shows by itself (the plate's
+// "VR Now Loading...", layer/screen_xr.hpp; user, 2026-10-14: "make the walking green block before VR starts a
+// blinking 'VR Now Loading...'"). Letters that are not here are left blank.
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+namespace evr::text {
+struct Glyph {char c;std::array<uint8_t,8> rows;};   // five columns a row, the leftmost in bit 4
+inline const std::array<Glyph,13>& glyphs(){
+    static const std::array<Glyph,13> g{{
+        {'V',{0x11,0x11,0x11,0x11,0x11,0x0a,0x04,0x00}},{'R',{0x1e,0x11,0x11,0x1e,0x14,0x12,0x11,0x00}},
+        {'N',{0x11,0x19,0x15,0x13,0x11,0x11,0x11,0x00}},{'L',{0x10,0x10,0x10,0x10,0x10,0x10,0x1f,0x00}},
+        {'o',{0x00,0x00,0x0e,0x11,0x11,0x11,0x0e,0x00}},{'w',{0x00,0x00,0x11,0x11,0x15,0x15,0x0a,0x00}},
+        {'a',{0x00,0x00,0x0e,0x01,0x0f,0x11,0x0f,0x00}},{'d',{0x01,0x01,0x0d,0x13,0x11,0x11,0x0f,0x00}},
+        {'i',{0x04,0x00,0x0c,0x04,0x04,0x04,0x0e,0x00}},{'n',{0x00,0x00,0x16,0x19,0x11,0x11,0x11,0x00}},
+        {'g',{0x00,0x00,0x0f,0x11,0x11,0x0f,0x01,0x0e}},{'.',{0x00,0x00,0x00,0x00,0x00,0x0c,0x0c,0x00}},
+        {' ',{0,0,0,0,0,0,0,0}}}};
+    return g;
+}
+inline const Glyph* glyph(char c){for(const auto& g:glyphs())if(g.c==c)return &g;return nullptr;}
+struct Picture {uint32_t width=0,height=0;std::vector<uint8_t> rgba;};
+// Each font pixel becomes scale x scale pixels; a glyph is 5 wide with one blank column after it; `pad` pixels of the
+// background all round. Text is `ink`, the rest `paper` (RGBA).
+inline Picture render(const std::string& line,uint32_t scale,uint32_t pad,std::array<uint8_t,4> ink,std::array<uint8_t,4> paper){
+    Picture p;if(!scale||line.empty())return p;
+    p.width=uint32_t(line.size())*6*scale-scale+2*pad;p.height=8*scale+2*pad;p.rgba.resize(size_t(p.width)*p.height*4);
+    for(size_t i=0;i<p.rgba.size();i+=4)for(size_t k=0;k<4;++k)p.rgba[i+k]=paper[k];
+    for(size_t n=0;n<line.size();++n){const auto* g=glyph(line[n]);if(!g)continue;
+        for(uint32_t row=0;row<8;++row)for(uint32_t col=0;col<5;++col){if(!(g->rows[row]>>(4-col)&1))continue;
+            for(uint32_t y=0;y<scale;++y)for(uint32_t x=0;x<scale;++x){
+                const size_t px=pad+uint32_t(n)*6*scale+col*scale+x,py=pad+row*scale+y;
+                auto* q=p.rgba.data()+(py*p.width+px)*4;for(size_t k=0;k<4;++k)q[k]=ink[k];}}}
+    return p;
+}
+}

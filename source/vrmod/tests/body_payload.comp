@@ -1,0 +1,21 @@
+#version 460
+#extension GL_EXT_buffer_reference2 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int64 : require
+layout(local_size_x=1) in;
+layout(buffer_reference,std430,buffer_reference_align=8) readonly buffer Payload {uint words[28];};
+layout(push_constant) uniform Args {uint64_t address;uint instance;float w;} a;
+layout(set=0,binding=0,std430) buffer Result {uint words[32];} result;
+void main(){
+    for(uint n=0;n<32;n++)result.words[n]=0;
+    float clip=1.0;bool selected=false;
+    if(a.address!=uint64_t(0)){
+        Payload p=Payload(a.address);
+        for(uint n=0;n<28;n++)result.words[n]=p.words[n];
+        uint count=p.words[1];float distance=uintBitsToFloat(p.words[2]);
+        bool valid=p.words[0]==0x45564243u&&count>0&&count<=24&&distance>=0.01&&distance<=1.0;
+        for(uint n=0;n<24;n++)selected=selected||(n<count&&p.words[n+4]==a.instance);
+        selected=selected&&valid;
+        if(selected)clip=a.w-distance;
+    }
+    result.words[28]=floatBitsToUint(clip);result.words[29]=uint(selected);
+}

@@ -1,0 +1,11 @@
+LIBRARY renderdoc.dll
+EXPORTS
+RENDERDOC_AllocArrayMem
+RENDERDOC_FreeArrayMem
+RENDERDOC_InitialiseReplay
+RENDERDOC_ShutdownReplay
+RENDERDOC_OpenCaptureFile
+RENDERDOC_GetCommitHash
+RENDERDOC_ExecuteAndInject
+RENDERDOC_CreateTargetControl
+RENDERDOC_ResourceFormatName

@@ -1,0 +1,67 @@
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+// Pass 2 of layer/gi_reproject.hpp, recorded just before the second eye's lighting dispatch: every pixel of this eye
+// that the first eye also saw takes the first eye's irradiance word, so both eyes are lit by one indirect light.
+// The position is made the lighting's own way (light6510: ndc from the pixel centre and _32_m2, the camera-relative
+// point from _32_m6 and the depth, + the camera _32_m7 = the point in the lighting's world), then the first eye's
+// _32_m5 gives its pixel and the depth it must have there. Where the first eye's depth differs by more than 3 % (the
+// point was hidden from it) a neighbour is tried; otherwise - where the first eye saw something nearer (see hidden),
+// outside the first eye's picture and on the sky - this eye keeps its own.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform texture2D depth;                  // the game's view (lighting set 2 binding 33)
+layout(set = 0, binding = 2, std140) uniform Lighting { vec4 c[128]; } lighting;   // this eye's binding 24 range
+layout(set = 0, binding = 3, r32f) uniform readonly image2D keptDepth;
+layout(set = 0, binding = 4, r32ui) uniform readonly uimage2D keptIrradiance;
+layout(set = 0, binding = 5, std430) readonly buffer Kept { vec4 rows[4]; vec4 scale; uint frame; } kept;
+layout(set = 0, binding = 6, r32ui) uniform uimage2D irradiance;      // the layer's R32_UINT view of binding 32's image
+layout(constant_id = 0) const float tolerance = 0.03;   // the depth agreement (EVR_GI_REPROJECT_TOLERANCE)
+layout(constant_id = 1) const uint mode = 0u;          // 1: a test, the taken pixels painted red (EVR_GI_REPROJECT_MARK=1)
+// A point this eye sees and the first eye did not (it looked at something nearer there: beside the hand, a pole ...).
+// 0: this eye keeps its own light there (2026-10-18; user, headset: "on the right of the hand a trail of the
+// correction, as if what the left eye cannot see were stretched"). 1: as before, the same surface taken from just past
+// the near thing's edge in the first eye's picture, along the row (horizontal streaks). EVR_GI_REPROJECT_HIDDEN.
+layout(constant_id = 2) const uint hidden = 0u;
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = textureSize(depth, 0);
+    if (p.x >= size.x || p.y >= size.y) return;
+    float d = texelFetch(depth, p, 0).x;
+    if (d <= 0.0) return;
+    vec2 ndc = (vec2(p) * 2.0 + 1.0) * lighting.c[2].zw - 1.0;
+    vec3 v = vec3(ndc.x, -ndc.y, d);
+    vec4 m0 = lighting.c[11], m1 = lighting.c[12], m2 = lighting.c[13], m3 = lighting.c[14];
+    float w = dot(m3.xyz, v) + m3.w;
+    vec3 world = vec3(dot(m0.xyz, v) + m0.w, dot(m1.xyz, v) + m1.w, dot(m2.xyz, v) + m2.w) / w + lighting.c[15].xyz;
+    vec4 clip = vec4(dot(kept.rows[0].xyz, world) + kept.rows[0].w, dot(kept.rows[1].xyz, world) + kept.rows[1].w,
+                     dot(kept.rows[2].xyz, world) + kept.rows[2].w, dot(kept.rows[3].xyz, world) + kept.rows[3].w);
+    if (clip.w <= 0.0) return;
+    vec2 other = ((clip.xy / clip.w) * vec2(1.0, -1.0) + 1.0) / (2.0 * kept.scale.xy) - 0.5;
+    ivec2 q = ivec2(floor(other + 0.5));
+    if (q.x < 0 || q.y < 0 || q.x >= int(kept.scale.z) || q.y >= int(kept.scale.w)) return;
+    float expected = clip.z / clip.w;
+    ivec2 limit = ivec2(kept.scale.zw) - 1;
+    float seen = imageLoad(keptDepth, q).x;
+    bool direct = seen > 0.0 && abs(seen - expected) <= tolerance * expected;
+    ivec2 take = q;
+    if (!direct) {
+        // an edge a pixel off: the neighbours
+        for (int dy = -1; dy <= 1 && take == q; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                ivec2 n = clamp(q + ivec2(dx, dy), ivec2(0), limit);
+                float s = imageLoad(keptDepth, n).x;
+                if (s > 0.0 && abs(s - expected) <= tolerance * expected) { take = n; break; }
+            }
+        // seen only by this eye (the first eye looked at something nearer there): the same surface carries on just
+        // past the near thing's edge in the first eye's picture, to the right (the second eye stands to the right)
+        if (take == q && seen > expected && hidden == 1u)
+            for (int k = 2; k <= 48; k += 2) {
+                ivec2 n = ivec2(min(q.x + k, limit.x), q.y);
+                float s = imageLoad(keptDepth, n).x;
+                if (s > 0.0 && abs(s - expected) <= 2.0 * tolerance * expected) { take = n; break; }
+            }
+        if (take == q) return;
+    }
+    // test: the pixels taken where the point is seen painted red, the ones taken from beside it green
+    if (mode == 1u) { imageStore(irradiance, p, uvec4(direct ? 0x800001ffu : 0x8003fe00u)); return; }
+    imageStore(irradiance, p, imageLoad(keptIrradiance, take));
+}

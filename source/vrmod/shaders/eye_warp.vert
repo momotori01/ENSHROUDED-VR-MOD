@@ -1,0 +1,63 @@
+#version 450
+// Alternate-eye rendering, second and third stage (2026-10-15, user: "the PureDark way"): the eye not drawn in this
+// frame shows a picture warped to the pose of this frame. A grid of cells over a kept picture; every vertex takes the
+// depth the game wrote there, becomes a point in the kept eye's view space (the game's depth is reversed and
+// infinite: depth = near / distance, 0 at the sky), moves into the new eye's view space and is projected with the
+// new field of view. The fragments sample the kept colour at the vertex's old place (perspective-correct).
+// Second stage: the kept picture is this eye's last drawn one (mode 0: the grid stretches over a depth step, so the
+// picture has no holes). Third stage: the kept picture is the other eye's picture of this same frame (mode 1).
+// A cell that stretches over a depth step covers the strip between the near and the far side in the new picture;
+// its fragments do not take the stretched colour but find, each for its own ray, the first point of the kept
+// picture's surface along it (eye_warp.frag: a search along the ray between the cell's nearest and farthest
+// distance). Where the ray meets nothing the kept eye saw, the fragment is left out (mode 1: a hole) or takes the
+// stretched colour (mode 0). So the edges are the picture's own, not the grid's (before: the grid's 6 px saw-teeth).
+// Mode 2 (the hole fill, after mode 1): one triangle over the whole picture at depth 0.5, drawn only where the grid
+// wrote no depth (the holes); its fragments take this eye's own last picture (eye_warp.frag).
+layout(set = 0, binding = 1) uniform sampler2D depthTex;   // NEAREST
+layout(push_constant) uniform Warp {
+    mat4 oldToNew;   // kept eye's view space -> new eye's view space, for vec4(point, 1)
+    vec4 oldTan;     // tan of the kept fov: left, right, down, up (left and down negative)
+    vec4 newTan;     // the same for this frame's fov
+    vec4 params;     // x: cells along each side, y: near (depth = near / distance), z: the distance shown for depth 0, w: mode (0 stretch, 1 holes, 2 fill)
+} warp;
+layout(location = 0) out vec2 uv;
+layout(location = 1) out float dist;              // the distance at this vertex
+layout(location = 2) flat out vec2 cellRange;     // the nearest and the farthest distance at the cell's four corners
+float distanceAt(vec2 at) {
+    float d = textureLod(depthTex, at, 0.0).r;
+    return min(d > 1e-7 ? warp.params.y / d : warp.params.z, warp.params.z);
+}
+void main() {
+    if (warp.params.w > 1.5) {
+        vec2 corner = vec2(gl_VertexIndex == 1 ? 3.0 : -1.0, gl_VertexIndex == 2 ? 3.0 : -1.0);
+        gl_Position = vec4(corner, 0.5, 1.0);
+        uv = corner * 0.5 + 0.5;
+        dist = 0.0;
+        cellRange = vec2(0.0);
+        return;
+    }
+    int cells = int(warp.params.x);
+    int quad = gl_VertexIndex / 6, corner = gl_VertexIndex % 6;
+    int qx = quad % cells, qy = quad / cells;
+    // Painter's order: the new eye is at c = -R^T T in the kept eye's view space, beside it (the other eye) - of two
+    // points that meet in the new picture, the nearer lies further towards c's side in the kept picture; the cells
+    // are drawn towards that side, so the nearer is drawn last and shows.
+    float side = -dot(warp.oldToNew[0].xyz, warp.oldToNew[3].xyz);
+    if (side < 0.0) qx = cells - 1 - qx;
+    int ox = (corner == 1 || corner == 3 || corner == 4) ? 1 : 0;
+    int oy = (corner == 2 || corner == 4 || corner == 5) ? 1 : 0;
+    float inv = 1.0 / float(cells);
+    uv = vec2(float(qx + ox), float(qy + oy)) * inv;
+    vec2 c0 = vec2(float(qx), float(qy)) * inv;
+    float d00 = distanceAt(c0), d10 = distanceAt(c0 + vec2(inv, 0.0)), d01 = distanceAt(c0 + vec2(0.0, inv)), d11 = distanceAt(c0 + vec2(inv, inv));
+    cellRange = vec2(min(min(d00, d10), min(d01, d11)), max(max(d00, d10), max(d01, d11)));
+    dist = ox == 0 ? (oy == 0 ? d00 : d01) : (oy == 0 ? d10 : d11);
+    float x = warp.oldTan.x + (warp.oldTan.y - warp.oldTan.x) * uv.x;
+    float y = warp.oldTan.w - (warp.oldTan.w - warp.oldTan.z) * uv.y;   // row 0 is the top of the picture
+    vec4 p = warp.oldToNew * vec4(x * dist, y * dist, -dist, 1.0);
+    float w = -p.z;
+    if (w < 0.02) { gl_Position = vec4(10.0, 10.0, 0.0, 1.0); return; }   // behind the new eye: off the picture
+    float u2 = (p.x / w - warp.newTan.x) / (warp.newTan.y - warp.newTan.x);
+    float v2 = (warp.newTan.w - p.y / w) / (warp.newTan.w - warp.newTan.z);
+    gl_Position = vec4((u2 * 2.0 - 1.0) * w, (v2 * 2.0 - 1.0) * w, 0.0, w);
+}

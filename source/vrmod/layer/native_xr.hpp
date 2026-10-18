@@ -1,0 +1,1021 @@
+#pragma once
+#include <evr/native_xr_bridge.hpp>
+#include <evr/capture_burst.hpp>
+#include <evr/stereo_transfer.hpp>
+#include <evr/ui_transfer.hpp>
+#include <evr/hud_fade.hpp>
+#include <evr/edge_tint.hpp>
+#include <evr/eye_mark.hpp>
+#include <evr/eye_history.hpp>
+#include <evr/eye_warp.hpp>
+#include <evr/aim_mark.hpp>
+// Explicit native-renderer diagnostic entry points. Caller holds all native queue
+// gates and uses one render thread for every entry. No automatic session creation.
+struct LiveNativeXr
+{
+    DWORD thread = GetCurrentThreadId();
+    VkDevice device{};
+    uint64_t beginPresent = 0;
+    uint32_t frameLimit = 1;
+    uint32_t submittedPairs = 0;
+    uint64_t generation = 0;
+    uint64_t capturedFrame = 0; // successfully saved eye pair; queried on the same render thread
+    std::shared_ptr<diagnostic::XrPreflight> owner;
+    std::unique_ptr<Log> log;
+    std::unique_ptr<OpenXrClient> xr;
+    std::unique_ptr<motion::Actions> hands;
+    // Declared before transfer: destroyed after the transfer fence retired, before the XR client/device.
+    std::unique_ptr<EdgeTint> edgeTint;
+    std::unique_ptr<EyeMark> eyeMark; // the aim mark's dot (evrSetAimMark), like the tint
+    // Alternate-eye warping (eye_warp.hpp; EVR_EYE_WARP=1 with EVR_ALTERNATE_EYES=1): one per eye, as the eyes' extents
+    // differ. Declared before the transfer: the transfer's keep copies retire first.
+    std::unique_ptr<EyeWarp> warp;   // one for both eyes (the third stage draws one eye from the other's picture)
+    bool warpWanted=false,warpFailed=false,warpFromOther=false,warpCheck=false;uint64_t warpFrames=0,warpCaptures=0,warpCheckCaptures=0,warpKeepMisses=0,warpChecks=0,warpCheckFrames=0,warpCheckEvery=120;
+    std::array<uint64_t,2> depthNoteUsed{};   // the depth note each eye last kept (its sequence number)
+    // The bug report's last 10 seconds of both eyes (eye_history.hpp; EVR_BUG_HISTORY=0 leaves it out). Declared before the
+    // transfer: its blits retire with the transfer's fence first.
+    std::unique_ptr<EyeHistory> history;bool historyFailed=false;
+    std::unique_ptr<StereoTransfer> transfer;
+    std::unique_ptr<UiTransfer> uiTransfer;
+    uint64_t desktopUiFrames=0;
+    bool uiDisabled=false;
+    bool alternateRefused=false;   // the runtime refused a frame with one eye's earlier picture: both eyes from then on
+    // HUD auto-hide (hud_fade.hpp): what changed in the UI, and the opacity of the HUD outside the pins.
+    HudChangeDetector hudChanges;HudFade hudFade;uint64_t hudProbeSeen=0;int hudLoggedMode=-1;bool hudLoggedHidden=false;unsigned hudLogs=0;
+    uint64_t uiOverlaySerial=0;unsigned uiOverlayLogs=0;   // the overlay picture last given to the UI transfer (evrSetUiOverlay)
+    bool uiPlateLogged=false;unsigned uiPlateLogs=0; // the menu's plate (evrSetUiPlate): what the record last told
+    bool aimClusterLogged=false;unsigned aimClusterLogs=0; // the aim cluster's quads: what the record last told
+    // Opt-in (EVR_XR_ASYNC_COMPLETION=1): release after queue-ordered submission instead of
+    // a per-frame device idle. Only when the binding family has exactly one created queue,
+    // so the eye writer's family proves the same VkQueue as the XR binding queue.
+    bool asyncCompletion=false;
+    // The plate (layer/screen_xr.hpp, EVR_SCREEN_XR=1). worldSession: the hooks' world frames use this session since
+    // their first begin, until they close it. screenWanted: the last world frame ended without eyes (or there was
+    // none yet), so the picture of each present is kept for the plate; a submitted pair of eyes clears it.
+    // worldPairs: pairs of eyes submitted since this world session's first frame (0 = its eyes still warm up).
+    bool worldSession=false,screenWanted=true;uint64_t lastWorldBegin=0,worldPairs=0;
+};
+std::unique_ptr<LiveNativeXr> liveNativeXr;
+// The depth the game hands DLSS for an eye-sized picture (hooks/dlss_eval_observer.hpp, EVR_EYE_WARP=1): the output
+// image names the eye's picture, the depth image is kept for the warp of the frames that leave the eye out.
+struct EyeDepthNote {VkImage output{},depth{};uint32_t width=0,height=0;VkFormat format=VK_FORMAT_UNDEFINED;uint64_t at=0;};
+std::array<EyeDepthNote,8> eyeDepthNotes{};uint64_t eyeDepthNoteCount=0;std::mutex eyeDepthNoteLock;
+extern "C" __declspec(dllexport) int evrNoteEyeDepth(VkDevice device,VkImage output,VkImage depth,uint32_t width,uint32_t height,VkFormat format) noexcept {
+    try{
+        if(!output||!depth||!width||!height)return 2;
+        {std::lock_guard<std::mutex> lock(mutex);uint64_t generation=0;auto d=trackedImages.find(key(device));
+            if(d!=trackedImages.end()){auto found=d->second.find(depth);if(found!=d->second.end())generation=found->second;}
+            registerNativeImageLocked(device,depth,generation,8,true);}
+        std::lock_guard<std::mutex> lock(eyeDepthNoteLock);
+        auto& n=eyeDepthNotes[eyeDepthNoteCount%eyeDepthNotes.size()];n={output,depth,width,height,format,++eyeDepthNoteCount};
+        return 0;
+    }catch(...){return 1;}
+}
+// The note of this frame for the eye: the eye picture given to the layer is not the DLSS output (the game's later
+// passes write another image; Mock game-20261015-043919), so the notes are taken in order - the eyes are drawn left
+// then right, each with one eye-sized evaluation, so with both eyes drawn the left eye's note is the second newest
+// and the right eye's the newest; with one eye drawn, the newest. A note older than the one the eye last used is
+// refused (no evaluation this frame).
+inline bool eyeDepthByOrder(uint32_t eyes,uint32_t eye,uint64_t usedBefore,EyeDepthNote& out){
+    std::lock_guard<std::mutex> lock(eyeDepthNoteLock);
+    EyeDepthNote newest,second;
+    for(const auto& n:eyeDepthNotes){if(!n.at)continue;if(n.at>newest.at){second=newest;newest=n;}else if(n.at>second.at)second=n;}
+    const bool both=(eyes&3)==3;const EyeDepthNote& pick=both&&eye==0?second:newest;
+    if(!pick.at||pick.at<=usedBefore)return false;
+    out=pick;return true;
+}
+namespace screenXr {bool requested();void release() noexcept;bool insteadOfEyes(LiveNativeXr&) noexcept;}
+// VR status tint (2026-10-06): the probe sets the current rim colour/coverage once per eye pair; 0 coverage = none.
+std::mutex edgeTintLock;EdgeTintParams edgeTintCurrent;std::atomic<bool> edgeTintFailed{false};std::atomic<uint64_t> edgeTintFrames{0};
+// HUD auto-hide: the probe tells once per eye pair what kind of screen the game shows (0 off, 1 the HUD of ordinary
+// play, 2 anything that has to stay visible: menus, the quick wheel, building mode). Without a call for a second the
+// HUD is shown.
+std::atomic<int> uiHudMode{0};std::atomic<uint64_t> uiHudAt{0};
+extern "C" __declspec(dllexport) int evrSetUiHud(int mode) noexcept {
+    if(mode<0||mode>2)return 2;
+    uiHudMode=mode;uiHudAt=GetTickCount64();return 0;
+}
+// The menu pointer (hooks/menu_pointer.hpp): where the hand's ray meets the UI image, as parts of its width and of its
+// height from the top left, and what to show (0 nothing, 1 the dot, 2 the dot of a held button). The dot is drawn for
+// a quarter of a second after the last call.
+std::atomic<uint64_t> uiCursorAt{0};std::atomic<uint32_t> uiCursorPlace{0};std::atomic<int> uiCursorShown{0};
+extern "C" __declspec(dllexport) int evrSetUiCursor(float u,float v,int shown) noexcept {
+    if(!(u>=0&&u<=1)||!(v>=0&&v<=1)||shown<0||shown>2)return 2;
+    uiCursorPlace=(uint32_t(u*65535.f+.5f)<<16)|uint32_t(v*65535.f+.5f);uiCursorShown=shown;uiCursorAt=GetTickCount64();return 0;
+}
+// The plate of an open menu (hooks/menu_pointer.hpp, VHVR LockGuiPositionWhenMenuOpen): fixed 1 = the UI image stands
+// 1.5 m ahead of `pose` (the LOCAL space; orientation x y z w, then position x y z) instead of ahead of the head, 0 =
+// ahead of the head again. Without a call for two seconds it is ahead of the head.
+std::mutex uiPlateLock;Pose uiPlateOrigin=identityPose();std::atomic<int> uiPlateFixed{0};std::atomic<uint64_t> uiPlateAt{0};
+extern "C" __declspec(dllexport) int evrSetUiPlate(int fixed,const float* pose) noexcept {
+    if(fixed<0||fixed>1||(fixed&&!pose))return 2;
+    if(fixed){
+        float norm=0;for(unsigned i=0;i<7;i++)if(!std::isfinite(pose[i]))return 2;
+        for(unsigned i=0;i<4;i++)norm+=pose[i]*pose[i];
+        if(std::abs(norm-1)>.02f||std::abs(pose[4])>1000||std::abs(pose[5])>1000||std::abs(pose[6])>1000)return 2;
+        std::lock_guard<std::mutex> l(uiPlateLock);uiPlateOrigin={{pose[0],pose[1],pose[2],pose[3]},{pose[4],pose[5],pose[6]}};
+    }
+    uiPlateFixed=fixed;uiPlateAt=GetTickCount64();return 0;
+}
+// HUD auto-hide: 1 = the compass stays shown with the pins (the Shroud's timer is out; hooks/live_actionbar_pages.hpp
+// fogTimer), for three seconds after the last call.
+std::atomic<int> uiCompassKept{0};std::atomic<uint64_t> uiCompassAt{0};
+// The mod's own picture over the UI plate (the VR bug report, hooks/bug_report.hpp): with rgba, a new picture (RGBA8,
+// display values, straight alpha, w x h, rows from the top); without, the last one. u0 v0 u1 v1: its place on the UI
+// image (0..1). It is shown while the caller keeps asking (within a second); u1 <= u0 takes it away at once.
+std::mutex uiOverlayLock;std::vector<uint8_t> uiOverlayBytes;uint32_t uiOverlayWidth=0,uiOverlayHeight=0;uint64_t uiOverlaySerialNow=0,uiOverlayAt=0;std::array<float,4> uiOverlayRect{};
+// onlyWhereEmpty: shown only while the game draws nothing under it (the UI's small copy, ui_transfer.hpp probe) - the
+// start menu's empty right half, not the settings page that the same screen opens over it. evrUiOverlayShown: whether it
+// was drawn in the last 300 ms (the pointer's click on it, hooks/menu_pointer.hpp).
+std::atomic<int> uiOverlayOnlyEmpty{0};std::atomic<uint64_t> uiOverlayDrawnAt{0};
+extern "C" __declspec(dllexport) int evrUiOverlayShown() noexcept {const auto at=uiOverlayDrawnAt.load();const auto now=GetTickCount64();return at&&now>=at&&now-at<=300?1:0;}
+// The pictures of the VR bug report: count consecutive pairs of both eyes (1..32), without the diagnostic budget of
+// evrRequestNativeXrBurst; 1 while pictures of an earlier request are still being taken. evrSetCaptureHalf: 1 half size,
+// 0 full, -1 as the environment says (EVR_CAPTURE_HALF).
+diagnostic::CaptureBurst bugCaptureBurst;
+extern "C" __declspec(dllexport) int evrRequestBugCapture(uint32_t count) noexcept {if(bugCaptureBurst.pending())return 1;bugCaptureBurst.reset();return bugCaptureBurst.request(count);}
+extern "C" __declspec(dllexport) int evrSetCaptureHalf(int half) noexcept {if(half<-1||half>1)return 2;captureHalfOverride=half;return 0;}
+extern "C" __declspec(dllexport) int evrSetUiOverlay(const uint8_t* rgba,uint32_t w,uint32_t h,float u0,float v0,float u1,float v1,int onlyWhereEmpty) noexcept {
+    try{
+        for(const float f:{u0,v0,u1,v1})if(!std::isfinite(f)||f<0||f>1)return 2;
+        std::lock_guard<std::mutex> l(uiOverlayLock);uiOverlayOnlyEmpty=onlyWhereEmpty==2?2:onlyWhereEmpty?1:0;
+        if(rgba){if(!w||!h||w>4096||h>4096)return 2;uiOverlayBytes.assign(rgba,rgba+size_t(w)*h*4);uiOverlayWidth=w;uiOverlayHeight=h;++uiOverlaySerialNow;}
+        uiOverlayRect={u0,v0,u1,v1};uiOverlayAt=GetTickCount64();return 0;
+    }catch(...){return 1;}
+}
+extern "C" __declspec(dllexport) int evrSetUiCompass(int kept) noexcept {
+    if(kept<0||kept>1)return 2;
+    uiCompassKept=kept;uiCompassAt=GetTickCount64();return 0;
+}
+// The aim mark (hooks/aim_mark.hpp, include/evr/aim_mark.hpp): `point` is the aimed place in the LOCAL space (x y z);
+// shown 1 = a dot is drawn into both eyes' images where that place shows in them, and the middle of the UI image - the
+// game's own reticle - is left out. For a quarter of a second after the last call.
+// EVR_AIM_MARK_HOLE in the game's environment: the radius of what is left out, in pixels of a 1080 rows high UI image.
+std::mutex aimMarkLock;Vec3 aimMarkPoint{};std::atomic<int> aimMarkShown{0};std::atomic<uint64_t> aimMarkAt{0},aimMarkFrames{0};std::atomic<bool> aimMarkFailed{false};
+extern "C" __declspec(dllexport) int evrSetAimMark(const float* point,int shown) noexcept {
+    if(shown<0||shown>1||(shown&&!point))return 2;
+    if(shown){
+        for(unsigned i=0;i<3;i++)if(!std::isfinite(point[i])||std::abs(point[i])>100000.f)return 2;
+        std::lock_guard<std::mutex> l(aimMarkLock);aimMarkPoint={point[0],point[1],point[2]};
+    }
+    aimMarkShown=shown;aimMarkAt=GetTickCount64();return 0;
+}
+// The guide of a throw (hooks: controller_ui_fixture.hpp, include/evr/live_throw.hpp ThrowGuide): `count` points (2..16)
+// of the LOCAL space, a small dot drawn into both eyes' images at each - a dotted line of about 30 cm from the left hand.
+// For a quarter of a second after the last call; shown 0 takes it away.
+std::mutex throwGuideLock;std::array<Vec3,16> throwGuidePoints{};std::atomic<uint32_t> throwGuideCount{0};std::atomic<uint64_t> throwGuideAt{0},throwGuideFrames{0};std::atomic<bool> throwGuideFailed{false};
+extern "C" __declspec(dllexport) int evrSetThrowGuide(const float* points,uint32_t count,int shown) noexcept {
+    if(shown<0||shown>1||(shown&&(!points||count<2||count>16)))return 2;
+    if(shown){
+        for(uint32_t i=0;i<count*3;i++)if(!std::isfinite(points[i])||std::abs(points[i])>100000.f)return 2;
+        std::lock_guard<std::mutex> l(throwGuideLock);for(uint32_t i=0;i<count;i++)throwGuidePoints[i]={points[i*3],points[i*3+1],points[i*3+2]};
+    }
+    throwGuideCount=shown?count:0;throwGuideAt=GetTickCount64();return 0;
+}
+// The bug report's last seconds (eye_history.hpp): asked from the hooks (hooks/bug_report.hpp) when its button is pressed
+// and when its window ends; written before the next pair. evrEyeHistorySaved: the saves done so far.
+std::atomic<uint64_t> eyeHistoryAsked{0},eyeHistoryDone{0};
+extern "C" __declspec(dllexport) int evrSaveEyeHistory() noexcept {++eyeHistoryAsked;return 0;}
+extern "C" __declspec(dllexport) uint64_t evrEyeHistorySaved() noexcept {return eyeHistoryDone.load();}
+inline uint32_t throwGuideNow(std::array<Vec3,16>& points) {
+    const auto count=throwGuideCount.load();if(!count)return 0;
+    const auto now=GetTickCount64();const auto at=throwGuideAt.load();if(now<at||now-at>250)return 0;
+    std::lock_guard<std::mutex> l(throwGuideLock);points=throwGuidePoints;return count;
+}
+inline bool aimMarkNow(Vec3& point) {
+    if(!aimMarkShown.load())return false;
+    const auto now=GetTickCount64();const auto at=aimMarkAt.load();if(now<at||now-at>250)return false;
+    std::lock_guard<std::mutex> l(aimMarkLock);point=aimMarkPoint;return true;
+}
+// The reticle's part of the HUD goes to the aimed point with the mark (aim_mark.hpp, the cluster). EVR_AIM_CLUSTER=0
+// in the game's environment keeps the HUD whole and only takes the game's dot out of its middle (the hole below).
+inline bool aimCluster() {
+    static const bool on=[]{const auto v=std::getenv("EVR_AIM_CLUSTER");return !(v&&v[0]=='0');}();
+    return on;
+}
+inline float aimMarkHole() {
+    static const float radius=[]{const auto v=std::getenv("EVR_AIM_MARK_HOLE");const float r=v?float(std::atof(v)):14.f;return std::isfinite(r)&&r>=0&&r<=200?r:14.f;}();
+    return radius;
+}
+extern "C" __declspec(dllexport) int evrSetEdgeTint(float r,float g,float b,float a,float band) noexcept {
+    if(!(a>=0&&a<=1)||!(band>0&&band<=0.5f)||!(r>=0&&r<=1)||!(g>=0&&g<=1)||!(b>=0&&b<=1))return 2;
+    std::lock_guard<std::mutex> l(edgeTintLock);edgeTintCurrent={r,g,b,a,band};return 0;
+}
+// Bounded diagnostic request from the frontend thread. No renderer access there.
+std::atomic<uint32_t> nativeFixtureCapture{0};
+diagnostic::CaptureBurst nativeCaptureBurst;
+extern "C" __declspec(dllexport) int evrRequestNativeXrBurst(uint32_t count) noexcept {return nativeCaptureBurst.request(count);}
+extern "C" __declspec(dllexport) int evrRequestNativeXrCapture(uint32_t tag) noexcept {
+    if(tag<1||tag>5)return 2;uint32_t empty=0;
+    return nativeFixtureCapture.compare_exchange_strong(empty,tag)?0:1;
+}
+uint64_t nextNativeXrGeneration=0; // same native render thread as session creation
+extern "C" __declspec(dllexport) int evrGetPreparedGameQueueFamily(VkInstance instance,VkDevice device,uint32_t* family) noexcept
+{
+    if(!family)return 2;
+    try {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto child=devices.find(key(device));auto parent=child==devices.end()?instances.end():instances.find(key(child->second.instance));
+        if(parent==instances.end()||child==devices.end()||parent->second.fixture||!parent->second.preflight||
+           !child->second.fixtureBinding||child->second.instance!=parent->second.instance)return 2;
+        *family=child->second.fixtureBinding->queueFamily;return 0;
+    }catch(...){return 1;}
+}
+// keepForScreen (the hooks' world session ends, EVR_SCREEN_XR=1): the world's eyes stop and the session stays for the
+// plate - the game goes on at its menu or in the next world's loading, and the headset keeps showing it.
+// deviceEnds (the game destroys its Vulkan device - it is closing): the session that was kept for the plate goes with
+// it, whichever thread that is; nothing draws any more. Game start 20261014-115547: without this the kept session
+// outlived the device and the game ended with an access violation.
+int closeLiveNativeXr(bool keepForScreen=false,bool deviceEnds=false) noexcept
+{
+    if(!liveNativeXr)return 0;
+    try {
+        auto &state=*liveNativeXr;
+        if(!deviceEnds&&state.thread!=GetCurrentThreadId())throw std::runtime_error("native XR teardown thread changed");
+        QueueCallScope context("openxr_native_teardown");
+        if(keepForScreen&&state.xr&&state.xr->vk.device&&state.xr->active()){
+            desktopMirrorSource(state.device,VK_NULL_HANDLE); // the desktop shows the game's own picture again
+            vkCheck(state.xr->vk.vkDeviceWaitIdle(state.xr->vk.device),"native XR world end idle");
+            state.xr->abortFrame("world_session_ended");
+            state.worldSession=false;state.screenWanted=true;state.worldPairs=0;
+            state.log->event("native_xr_kept_for_screen","\"submitted_pairs\":"+std::to_string(state.submittedPairs)+",\"generation\":"+std::to_string(state.generation));
+            return 0;
+        }
+        screenXr::release();
+        if(state.xr&&state.xr->vk.device){
+            // All native queue gates are held by the caller. Never call engine retirement.
+            const bool transferPending=state.transfer&&state.transfer->gpuPending(),uiPending=state.uiTransfer&&state.uiTransfer->gpuPending();
+            desktopMirrorSource(state.device,VK_NULL_HANDLE); // no new desktop blit of the transfer-owned mirror image
+            vkCheck(state.xr->vk.vkDeviceWaitIdle(state.xr->vk.device),"native XR teardown idle");
+            if(state.asyncCompletion)state.log->event("native_xr_async_drained","\"transfer_pending\":"+std::string(transferPending?"true":"false")+",\"ui_pending\":"+(uiPending?"true":"false")+",\"device_idle_complete\":true,\"submitted_pairs\":"+std::to_string(state.submittedPairs));
+            if(state.uiTransfer){state.uiTransfer.reset();state.log->event("native_ui_transfer_destroyed");}
+            if(state.hands){const bool closed=state.hands->close();state.hands.reset();state.log->event("native_motion_closed","\"success\":"+std::string(closed?"true":"false"));}
+            state.transfer.reset();
+            if(state.edgeTint){state.edgeTint.reset();state.log->event("edge_tint_destroyed","\"frames\":"+std::to_string(edgeTintFrames.load()));}
+            if(state.eyeMark){state.eyeMark.reset();state.log->event("aim_mark_destroyed","\"frames\":"+std::to_string(aimMarkFrames.load()));}
+            state.xr->abortFrame("native_diagnostic_stopped");state.xr->shutdown();
+        }
+        state.xr.reset();const auto pendingBurst=nativeCaptureBurst.reset();
+        if(pendingBurst)state.log->event("native_burst_capture_cancelled","\"remaining\":"+std::to_string(pendingBurst));
+        state.log->event("native_xr_closed");liveNativeXr.reset();return 0;
+    }catch(const std::exception &e){note("native_xr_close_failed","\"reason\":"+jsonString(e.what()));return 1;}
+}
+extern "C" __declspec(dllexport) int evrCloseNativeXr() noexcept {return closeLiveNativeXr(screenXr::requested());}
+// Read-only query after evrFinishNativeXr; no ABI change to the existing finish function.
+extern "C" __declspec(dllexport) int evrNativeFrameCaptured(uint64_t frame) noexcept {
+    return liveNativeXr&&liveNativeXr->thread==GetCurrentThreadId()&&frame&&liveNativeXr->capturedFrame==frame?1:0;
+}
+// Read-only (2026-10-18): how often the runtime has announced a new LOCAL space (its view reset: SteamVR's or Meta's
+// system button held) and the time of the last one; the hooks take the view's origin again from that time on.
+extern "C" __declspec(dllexport) int evrNativeLocalSpaceChange(uint64_t* count,int64_t* changeTime) noexcept {
+    if(!count||!changeTime||!liveNativeXr||!liveNativeXr->xr||liveNativeXr->thread!=GetCurrentThreadId())return 0;
+    *count=liveNativeXr->xr->localSpaceChanges;*changeTime=liveNativeXr->xr->localSpaceChangeTime;return 1;
+}
+extern "C" __declspec(dllexport) int evrSkipNativeXr(uint64_t frame) noexcept {
+    try {
+        if(!liveNativeXr)return 2;auto& state=*liveNativeXr;
+        if(state.thread!=GetCurrentThreadId()||state.xr->pendingFrame().frame!=frame||presents.load()<=state.beginPresent)
+            throw std::runtime_error("native deferred frame identity/present boundary mismatch");
+        QueueCallScope context("openxr_native_deferred_frame");
+        state.screenWanted=true;
+        if(!screenXr::insteadOfEyes(state))state.xr->skipFrame("world_view_resources_pending");
+        return 0;
+    }catch(const std::exception& e){note("native_xr_skip_failed","\"reason\":"+jsonString(e.what()));return 1;}
+}
+// The same for a frame that was begun early in the game's frame (hooks: world_early_xr_frame) when the game then
+// renders no world for it: there is no present between the begin and this end. Seen when the game rebuilds its
+// renderer after a change of the graphics settings - SSAO to "disabled" ended the session with "native deferred
+// frame identity/present boundary mismatch" (headset run game-20261013-005905, Mock run game-20261013-031050). The
+// frame is ended empty, as above; the thread and the frame's identity are still required.
+extern "C" __declspec(dllexport) int evrSkipNativeXrEarly(uint64_t frame) noexcept {
+    try {
+        if(!liveNativeXr)return 2;auto& state=*liveNativeXr;
+        if(state.thread!=GetCurrentThreadId()||state.xr->pendingFrame().frame!=frame||presents.load()<state.beginPresent)
+            throw std::runtime_error("native early deferred frame identity mismatch");
+        QueueCallScope context("openxr_native_deferred_frame");
+        state.screenWanted=true;
+        if(!screenXr::insteadOfEyes(state))state.xr->skipFrame("world_original_view_not_rendered");
+        state.log->event("native_frame_skipped_early","\"frame\":"+std::to_string(frame)+",\"presents_since_begin\":"+std::to_string(presents.load()-state.beginPresent)+",\"layers\":0");
+        return 0;
+    }catch(const std::exception& e){note("native_xr_skip_failed","\"reason\":"+jsonString(e.what()));return 1;}
+}
+// The session of the eyes: made on the hooks' first world frame, or - with EVR_SCREEN_XR=1 - by the game's first
+// presents for the plate (layer/screen_xr.hpp), on the same render thread. 0 = made, 2 = not possible here; throws.
+int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice device,uint32_t family,float scale,uint32_t frames)
+{
+        {
+            auto state=std::make_unique<LiveNativeXr>();BorrowedVulkan binding;
+            if(!frames||frames>diagnostic::maximumNativeDiagnosticFrames)return 2;
+            state->frameLimit=frames;
+            {std::lock_guard<std::mutex> lock(mutex);auto child=devices.find(key(device));auto parent=child==devices.end()?instances.end():instances.find(key(child->second.instance));
+                if(parent==instances.end()||child==devices.end()||parent->second.fixture||!parent->second.preflight||
+                   !child->second.fixtureBinding||child->second.instance!=parent->second.instance)return 2;
+                state->owner=parent->second.preflight;binding=*child->second.fixtureBinding;
+            }
+            if(family!=binding.queueFamily)return 2;
+            state->owner->validateGpu(instance,binding.physical);
+            auto module=GetModuleHandleW(L"vulkan-1.dll");
+            binding.getInstanceProcAddr=module?reinterpret_cast<PFN_vkGetInstanceProcAddr>(GetProcAddress(module,"vkGetInstanceProcAddr")):nullptr;
+            binding.instance=instance;binding.physical=physical;binding.device=device;state->device=device;
+            std::filesystem::create_directories(output+"/native-xr");
+            state->log=std::make_unique<Log>(output+"/native-xr/openxr.jsonl",true);
+            if(const auto cap=std::getenv("EVR_LOG_NAME_CAP")){const auto n=std::strtoul(cap,nullptr,10);if(n)state->log->setNameCap(unsigned(n));}
+            state->xr=std::make_unique<OpenXrClient>(*state->log,state->owner->loaderEntryPoint());
+            state->xr->diagnosticCameraMode="native_render_camera_diagnostic";
+            const auto shared=state->owner->borrowInstance();
+            state->xr->init(scale,&binding,&shared,XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT);
+            if(!rgba8(state->xr->format))throw std::runtime_error("native GPU copy requires RGBA8 runtime format");
+            state->transfer=std::make_unique<StereoTransfer>(state->xr->vk);
+            {static const bool historyWanted=[]{const auto f=std::getenv("EVR_BUG_HISTORY");return !(f&&!std::strcmp(f,"0"));}();
+             if(historyWanted)try{
+                state->history=std::make_unique<EyeHistory>(state->xr->vk);
+                state->transfer->history=[st=state.get()](VkCommandBuffer cmd,size_t eye,const TransferImage& src){
+                    if(st->historyFailed||!st->history)return;
+                    try{st->history->record(cmd,eye,src);}catch(const std::exception& e){st->historyFailed=true;st->log->event("eye_history_failed","\"stage\":\"record\",\"reason\":"+jsonString(e.what()));}
+                };
+                state->log->event("eye_history_enabled","\"slots\":"+std::to_string(state->history->slots)+",\"every_ms\":"+std::to_string(state->history->everyMs)+",\"half_size\":true");
+             }catch(const std::exception& e){state->history.reset();state->log->event("eye_history_failed","\"stage\":\"create\",\"reason\":"+jsonString(e.what()));}}
+            {const auto m=std::getenv("EVR_DESKTOP_MIRROR");state->transfer->mirrorRight=m&&!std::strcmp(m,"1");}
+            // EVR_EYE_WARP=1: the eye left out shows its last picture warped (second stage); 2: made from the other eye's
+            // picture of the frame, its last picture in the holes (third stage, PureDark's way).
+            {const auto w=std::getenv("EVR_EYE_WARP");state->warpWanted=w&&(!std::strcmp(w,"1")||!std::strcmp(w,"2"));state->warpFromOther=w&&!std::strcmp(w,"2");
+             const auto c=std::getenv("EVR_EYE_WARP_CHECK");const auto every=c?std::strtoul(c,nullptr,10):0;state->warpCheck=state->warpWanted&&every>=1;state->warpCheckEvery=every>=1?every:120;}   // EVR_EYE_WARP_CHECK=n: every n-th frame that draws both eyes
+            if(state->warpWanted)try{
+                if(state->xr->targets[0].width!=state->xr->targets[1].width||state->xr->targets[0].height!=state->xr->targets[1].height)throw std::runtime_error("the eyes differ in size");
+                state->warp=std::make_unique<EyeWarp>(state->xr->vk,state->xr->format,state->xr->targets[0].width,state->xr->targets[0].height);
+                if(state->warpFromOther)state->warp->cells=320;   // fine cells: the holes at the depth steps are a cell wide (6 px here; 144 cells left a jagged 14 px band along the sword)
+                if(const auto c=std::getenv("EVR_EYE_WARP_CELLS")){const auto n=std::strtoul(c,nullptr,10);if(n>=8&&n<=512)state->warp->cells=unsigned(n);}
+                if(const auto n=std::getenv("EVR_EYE_WARP_NEAR")){const auto f=std::strtof(n,nullptr);if(f>0&&f<10)state->warp->nearPlane=f;}
+                state->log->event("eye_warp_enabled","\"cells\":"+std::to_string(state->warp->cells)+",\"near\":"+std::to_string(state->warp->nearPlane)+",\"far\":"+std::to_string(state->warp->farDistance)+
+                    ",\"from_other_eye\":"+std::string(state->warpFromOther?"true":"false")+",\"self_check\":"+(state->warpCheck?"true":"false")+
+                    ",\"format\":"+std::to_string(state->xr->format)+",\"extent\":["+std::to_string(state->xr->targets[0].width)+','+std::to_string(state->xr->targets[0].height)+"]");
+                // The eye left out gets the edge tint too, after its warped picture (the copy's afterCopy gives it to a drawn eye).
+                state->warp->afterWarp=[st=state.get()](VkCommandBuffer cmd,uint32_t eye,const TransferImage& dst)->bool{
+                    EdgeTintParams p;{std::lock_guard<std::mutex> l(edgeTintLock);p=edgeTintCurrent;}
+                    if(p.a<0.002f||edgeTintFailed.load()||!st->edgeTint)return false;
+                    try{st->edgeTint->record(cmd,dst,eye,p);return true;}catch(const std::exception& e){edgeTintFailed=true;st->log->event("edge_tint_failed","\"stage\":\"warp\",\"reason\":"+jsonString(e.what()));return false;}
+                };
+                // Every eye copied keeps its colour and the game's depth of that frame for the warp.
+                state->transfer->keepEye=[st=state.get()](VkCommandBuffer cmd,size_t eye,const TransferImage& src){
+                    if(st->warpFailed||eye>=2||!st->warp)return;
+                    try{
+                        EyeDepthNote note;const uint32_t drawnEyes=st->xr->pendingFrame().eyeMask;
+                        if(!eyeDepthByOrder(drawnEyes,uint32_t(eye),st->depthNoteUsed[eye],note)){if(++st->warpKeepMisses<=3)st->log->event("eye_warp_keep_missed","\"eye\":"+std::to_string(eye)+",\"picture\":"+handleText(src.image)+",\"drawn_eyes\":"+std::to_string(drawnEyes)+",\"reason\":\"no new depth note for this eye\"");return;}
+                        st->depthNoteUsed[eye]=note.at;
+                        diagnostic::NativeImageEvidence e;
+                        if(evrGetNativeImageEvidence(st->device,note.depth,&e)||!e.ready){if(++st->warpKeepMisses<=3)st->log->event("eye_warp_keep_missed","\"eye\":"+std::to_string(eye)+",\"depth\":"+handleText(note.depth)+",\"reason\":\"depth layout unproven\"");return;}
+                        if(!(e.usage&VK_IMAGE_USAGE_SAMPLED_BIT)){if(++st->warpKeepMisses<=3)st->log->event("eye_warp_keep_missed","\"eye\":"+std::to_string(eye)+",\"depth\":"+handleText(note.depth)+",\"usage\":"+std::to_string(e.usage)+",\"reason\":\"depth has no sampled usage\"");return;}
+                        const auto& snapshot=st->xr->pendingFrame();
+                        st->warp->keep(cmd,uint32_t(eye),src,note.depth,e.layout,note.width,note.height,note.format,snapshot.views[eye],snapshot.frame);
+                        const auto n=st->warp->keeps;
+                        if(n<=2||n%1200==0)st->log->event("eye_warp_kept","\"frame\":"+std::to_string(snapshot.frame)+",\"eye\":"+std::to_string(eye)+",\"keeps\":"+std::to_string(n)+",\"depth\":"+handleText(note.depth)+
+                            ",\"depth_size\":["+std::to_string(note.width)+','+std::to_string(note.height)+"],\"depth_format\":"+std::to_string(note.format)+",\"depth_layout\":"+std::to_string(e.layout)+",\"depth_usage\":"+std::to_string(e.usage));
+                    }catch(const std::exception& x){st->warpFailed=true;st->log->event("eye_warp_failed","\"stage\":\"keep\",\"eye\":"+std::to_string(eye)+",\"reason\":"+jsonString(x.what()));}
+                };
+            }catch(const std::exception& e){state->warpWanted=false;state->warp.reset();state->log->event("eye_warp_unavailable","\"reason\":"+jsonString(e.what()));}
+            state->transfer->afterCopy=[st=state.get()](VkCommandBuffer cmd,size_t eye,const TransferImage& dst){
+                bool drawn=false; // true once something left the image in COLOR_ATTACHMENT_OPTIMAL
+                EdgeTintParams p;{std::lock_guard<std::mutex> l(edgeTintLock);p=edgeTintCurrent;}
+                if(p.a>=0.002f&&!edgeTintFailed.load()){
+                    try{
+                        if(!st->edgeTint){st->edgeTint=std::make_unique<EdgeTint>(st->xr->vk,st->xr->format);st->log->event("edge_tint_enabled","\"format\":"+std::to_string(st->xr->format));}
+                        st->edgeTint->record(cmd,dst,eye,p);drawn=true;
+                        const auto n=eye==0?++edgeTintFrames:edgeTintFrames.load();
+                        if(eye==0&&(n<=3||n%600==0)){std::ostringstream o;o<<std::setprecision(4)<<"\"frames\":"<<n<<",\"rgb\":["<<p.r<<','<<p.g<<','<<p.b<<"],\"strength\":"<<p.a<<",\"band\":"<<p.band;st->log->event("edge_tint_frame",o.str());}
+                    }catch(const std::exception& e){
+                        // Creation/target failures happen before any command is recorded; the eye stays untinted.
+                        edgeTintFailed=true;st->log->event("edge_tint_failed","\"reason\":"+jsonString(e.what()));
+                    }
+                }
+                // The aim mark: the aimed place as this eye sees it (the pose and field of view the eye image is
+                // submitted with), a dot there.
+                Vec3 aimed{};
+                if(eye<2&&!aimMarkFailed.load()&&aimMarkNow(aimed)){
+                    try{
+                        const auto& view=st->xr->pendingFrame().views[eye];
+                        const auto place=aim::eyePlace(view.pose,view.fov.angleLeft,view.fov.angleRight,view.fov.angleUp,view.fov.angleDown,aimed,dst.width,dst.height);
+                        if(place.on){
+                            if(!st->eyeMark){st->eyeMark=std::make_unique<EyeMark>(st->xr->vk,st->xr->format);st->log->event("aim_mark_enabled","\"format\":"+std::to_string(st->xr->format));}
+                            st->eyeMark->record(cmd,dst,{place.x,place.y,place.radius,1.f},drawn);drawn=true;
+                            const auto n=eye==0?++aimMarkFrames:aimMarkFrames.load();
+                            if(n<=4||n%300==0){std::ostringstream o;o<<std::setprecision(7)<<"\"frames\":"<<n<<",\"frame\":"<<st->xr->pendingFrame().frame<<",\"eye\":"<<eye<<",\"pixel\":["<<place.x<<','<<place.y<<"],\"radius\":"<<place.radius
+                                <<",\"extent\":["<<dst.width<<','<<dst.height<<"],\"point\":["<<aimed.x<<','<<aimed.y<<','<<aimed.z<<']';st->log->event("aim_mark_frame",o.str());}
+                        }
+                    }catch(const std::exception& e){
+                        // As above: nothing was recorded for the mark; the eye stays without it.
+                        aimMarkFailed=true;st->log->event("aim_mark_failed","\"reason\":"+jsonString(e.what()));
+                    }
+                }
+                // The throw's guide: a short white beam from its first point to its last (user 2026-10-18 12:40: "a short laser
+                // rather than a dotted line", 13:20 "white"), about 5 mm thick near the hand, fainter towards its end.
+                std::array<Vec3,16> guide{};
+                if(eye<2&&!throwGuideFailed.load())if(const auto count=throwGuideNow(guide)){
+                    try{
+                        const auto& view=st->xr->pendingFrame().views[eye];unsigned on=0;
+                        const auto& from=guide[0];const auto& to=guide[count-1];
+                        const float away=length(from-view.pose.position);
+                        if(std::isfinite(away)&&away>=.05f){
+                            const float radians=std::clamp(.0025f/away,.0012f,.02f);
+                            const auto a=aim::eyePlace(view.pose,view.fov.angleLeft,view.fov.angleRight,view.fov.angleUp,view.fov.angleDown,from,dst.width,dst.height,radians);
+                            const auto b=aim::eyePlace(view.pose,view.fov.angleLeft,view.fov.angleRight,view.fov.angleUp,view.fov.angleDown,to,dst.width,dst.height,radians);
+                            if(a.radius>0&&b.radius>0&&(a.on||b.on)){   // both ends in front of the eye (radius 0: behind it)
+                                if(!st->eyeMark){st->eyeMark=std::make_unique<EyeMark>(st->xr->vk,st->xr->format);st->log->event("aim_mark_enabled","\"format\":"+std::to_string(st->xr->format)+",\"by\":\"throw_guide\"");}
+                                st->eyeMark->recordBeam(cmd,dst,{a.x,a.y,b.x,b.y,std::max(2.5f,a.radius*2.f),1.f},drawn);drawn=true;on=2;
+                            }
+                        }
+                        const auto n=eye==0?++throwGuideFrames:throwGuideFrames.load();
+                        if(n<=4||n%300==0){std::ostringstream o;o<<std::setprecision(6)<<"\"frames\":"<<n<<",\"frame\":"<<st->xr->pendingFrame().frame<<",\"eye\":"<<eye<<",\"points\":"<<count<<",\"drawn\":"<<on
+                            <<",\"first\":["<<guide[0].x<<','<<guide[0].y<<','<<guide[0].z<<"],\"last\":["<<guide[count-1].x<<','<<guide[count-1].y<<','<<guide[count-1].z<<']';st->log->event("throw_guide_frame",o.str());}
+                    }catch(const std::exception& e){throwGuideFailed=true;st->log->event("throw_guide_failed","\"reason\":"+jsonString(e.what()));}
+                }
+                return drawn;
+            };
+            state->generation=++nextNativeXrGeneration;
+            {
+                const auto asyncFlag=std::getenv("EVR_XR_ASYNC_COMPLETION");
+                const bool requested=asyncFlag&&!std::strcmp(asyncFlag,"1");
+                state->asyncCompletion=requested&&binding.createdQueueCount==1&&state->xr->vk.family==binding.queueFamily;
+                state->log->event("native_xr_completion_policy","\"async\":"+std::string(state->asyncCompletion?"true":"false")+
+                    ",\"requested\":"+(requested?"true":"false")+",\"queue_family\":"+std::to_string(binding.queueFamily)+
+                    ",\"created_queue_count\":"+std::to_string(binding.createdQueueCount)+",\"binding_queue_family\":"+std::to_string(state->xr->vk.family)+
+                    ",\"reason\":"+jsonString(!requested?"strict_default":state->asyncCompletion?"single_queue_family_ordered":"family_queue_identity_unproven"));
+            }
+            const auto motionFlag=std::getenv("EVR_NATIVE_MOTION_HANDS");
+            if(motionFlag&&!std::strcmp(motionFlag,"1")){
+                state->hands=std::make_unique<motion::Actions>();
+                state->hands->open(state->owner->loaderEntryPoint(),state->xr->instance,state->xr->session,state->generation);
+                // EVR_GRIP_TRIM="yaw,pitch,roll" degrees (launcher -PrepareRealVr default, 2026-10-09); absent = identity.
+                std::string trim="none";
+                if(const auto t=std::getenv("EVR_GRIP_TRIM");t&&*t){float y=0,p=0,r=0;char extra=0;
+                    if(std::sscanf(t,"%f,%f,%f%c",&y,&p,&r,&extra)!=3)throw std::runtime_error("EVR_GRIP_TRIM must be yaw,pitch,roll degrees");
+                    state->hands->setGripTrim(y,p,r);trim=t;}
+                state->log->event("native_motion_opened","\"generation\":"+std::to_string(state->generation)+",\"grip_trim_degrees\":"+jsonString(trim));
+            }
+            liveNativeXr=std::move(state);
+            // Opt-in ordering diagnostic (EVR_QUEUE_TRACE_LIVE=N, N<=4096): arm the bounded queue
+            // submit trace when the first live XR frame begins, so game vs MOD copy order is visible.
+            if(const auto armFlag=std::getenv("EVR_QUEUE_TRACE_LIVE")){
+                const auto arm=std::strtoul(armFlag,nullptr,10);
+                if(arm>0&&arm<=4096){queueTraceBudget=uint32_t(arm);liveNativeXr->log->event("native_queue_trace_armed","\"budget\":"+std::to_string(arm));}
+            }
+        }
+        return 0;
+}
+extern "C" __declspec(dllexport) int evrBeginNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice device,
+    uint32_t family,float scale,diagnostic::NativeXrFrame* frame) noexcept
+{
+    try {
+        const auto enabled=std::getenv("EVR_LIVE_NATIVE_XR");
+        if(!enabled||std::strcmp(enabled,"1")||!frame||frame->structSize!=sizeof(*frame)||frame->abiVersion!=diagnostic::nativeXrFrameAbiVersion)return 2;
+        const auto requestedFrames=frame->diagnosticFrames;const auto requestedEyes=frame->eyeMask;
+        *frame=diagnostic::NativeXrFrame{};frame->diagnosticFrames=requestedFrames;
+        QueueCallScope context("openxr_native_begin");
+        if(!liveNativeXr){if(const int made=createLiveNativeXr(instance,physical,device,family,scale,frame->diagnosticFrames))return made;}
+        auto &state=*liveNativeXr;
+        if(state.thread!=GetCurrentThreadId()||state.device!=device)throw std::runtime_error("native XR thread/device changed");
+        if(!state.worldSession)state.worldPairs=0;
+        state.worldSession=true;state.lastWorldBegin=GetTickCount64();
+        auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(20);
+        while(!state.xr->active()){
+            if(!state.xr->poll()||std::chrono::steady_clock::now()>deadline)throw std::runtime_error("native XR session not ready");
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        {
+            // One eye a frame (alternate-eye rendering) unless a picture of both eyes is to be taken in this frame: the
+            // requests that evrFinishNativeXr takes (a tag, a burst, a request file on every 15th pair, the evidence pairs).
+            uint32_t eyes=(requestedEyes&3)?(requestedEyes&3):3u;
+            if(state.alternateRefused)eyes=3;
+            // EVR_CAPTURE_SINGLE=1 (comparisons, 2026-10-14): pictures are taken of the one eye drawn - each eye then
+            // drawn wholly by itself, none of it borrowed from the other - so frames of one eye stay as they are.
+            static const bool singleCapture=[]{const auto f=std::getenv("EVR_CAPTURE_SINGLE");return f&&!std::strcmp(f,"1");}();
+            if(eyes!=3&&!singleCapture){
+                static const bool playLog=[]{const auto f=std::getenv("EVR_PLAY_LOG");return f&&!std::strcmp(f,"1");}();
+                const auto pairNumber=state.submittedPairs+1;std::error_code ec;
+                if(nativeFixtureCapture.load()||nativeCaptureBurst.pending()||bugCaptureBurst.pending()||(!playLog&&(pairNumber==1||pairNumber==state.frameLimit/2||pairNumber==state.frameLimit))||
+                   (state.submittedPairs%15==0&&(std::filesystem::exists(std::filesystem::path(output)/"xr-capture.request",ec)||std::filesystem::exists(std::filesystem::path(output)/"xr-burst.request",ec))))
+                    eyes=3;
+            }
+            state.xr->requestEyes(eyes);
+            // The eye left out gets an image for its warped picture when its last drawn one is kept with its depth.
+            uint32_t warpMask=0;
+            if(state.warpWanted&&!state.warpFailed&&eyes!=3&&state.warp)for(uint32_t eye=0;eye<2;++eye)if(!(eyes>>eye&1)&&state.warp->canWarp(eye,state.warpFromOther))warpMask|=1u<<eye;
+            state.xr->requestWarp(warpMask);
+            if(!state.xr->beginFrame())throw std::runtime_error("native XR session stopped");
+            const auto snapshot=state.xr->pendingFrame();
+            const auto flags=state.xr->headLocation.locationFlags;
+            if(state.hands)frame->hands=state.hands->sample(state.xr->local,snapshot.predictedDisplayTime,snapshot.frame,1);
+            frame->frame=snapshot.frame;frame->time=snapshot.predictedDisplayTime;
+            frame->headFlags=flags;frame->sessionGeneration=state.generation;
+            if(snapshot.shouldRender&&(flags&3)==3){
+                frame->frame=snapshot.frame;frame->time=snapshot.predictedDisplayTime;frame->views=snapshot.views;frame->eyeMask=snapshot.eyeMask;
+                frame->head=state.xr->headLocation.pose;
+                frame->headFlags=flags;frame->sessionGeneration=state.generation;
+                for(size_t eye=0;eye<2;++eye){
+                    frame->width[eye]=state.xr->targets[eye].width;frame->height[eye]=state.xr->targets[eye].height;
+                    const auto& view=frame->views[eye];const auto& p=view.pose;const auto& f=view.fov;
+                    std::ostringstream fields;fields<<std::setprecision(9)<<"\"frame\":"<<frame->frame<<",\"time\":"<<frame->time<<",\"eye\":"<<eye
+                        <<",\"position\":["<<p.position.x<<','<<p.position.y<<','<<p.position.z<<"],\"orientation\":["<<p.orientation.x<<','<<p.orientation.y<<','<<p.orientation.z<<','<<p.orientation.w
+                        <<"],\"fov\":["<<f.angleLeft<<','<<f.angleRight<<','<<f.angleUp<<','<<f.angleDown<<']';
+                    state.log->event("runtime_eye_pose",fields.str());
+                }
+                state.beginPresent=presents.load();
+                state.log->event("native_frame_begin","\"frame\":"+std::to_string(frame->frame)+",\"time\":"+std::to_string(frame->time)+
+                    ",\"head_flags\":"+std::to_string(flags)+",\"session_generation\":"+std::to_string(frame->sessionGeneration));
+                return 0;
+            }
+            if(snapshot.shouldRender)state.xr->skipFrame("native_head_tracking_invalid");
+            else state.xr->finishFrame();
+            state.log->event("native_frame_deferred","\"frame\":"+std::to_string(frame->frame)+",\"time\":"+std::to_string(frame->time)+
+                ",\"head_flags\":"+std::to_string(flags)+",\"session_generation\":"+std::to_string(state.generation)+",\"empty_frame_ended\":true");
+            return diagnostic::nativeXrFrameDeferred;
+        }
+    }catch(const std::exception& e){note("native_xr_begin_failed","\"reason\":"+jsonString(e.what()));closeLiveNativeXr();return 1;}
+}
+// Called on the existing XR render thread, never from the frontend consumer.
+// Finite100ms pulses bound any stale effect even if the renderer stops entirely.
+extern "C" __declspec(dllexport) int evrNativeMotionHaptic(uint64_t frame,uint64_t generation,const float* amplitude) noexcept {
+    try {
+        if(!liveNativeXr||!amplitude)return 2;auto& state=*liveNativeXr;
+        if(state.thread!=GetCurrentThreadId()||generation!=state.generation||!state.hands||state.xr->pendingFrame().frame!=frame)return 2;
+        for(unsigned h=0;h<2;h++)if(!std::isfinite(amplitude[h])||amplitude[h]<0||amplitude[h]>1)return 2;
+        std::array<bool,2> delivered{};
+        for(unsigned h=0;h<2;h++)delivered[h]=amplitude[h]>0?state.hands->vibrate(h,amplitude[h],100000000):state.hands->stop(h);
+        std::ostringstream o;o<<std::setprecision(9)<<"\"frame\":"<<frame<<",\"generation\":"<<generation<<",\"amplitude\":["<<amplitude[0]<<','<<amplitude[1]
+            <<"],\"delivered\":["<<(delivered[0]?"true":"false")<<','<<(delivered[1]?"true":"false")<<"],\"duration\":100000000";
+        state.log->event("native_motion_haptic",o.str());return 0;
+    }catch(const std::exception& e){note("native_motion_haptic_failed","\"reason\":"+jsonString(e.what()));return 1;}
+}
+extern "C" __declspec(dllexport) int evrNativeGestureHaptic(uint64_t frame,uint64_t generation,const float* amplitude,const XrDuration* duration) noexcept {
+    try {
+        if(!liveNativeXr||!amplitude||!duration)return 2;auto& state=*liveNativeXr;
+        if(state.thread!=GetCurrentThreadId()||generation!=state.generation||!state.hands||state.xr->pendingFrame().frame!=frame)return 2;
+        for(unsigned h=0;h<2;h++)if(!std::isfinite(amplitude[h])||amplitude[h]<0||amplitude[h]>1||duration[h]<=0||duration[h]>100000000)return 2;
+        std::array<bool,2> delivered{};
+        for(unsigned h=0;h<2;h++)delivered[h]=amplitude[h]>0?state.hands->vibrate(h,amplitude[h],duration[h]):state.hands->stop(h);
+        std::ostringstream o;o<<std::setprecision(9)<<"\"frame\":"<<frame<<",\"generation\":"<<generation<<",\"amplitude\":["<<amplitude[0]<<','<<amplitude[1]
+            <<"],\"delivered\":["<<(delivered[0]?"true":"false")<<','<<(delivered[1]?"true":"false")<<"],\"duration\":["<<duration[0]<<','<<duration[1]<<']';
+        state.log->event("native_gesture_haptic",o.str());return 0;
+    }catch(const std::exception& e){note("native_gesture_haptic_failed","\"reason\":"+jsonString(e.what()));return 1;}
+}
+// Alternate-eye rendering: the pose (LOCAL space) the eye left out in this frame is shown at (hooks: where its game
+// camera was, seen from this frame's anchor). 0 taken; 1 refused (no such frame or eye); 2 no session.
+extern "C" __declspec(dllexport) int evrSetNativeXrStalePose(uint64_t frame,uint32_t eye,const XrPosef* pose) noexcept
+{
+    try {
+        if(!liveNativeXr||!pose)return 2;auto &state=*liveNativeXr;
+        if(state.thread!=GetCurrentThreadId()||!state.xr->hasPendingFrame()||state.xr->pendingFrame().frame!=frame)return 1;
+        return state.xr->showStaleEyeAt(eye,*pose)?0:1;
+    }catch(const std::exception& e){note("native_xr_stale_pose_failed","\"reason\":"+jsonString(e.what()));return 1;}
+}
+extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkImage* images) noexcept
+{
+    try {
+        if(!liveNativeXr||!images)return 2;auto &state=*liveNativeXr;
+        if(state.thread!=GetCurrentThreadId())throw std::runtime_error("native XR completion thread changed");
+        QueueCallScope context("openxr_native_copy_end");
+        const auto completionStart=std::chrono::steady_clock::now();
+        auto &xr=*state.xr;const auto snapshot=xr.pendingFrame();
+        if(snapshot.frame!=frame||!snapshot.shouldRender||presents.load()<=state.beginPresent)
+            throw std::runtime_error("native frame identity/present boundary not established");
+        // The eyes drawn in this frame (alternate-eye rendering: one of them). Pictures of the eyes wait for a frame of
+        // both (evrBeginNativeXr asks for one when they are waiting).
+        const uint32_t eyes=snapshot.eyeMask;
+        static const bool singleCapture=[]{const auto f=std::getenv("EVR_CAPTURE_SINGLE");return f&&!std::strcmp(f,"1");}();
+        const bool both=eyes==3||singleCapture;   // with EVR_CAPTURE_SINGLE the picture of the eye drawn is taken alone
+        auto fixtureCapture=both?nativeFixtureCapture.exchange(0):0u;auto burstCapture=both?nativeCaptureBurst.take():decltype(nativeCaptureBurst.take()){};if(both&&!burstCapture)burstCapture=bugCaptureBurst.take();
+        // F8: pictures of both eyes where the player stands (EVR_CAPTURE_KEY=1; for Mock sessions that the user moves by
+        // the keyboard - 2026-10-14: "I move with the keyboard; take the fog and brightness differences"). A beep says
+        // the key was taken; on a frame of one eye the picture comes with the next frame of both.
+        {static const bool keyWanted=[]{const auto f=std::getenv("EVR_CAPTURE_KEY");return f&&!std::strcmp(f,"1");}();static bool keyBefore=false;
+         if(keyWanted){const bool down=(GetAsyncKeyState(VK_F8)&0x8000)!=0;
+            if(down&&!keyBefore){if(both&&!fixtureCapture)fixtureCapture=9;else nativeFixtureCapture.store(9);MessageBeep(MB_OK);
+                state.log->event("manual_key_capture","\"frame\":"+std::to_string(frame)+",\"key\":\"F8\"");}
+            keyBefore=down;}}
+        // Manual one-shot capture (2026-10-06): <output>/xr-capture.request -> eyes + UI of this pair, file removed.
+        // Checked every 15th pair only, to keep the per-frame cost negligible.
+        if(both&&!fixtureCapture&&state.submittedPairs%15==0){std::error_code ec;const auto request=std::filesystem::path(output)/"xr-capture.request";
+            if(std::filesystem::exists(request,ec)&&std::filesystem::remove(request,ec)){fixtureCapture=9;state.log->event("manual_xr_capture","\"frame\":"+std::to_string(frame));}}
+        // Manual burst (2026-10-09, flicker detection): <output>/xr-burst.request holding N (1..32, default 8) captures the
+        // next N consecutive pairs. Optional second field is an explicit session request limit (1..4, default 1).
+        if(both&&!fixtureCapture&&state.submittedPairs%15==0){std::error_code ec;const auto request=std::filesystem::path(output)/"xr-burst.request";
+            if(std::filesystem::exists(request,ec)){uint32_t count=8,limit=1;{std::ifstream in(request);uint32_t n=0;if(in>>n){count=n;if(in>>n)limit=n;}}
+                if(std::filesystem::remove(request,ec)){const int r=nativeCaptureBurst.request(count,limit);
+                    state.log->event("manual_xr_burst","\"frame\":"+std::to_string(frame)+",\"count\":"+std::to_string(count)+",\"request_limit\":"+std::to_string(limit)+",\"accepted\":"+(r==0?"true":"false"));}}}
+        // UI statistics only (2026-10-11, headset feedback "the UI blinks at times"): <output>/xr-ui-stat.request holding N
+        // (1..3000) records the UI coverage of the next N pairs (native_ui_burst_stat), without eye images. Those pairs complete
+        // synchronously, as captures do.
+        static uint32_t uiStatRemaining=0;
+        if(!fixtureCapture&&!uiStatRemaining&&state.submittedPairs%15==0){std::error_code ec;const auto request=std::filesystem::path(output)/"xr-ui-stat.request";
+            if(std::filesystem::exists(request,ec)){uint32_t count=300;{std::ifstream in(request);uint32_t n=0;if(in>>n)count=n;}
+                if(std::filesystem::remove(request,ec)){uiStatRemaining=std::clamp<uint32_t>(count,1,3000);
+                    state.log->event("manual_ui_stat","\"frame\":"+std::to_string(frame)+",\"count\":"+std::to_string(uiStatRemaining));}}}
+        const bool uiStatFrame=uiStatRemaining>0;if(uiStatFrame)--uiStatRemaining;
+        // One manual raw diagnostic request, Mock navigation sessions only. V1 captures one pair;
+        // V2 explicitly requests 2..4 consecutive pairs, each still bounded to 16 images / 256 MiB.
+        std::vector<size_t> dumpImages;
+        static bool rawDumpConsumed=false;static uint32_t rawDumpRemaining=0,rawDumpCount=0;static std::vector<size_t> rawDumpSelection;
+        if(both&&!rawDumpConsumed&&diagnosticReadback::sweepRequested()&&std::getenv("EVR_MOCK_NAV_FILE")&&state.submittedPairs>30&&state.submittedPairs%15==0){
+            std::error_code ec;const auto request=std::filesystem::path(output)/"eye-dump.request";
+            if(std::filesystem::exists(request,ec)){
+                rawDumpConsumed=true;std::ifstream in(request);std::string magic;size_t index=0;uint32_t count=1;in>>magic;
+                const bool batch=magic=="EVR_EYE_IMAGE_DUMP_2";if(batch)in>>count;
+                while(in>>index){dumpImages.push_back(index);if(dumpImages.size()>16)break;}
+                const bool valid=(magic=="EVR_EYE_IMAGE_DUMP_1"||(batch&&count>=2&&count<=4))&&in.eof()&&!dumpImages.empty()&&dumpImages.size()<=16;
+                in.close();std::filesystem::rename(request,std::filesystem::path(output)/("eye-dump-request-"+std::to_string(frame)+".txt"),ec);
+                if(!valid||ec)dumpImages.clear();
+                if(!dumpImages.empty()){rawDumpSelection=dumpImages;rawDumpCount=rawDumpRemaining=count;}
+                state.log->event("manual_eye_dump","\"frame\":"+std::to_string(frame)+",\"accepted\":"+(dumpImages.empty()?"false":"true"));
+            }
+        }
+        if(both&&rawDumpRemaining){dumpImages=rawDumpSelection;--rawDumpRemaining;fixtureCapture=10;}
+        const auto pairNumber=state.submittedPairs+1;
+        // A manual burst also reads the UI back, as statistics only (2026-10-11, headset feedback "the UI blinks at times"):
+        // coverage per frame and per screen cell shows whether, where and in which stage (game image or XR copy) it drops out.
+        const bool uiBurst=(bool(burstCapture)||uiStatFrame)&&!fixtureCapture;
+        // EVR_PLAY_LOG=1 (the start by itself, for play): no evidence pictures of the first, middle and last pair.
+        static const bool playLog=[]{const auto f=std::getenv("EVR_PLAY_LOG");return f&&!std::strcmp(f,"1");}();
+        const bool evidencePair=both&&!playLog&&(pairNumber==1||pairNumber==state.frameLimit/2||pairNumber==state.frameLimit);
+        const bool uiReadback=fixtureCapture||uiBurst||evidencePair;
+        std::array<TransferImage,2> src{},dst{};std::array<std::string,2> captures;
+        for(size_t eye=0;eye<2;++eye){
+            if(!(eyes>>eye&1))continue;   // not drawn in this frame: the headset keeps its last picture
+            diagnostic::NativeImageEvidence evidence;
+            if(evrGetNativeImageEvidence(state.device,images[eye],&evidence)||!evidence.ready)
+                throw std::runtime_error("native eye image layout/submission unproven");
+            src[eye]={images[eye],evidence.width,evidence.height,evidence.format,evidence.layout,evidence.usage,evidence.family};
+            const auto &target=xr.targets[eye];
+            dst[eye]={target.images[snapshot.imageIndices[eye]].image,target.width,target.height,xr.format,
+                VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,xr.vk.family};
+            if(fixtureCapture||burstCapture||evidencePair)
+                captures[eye]=output+"/native-xr/frame-"+std::to_string(frame)+"-eye-"+std::to_string(eye)+".ppm";
+            state.log->event("native_eye_source","\"frame\":"+std::to_string(frame)+",\"eye\":"+std::to_string(eye)+
+                ",\"image\":"+handleText(images[eye])+",\"generation\":"+std::to_string(evidence.generation)+
+                ",\"layout\":"+std::to_string(evidence.layout)+",\"family\":"+std::to_string(evidence.family)+
+                ",\"usage\":"+std::to_string(src[eye].usage)+",\"format\":"+std::to_string(src[eye].format)+
+                ",\"width\":"+std::to_string(src[eye].width)+",\"height\":"+std::to_string(src[eye].height)+
+                ",\"submission\":"+std::to_string(evidence.submission)+",\"xr_image\":"+handleText(dst[eye].image));
+        }
+        if(uiDraw::enabled())state.log->event("native_ui_frame_evidence","\"frame\":"+std::to_string(frame)+","+uiDraw::frameEvidence(state.device,state.beginPresent,xr.vk.queue));
+        uiDraw::FrameSource uiSource;
+        const auto uiFlag=std::getenv("EVR_UI_QUAD");
+        bool submitUi=uiFlag && !std::strcmp(uiFlag,"1") && !state.uiDisabled && uiDraw::sourceForFrame(state.device,state.beginPresent,xr.vk.queue,uiSource);
+        if(submitUi){
+            // Resource/format setup can fail before acquisition without poisoning the world frame.
+            try{
+                if(state.uiTransfer&&(xr.uiSwapchain().width!=uiSource.width || xr.uiSwapchain().height!=uiSource.height)){
+                    // The desktop may be reading this transfer's picture (desktop UI): no new blit of it, and those under way end first.
+                    if(state.uiTransfer->desktopImage()){desktopMirrorSource(state.device,VK_NULL_HANDLE);vkCheck(xr.vk.vkDeviceWaitIdle(xr.vk.device),"desktop UI picture retired");}
+                    state.uiTransfer.reset();
+                }
+                xr.configureUi(uiSource.width,uiSource.height,VK_FORMAT_R8G8B8A8_SRGB);
+                if(!state.uiTransfer)state.uiTransfer=std::make_unique<UiTransfer>(xr.vk,xr.uiSwapchain(),xr.uiSwapchainFormat());
+            }catch(const std::exception& e){state.uiDisabled=true;submitUi=false;state.log->event("native_ui_disabled","\"reason\":"+jsonString(e.what()));}
+        }
+        if(uiFlag && !std::strcmp(uiFlag,"1") && !submitUi)
+            state.log->event("native_ui_omitted","\"frame\":"+std::to_string(frame)+",\"begin_present\":"+std::to_string(state.beginPresent)+",\"reason\":\"unproven_frame_or_disabled\"");
+        validateStereoTransfer(src,dst,xr.vk.family,eyes);
+        const auto evidenceComplete=std::chrono::steady_clock::now();
+        // Capture/readback frames keep the strict path. Async frames rely on the eye writer's
+        // family == binding family with a single queue, plus the copy's ALL_COMMANDS barriers.
+        const bool async=state.asyncCompletion&&captures[0].empty()&&captures[1].empty()&&!uiReadback;
+        // Opt-in black-frame diagnostic (EVR_EYE_LUMA_EVERY=N): read back both XR eye images every Nth
+        // pair without a device idle, so the measured path is the ordinary (async) submission path.
+        const auto lumaFlag=std::getenv("EVR_EYE_LUMA_EVERY");
+        const unsigned lumaEvery=lumaFlag?unsigned(std::strtoul(lumaFlag,nullptr,10)):0u;
+        const bool lumaFrame=eyes==3&&lumaEvery&&captures[0].empty()&&captures[1].empty()&&pairNumber%lumaEvery==0;
+        // Diagnostic synchronization only. This does not flush/retire native allocators.
+        if(!async)vkCheck(xr.vk.vkDeviceWaitIdle(xr.vk.device),"native game pair GPU completion");
+        const auto idleComplete=std::chrono::steady_clock::now();
+        if(queueTraceBudget.load())note("native_copy_begin","\"frame\":"+std::to_string(frame)+",\"pair\":"+std::to_string(pairNumber)+",\"thread\":"+std::to_string(GetCurrentThreadId())+",\"last_present\":"+std::to_string(presents.load()));
+        // The bug report's history: a save asked for (evrSaveEyeHistory: the button pressed, the report's window ended) is
+        // written before this pair; a picture of this pair goes into the ring if one is due.
+        if(state.history&&!state.historyFailed){
+            if(const auto asked=eyeHistoryAsked.load();asked!=eyeHistoryDone.load())try{
+                const auto start=std::chrono::steady_clock::now();
+                state.transfer->finish();std::error_code ec;std::filesystem::create_directories(std::filesystem::path(output)/"native-xr",ec);
+                const auto frames=state.history->save(xr.vk.queue,output+"/native-xr");eyeHistoryDone=asked;
+                std::string list;for(const auto f:frames)list+=(list.empty()?"":",")+std::to_string(f);
+                state.log->event("eye_history_saved","\"frame\":"+std::to_string(frame)+",\"pairs\":"+std::to_string(frames.size())+",\"frames\":["+list+"],\"ms\":"+
+                    std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count()));
+            }catch(const std::exception& e){state.historyFailed=true;eyeHistoryDone=eyeHistoryAsked.load();state.log->event("eye_history_failed","\"stage\":\"save\",\"reason\":"+jsonString(e.what()));}
+            state.history->begin(frame,GetTickCount64(),eyes==3);
+        }
+        state.transfer->copy(src,dst,captures,!async,lumaFrame,eyes);
+        if(state.history)state.history->end();
+        // Desktop UI (2026-10-13, user: "put the UI on the desktop side, for streaming"): with the UI of this frame the
+        // desktop's picture - the right eye's copy with the UI over it - is made by the UI's draw below and the desktop
+        // shows that; until then it keeps the picture it has. Without a UI in this frame, with a right eye of another
+        // format, or with EVR_DESKTOP_UI=0 the desktop shows the right eye alone, as before.
+        const auto mirrorCopy=state.transfer->mirrorView();
+        static const bool desktopUiWanted=[]{const auto f=std::getenv("EVR_DESKTOP_UI");return !f||std::strcmp(f,"0");}();
+        const bool desktopUi=desktopUiWanted&&submitUi&&mirrorCopy.image&&mirrorCopy.format==VK_FORMAT_R8G8B8A8_UNORM;
+        // If the UI's draw does not come to it (an exception on the way), the desktop falls back to the right eye alone.
+        struct DesktopFallback {bool armed;VkDevice device;VkImage image;uint32_t width,height;
+            ~DesktopFallback(){if(armed)desktopMirrorOwnedSource(device,image,width,height);}} desktopFallback{desktopUi,state.device,mirrorCopy.image,mirrorCopy.width,mirrorCopy.height};
+        if(!desktopUi){
+            if(mirrorCopy.image)desktopMirrorOwnedSource(state.device,mirrorCopy.image,mirrorCopy.width,mirrorCopy.height);
+            else desktopMirrorSource(state.device,images[1]);
+        }
+        if(lumaFrame){const auto& l=state.transfer->cpuTiming().luma;std::ostringstream o;o<<std::setprecision(6)<<"\"frame\":"<<frame<<",\"pair\":"<<pairNumber
+            <<",\"luma\":["<<l[0]<<','<<l[1]<<"],\"async_path\":"<<(async?"true":"false")<<",\"every\":"<<lumaEvery;
+            // Registered diagnostic images (DLSS inputs/outputs) read back in the same frame boundary.
+            for(size_t slot=0;slot<diagnosticReadback::slots.size();++slot){
+                const auto d=diagnosticReadback::slots[slot];if(!d.image)continue;
+                const auto r=diagnosticReadback::read(xr.vk,d.image,d.device);
+                o<<",\"slot"<<slot<<"\":{\"image\":"<<handleText(d.image)<<",\"ok\":"<<(r.ok?"true":"false")<<",\"mean\":"<<r.mean<<",\"non_finite\":"<<r.nonFinite
+                 <<",\"layout\":"<<r.layout<<",\"w\":"<<r.width<<",\"h\":"<<r.height<<",\"format\":"<<r.format<<",\"error\":"<<jsonString(r.error)<<'}';
+            }
+            // Aliasing evidence once per session (bindings are recorded at vkBindImageMemory*).
+            static unsigned aliasReports=0;
+            if(aliasReports++<3){
+                std::string fields;{std::lock_guard<std::mutex> lock(mutex);
+                    fields="\"frame\":"+std::to_string(frame)+",\"eye0\":{\"image\":"+handleText(src[0].image)+","+imageAliasReportLocked(src[0].image)+"},\"eye1\":{\"image\":"+handleText(src[1].image)+","+imageAliasReportLocked(src[1].image)+'}';
+                    for(size_t slot=0;slot<diagnosticReadback::slots.size();++slot)if(diagnosticReadback::slots[slot].image)
+                        fields+=",\"slot"+std::to_string(slot)+"\":{\"image\":"+handleText(diagnosticReadback::slots[slot].image)+","+imageAliasReportLocked(diagnosticReadback::slots[slot].image)+'}';}
+                state.log->event("native_eye_alias_report",fields);
+            }
+            state.log->event("native_eye_luma",o.str());
+            if(diagnosticReadback::sweepRequested()){
+                static bool inventoryLogged=false;
+                const auto sweep=diagnosticReadback::readSweep(xr.vk,!inventoryLogged);
+                if(!inventoryLogged){inventoryLogged=true;state.log->event("native_eye_sweep_inventory","\"frame\":"+std::to_string(frame)+",\"images\":["+sweep.inventory+"]");}
+                state.log->event("native_eye_sweep","\"frame\":"+std::to_string(frame)+",\"pair\":"+std::to_string(pairNumber)+","+sweep.frame);
+            }}
+        if(!dumpImages.empty()){
+            const auto dir=std::filesystem::path(output)/"native-xr"/("eye-dump-"+std::to_string(frame));
+            const auto dump=diagnosticReadback::readSweep(xr.vk,true,dir,dumpImages);
+            const std::string fields="\"frame\":"+std::to_string(frame)+",\"pair\":"+std::to_string(pairNumber)+",\"dump_index\":"+std::to_string(rawDumpCount-rawDumpRemaining)+",\"dump_count\":"+std::to_string(rawDumpCount)+",\"images\":["+dump.inventory+"],"+dump.frame;
+            state.log->event("native_eye_dump",fields);
+            std::filesystem::create_directories(dir);std::ofstream manifest(dir/"manifest.json");manifest<<'{'<<fields<<'}'<<std::endl;
+        }
+        // Depth-op window for the next pair (recorded before its evrFinishNativeXr): luma pairs only.
+        if(diagnosticReadback::sweepRequested()){const bool next=lumaEvery&&(pairNumber+1)%lumaEvery==0;
+            diagnosticReadback::depthLogPair=next?pairNumber+1:0;diagnosticReadback::depthLogWindow=next;}
+        gpuTimingPair(state.device,pairNumber,*state.log);
+        if(submitUi){
+            const auto uiIndex=xr.acquireUi(frame);
+            const bool capture=uiReadback; // Motion burst needs eye images; UI remains GPU-submitted each frame.
+            UiFade uiFade;bool uiProbe=false;
+            if(const int requested=uiHudMode.load()){
+                // The look at the previous frame's UI decides this frame's opacity (one frame late).
+                const auto now=GetTickCount64();const auto at=uiHudAt.load();
+                const auto mode=requested==1&&now>=at&&now-at<=1000?HudMode::Gameplay:HudMode::Forced;
+                state.uiTransfer->finishPrevious();HudChange change;
+                if(state.uiTransfer->probes()!=state.hudProbeSeen&&!state.uiTransfer->probe().empty()){
+                    state.hudProbeSeen=state.uiTransfer->probes();
+                    change=state.hudChanges.update(state.uiTransfer->probe().data(),state.uiTransfer->probeCellsWidth(),state.uiTransfer->probeCellsHeight(),now);
+                }
+                const float before=state.hudFade.opacity();uiFade.outside=state.hudFade.update(now,mode,change.changed);
+                const bool compassKept=uiCompassKept.load()&&now>=uiCompassAt.load()&&now-uiCompassAt.load()<=3000;
+                const auto pins=state.hudChanges.layout().kept(compassKept);const auto& wide=state.hudChanges.layout().pinsWide;const float sx=uiSource.width/1920.f,sy=uiSource.height/1080.f;
+                {static int told=-1;if(told!=int(compassKept)){told=int(compassKept);state.log->event("native_ui_compass","\"frame\":"+std::to_string(frame)+",\"kept_with_the_pins\":"+(compassKept?"true":"false"));}}
+                uiFade.keep={pins.x0*sx,pins.y0*sy,pins.x1*sx,pins.y1*sy};uiFade.keepWide={wide.x0*sx,wide.y0*sy,wide.x1*sx,wide.y1*sy};uiProbe=true;
+                const bool hidden=uiFade.outside<=0;
+                if((int(mode)!=state.hudLoggedMode||hidden!=state.hudLoggedHidden||(change.changed&&before<1))&&state.hudLogs<2000){
+                    ++state.hudLogs;state.hudLoggedMode=int(mode);state.hudLoggedHidden=hidden;
+                    state.log->event("native_ui_hud","\"frame\":"+std::to_string(frame)+",\"mode\":"+std::to_string(int(mode))+",\"opacity\":"+std::to_string(uiFade.outside)+",\"hidden\":"+(hidden?"true":"false")+
+                        ",\"changed\":"+(change.changed?"true":"false")+",\"vital_cells\":"+std::to_string(change.vitalCells)+",\"other_cells\":"+std::to_string(change.otherCells)+
+                        ",\"ticker_cells\":"+std::to_string(change.tickerCells)+",\"fading_cells\":"+std::to_string(change.fadingCells)+",\"ignored_cells\":"+std::to_string(change.ignoredCells)+
+                        ",\"other_box\":["+std::to_string(change.otherX0)+','+std::to_string(change.otherY0)+','+std::to_string(change.otherX1)+','+std::to_string(change.otherY1)+"]"+
+                        ",\"cells\":["+std::to_string(state.uiTransfer->probeCellsWidth())+','+std::to_string(state.uiTransfer->probeCellsHeight())+"],\"hold_ms\":5000");
+                }
+                // What keeps a shown HUD shown, once a second at the most (2026-10-18; headset report 12: "the UI does not go
+                // away" - the record above leaves out changes while it is fully shown, so the reason was not on record).
+                {static uint64_t keptAt=0;static unsigned keptLogs=0;
+                 if(change.changed&&!hidden&&before>=1&&now>=keptAt+1000&&keptLogs<3600){keptAt=now;++keptLogs;
+                    state.log->event("native_ui_hud_kept","\"frame\":"+std::to_string(frame)+",\"vital_cells\":"+std::to_string(change.vitalCells)+",\"other_cells\":"+std::to_string(change.otherCells)+
+                        ",\"ticker_cells\":"+std::to_string(change.tickerCells)+",\"other_box\":["+std::to_string(change.otherX0)+','+std::to_string(change.otherY0)+','+std::to_string(change.otherX1)+','+std::to_string(change.otherY1)+"]"+
+                        ",\"compass_kept\":"+(compassKept?"true":"false"));}}
+            }else if(state.hudLoggedMode!=0){state.hudLoggedMode=0;state.hudFade.update(GetTickCount64(),HudMode::Off,false);state.hudChanges.reset();}
+            if(const int shown=uiCursorShown.load()){
+                const auto now=GetTickCount64();const auto at=uiCursorAt.load();const auto place=uiCursorPlace.load();
+                if(now>=at&&now-at<=250){const float size=uiSource.height/1080.f;
+                    uiFade.cursor={float(place>>16)/65535.f*uiSource.width,float(place&0xffff)/65535.f*uiSource.height,(shown==2?9.f:6.f)*size,float(shown)};}
+            }
+            {   // the mod's own picture over the plate (evrSetUiOverlay)
+                std::lock_guard<std::mutex> l(uiOverlayLock);
+                if(uiOverlaySerialNow!=state.uiOverlaySerial&&uiOverlayWidth){
+                    state.uiTransfer->setOverlay(uiOverlayBytes,uiOverlayWidth,uiOverlayHeight);state.uiOverlaySerial=uiOverlaySerialNow;
+                    if(state.uiOverlayLogs++<40)state.log->event("native_ui_overlay","\"frame\":"+std::to_string(frame)+",\"picture\":["+std::to_string(uiOverlayWidth)+','+std::to_string(uiOverlayHeight)+"],\"serial\":"+std::to_string(uiOverlaySerialNow));
+                }
+                const auto now=GetTickCount64();
+                if(uiOverlayWidth&&uiOverlayRect[2]>uiOverlayRect[0]&&now>=uiOverlayAt&&now-uiOverlayAt<=1000){
+                    bool empty=true;
+                    if(uiOverlayOnlyEmpty.load()){
+                        // the game's UI under the place, from the small copy of the last draws (cells of about 16 pixels)
+                        uiProbe=true;const auto& cells=state.uiTransfer->probe();const auto cw=state.uiTransfer->probeCellsWidth(),ch=state.uiTransfer->probeCellsHeight();
+                        if(cells.empty()||!cw||!ch){
+                            // 2026-10-17 evening (headset: "the bug report button is gone"; shown in both Mock starts): without the
+                            // small copy of the UI the button (mode 2) is shown rather than hidden - at worst over the settings page
+                            empty=uiOverlayOnlyEmpty.load()==2;
+                            static unsigned noProbe=0;if(noProbe++<8)state.log->event("native_ui_overlay_decision","\"frame\":"+std::to_string(frame)+
+                                ",\"shown\":"+(empty?"true":"false")+",\"probe\":\"none\",\"mode\":"+std::to_string(uiOverlayOnlyEmpty.load()));}
+                        else{const auto x0=uint32_t(uiOverlayRect[0]*cw),x1=std::min(cw,uint32_t(uiOverlayRect[2]*cw)+1),y0=uint32_t(uiOverlayRect[1]*ch),y1=std::min(ch,uint32_t(uiOverlayRect[3]*ch)+1);
+                            // "nothing drawn" = even: the start menu lays a dark veil of half cover over the whole picture (game-20261015-192035:
+                            // alpha 128 everywhere on its right half); text, frames and pictures make the cells differ
+                            if(uiOverlayOnlyEmpty.load()==2){
+                                // 2 (2026-10-17, the bug report's button; user: "hide it once the settings are open"): hidden only when the
+                                // game covers more than a fifth of the place - the settings page reaches over about 40 % of it (Mock
+                                // game-20261017-025851, frame 1061), the start menu's veil none; something small (user 2026-10-15: "show it
+                                // even over other things") keeps it shown. A cell counts as covered when a channel is 18 off the place's median.
+                                std::array<std::vector<uint8_t>,4> channel;
+                                for(uint32_t y=y0;y<y1;++y)for(uint32_t x=x0;x<x1;++x)for(unsigned c=0;c<4;++c)channel[c].push_back(cells[(size_t(y)*cw+x)*4+c]);
+                                std::array<uint8_t,4> median{};
+                                for(unsigned c=0;c<4;++c){auto v=channel[c];std::nth_element(v.begin(),v.begin()+v.size()/2,v.end());median[c]=v.empty()?0:v[v.size()/2];}
+                                size_t covered=0;const size_t total=channel[0].size();
+                                // 2026-10-18 (headset: the button still missing; record: covered 665 of 2204, median alpha 0): the start
+                                // menu's veil on the headset is not even (it fades across the place), so differing from the median no
+                                // longer tells. What the settings page has and the veil has not is edges - text, rows and frames: a cell
+                                // counts when a channel is 18 off its right or lower neighbour (Mock game-20261018-030005: the start menu
+                                // 0 %, the settings page 15 % of the place, its panels only half opaque); more than 5 % hides the button.
+                                for(uint32_t y=y0;y<y1;++y)for(uint32_t x=x0;x<x1;++x){
+                                    auto at=[&](uint32_t cx,uint32_t cy,unsigned c){return int(cells[(size_t(std::min(cy,ch-1))*cw+std::min(cx,cw-1))*4+c]);};
+                                    bool edge=false;for(unsigned c=0;c<4&&!edge;++c){const int v=at(x,y,c);if(std::abs(v-at(x+1,y,c))>18||std::abs(v-at(x,y+1,c))>18)edge=true;}
+                                    if(edge)++covered;}
+                                empty=total&&covered*20<=total;
+                                // 2026-10-17 evening (user: "the bug report button is gone"): each change of the decision on record
+                                {static int lastShown=-1;static unsigned changes=0;
+                                 if(int(empty)!=lastShown&&changes<40){lastShown=int(empty);++changes;
+                                    state.log->event("native_ui_overlay_decision","\"frame\":"+std::to_string(frame)+",\"shown\":"+(empty?"true":"false")+
+                                        ",\"covered\":"+std::to_string(covered)+",\"cells\":"+std::to_string(total)+",\"median\":["+std::to_string(median[0])+','+
+                                        std::to_string(median[1])+','+std::to_string(median[2])+','+std::to_string(median[3])+"]");}}
+                            }else{
+                            uint8_t lo[4]{255,255,255,255},hi[4]{0,0,0,0};
+                            for(uint32_t y=y0;y<y1;++y)for(uint32_t x=x0;x<x1;++x)for(unsigned c=0;c<4;++c){const auto v=cells[(size_t(y)*cw+x)*4+c];lo[c]=std::min(lo[c],v);hi[c]=std::max(hi[c],v);}
+                            for(unsigned c=0;c<4;++c)if(hi[c]-lo[c]>18)empty=false;}}
+                    }
+                    if(empty){uiFade.overlay={uiOverlayRect[0]*uiSource.width,uiOverlayRect[1]*uiSource.height,uiOverlayRect[2]*uiSource.width,uiOverlayRect[3]*uiSource.height};uiOverlayDrawnAt=now;}
+                }
+            }
+            Vec3 aimedPoint{};const bool aiming=aimMarkNow(aimedPoint);
+            // The cluster needs the projection and five quads; a runtime that takes fewer layers keeps the HUD whole.
+            const bool cluster=aiming&&aimCluster()&&xr.maxLayers()>=6&&!(uiPlateFixed.load()&&GetTickCount64()-uiPlateAt.load()<=2000);
+            if(aiming&&!cluster&&aimMarkHole()>0)uiFade.hole={uiSource.width*.5f,uiSource.height*.5f,aimMarkHole()*uiSource.height/1080.f,0};
+            const TransferImage behindUi{mirrorCopy.image,mirrorCopy.width,mirrorCopy.height,mirrorCopy.format,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,xr.vk.family};
+            const auto bytes=state.uiTransfer->draw({uiSource.image,uiSource.width,uiSource.height,VK_FORMAT_R8G8B8A8_UNORM,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,xr.vk.family},uiIndex,capture,!async,uiFade,uiProbe,desktopUi?&behindUi:nullptr);
+            if(const auto desk=state.uiTransfer->desktopView();desk.image){
+                desktopFallback.armed=false;desktopMirrorOwnedSource(state.device,desk.image,desk.width,desk.height);
+                const auto n=++state.desktopUiFrames;
+                if(n<=3||n%600==0){const auto crop=centreCrop(mirrorCopy.width,mirrorCopy.height,desk.width,desk.height);
+                    state.log->event("native_desktop_ui","\"frame\":"+std::to_string(frame)+",\"frames\":"+std::to_string(n)+",\"picture\":"+handleText(desk.image)+
+                        ",\"size\":["+std::to_string(desk.width)+','+std::to_string(desk.height)+"],\"behind\":"+handleText(mirrorCopy.image)+",\"behind_size\":["+std::to_string(mirrorCopy.width)+','+std::to_string(mirrorCopy.height)+
+                        "],\"crop\":["+std::to_string(crop.x0)+','+std::to_string(crop.y0)+','+std::to_string(crop.x1)+','+std::to_string(crop.y1)+"],\"outside\":"+std::to_string(uiFade.outside));}
+            }else if(desktopFallback.armed){desktopFallback.armed=false;desktopMirrorOwnedSource(state.device,mirrorCopy.image,mirrorCopy.width,mirrorCopy.height);}
+            UiQuadPlacement placement;
+            if(uiPlateFixed.load()){
+                const auto now=GetTickCount64();const auto at=uiPlateAt.load();
+                if(now>=at&&now-at<=2000){std::lock_guard<std::mutex> l(uiPlateLock);placement.localSpace=true;placement.origin=uiPlateOrigin;}
+            }
+            if(placement.localSpace!=state.uiPlateLogged&&state.uiPlateLogs<200){
+                ++state.uiPlateLogs;state.uiPlateLogged=placement.localSpace;std::ostringstream o;o<<std::setprecision(7)<<"\"frame\":"<<frame<<",\"fixed\":"<<(placement.localSpace?"true":"false")
+                    <<",\"origin_position\":["<<placement.origin.position.x<<','<<placement.origin.position.y<<','<<placement.origin.position.z<<"],\"origin_orientation\":["<<placement.origin.orientation.x<<','<<placement.origin.orientation.y<<','<<placement.origin.orientation.z<<','<<placement.origin.orientation.w
+                    <<"],\"distance_m\":"<<placement.distance<<",\"space\":"<<(placement.localSpace?"\"LOCAL\"":"\"VIEW\"");
+                state.log->event("native_ui_plate",o.str());
+            }
+            if(cluster&&!placement.localSpace){
+                // The plate ahead of the head as the four parts around the cluster, and the cluster at the aimed point.
+                const auto cut=aim::clusterRect(uiSource.width,uiSource.height);
+                const auto at=aim::clusterAt(cut,uiSource.width,uiSource.height,placement.width,placement.distance,xr.headLocation.pose.position,aimedPoint);
+                if(at.width>0){
+                    const auto around=aim::plateAround(cut,uiSource.width,uiSource.height,placement.width);
+                    for(const auto& p:around){auto& part=placement.parts[placement.partCount++];
+                        part={p.rect.x0,p.rect.y0,p.rect.x1-p.rect.x0,p.rect.y1-p.rect.y0,false,Pose{{0,0,0,1},{p.pose.position.x,p.pose.position.y,-placement.distance}},p.width,p.height};}
+                    placement.parts[placement.partCount++]={cut.x0,cut.y0,cut.x1-cut.x0,cut.y1-cut.y0,true,at.pose,at.width,at.height};
+                }
+            }
+            if((placement.partCount!=0)!=state.aimClusterLogged&&state.aimClusterLogs<200){
+                ++state.aimClusterLogs;state.aimClusterLogged=placement.partCount!=0;std::ostringstream o;o<<std::setprecision(7)<<"\"frame\":"<<frame<<",\"on\":"<<(placement.partCount?"true":"false")<<",\"parts\":"<<placement.partCount;
+                if(placement.partCount){const auto& c=placement.parts[placement.partCount-1];
+                    o<<",\"cluster_pixels\":["<<c.x<<','<<c.y<<','<<c.pixelsX<<','<<c.pixelsY<<"],\"cluster_position\":["<<c.pose.position.x<<','<<c.pose.position.y<<','<<c.pose.position.z
+                     <<"],\"cluster_metres\":["<<c.width<<','<<c.height<<"],\"aimed\":["<<aimedPoint.x<<','<<aimedPoint.y<<','<<aimedPoint.z<<"],\"space\":\"LOCAL\"";}
+                state.log->event("native_aim_cluster",o.str());
+            }
+            xr.markUiRendered(frame,placement);
+            std::string fields="\"fixture_capture_tag\":"+std::to_string(fixtureCapture)+",\"frame\":"+std::to_string(frame)+",\"begin_present\":"+std::to_string(state.beginPresent)+
+                ",\"source_present\":"+std::to_string(uiSource.present)+",\"source_version\":"+std::to_string(uiSource.version)+
+                ",\"source_image\":"+handleText(uiSource.image)+",\"xr_image\":"+handleText(xr.uiSwapchain().images[uiIndex].image)+
+                ",\"image_index\":"+std::to_string(uiIndex)+",\"width\":"+std::to_string(uiSource.width)+",\"height\":"+std::to_string(uiSource.height)+
+                ",\"ui_readback_captured\":"+std::string(capture?"true":"false")+",\"gpu_fence_complete\":"+((capture||!async)?"true":"false")+
+                ",\"async_completion\":"+((capture||!async)?"false":"true")+",\"previous_ui_pending\":"+(state.uiTransfer->previousPending?"true":"false")+
+                ",\"format\":\"RGBA8_SRGB\",\"color_policy\":\"unpremultiply_srgb_decode_premultiply\"";
+            if(capture&&uiBurst){
+                const auto native=uiDraw::captureSource(state.device,uiSource);
+                const auto stat=[&](const std::vector<uint8_t>& p){
+                    const unsigned w=uiSource.width,h=uiSource.height;std::array<uint32_t,144> cells{};uint64_t alpha=0,color=0;uint32_t covered=0;
+                    if(p.size()!=size_t(w)*h*4)return std::string("null");
+                    for(unsigned y=0;y<h;y+=4)for(unsigned x=0;x<w;x+=4){const auto* q=p.data()+(size_t(y)*w+x)*4;
+                        if(q[3]>8){++covered;++cells[(y*9/h)*16+(x*16/w)];}alpha+=q[3];color+=q[0]+q[1]+q[2];}
+                    std::string out="{\"covered\":"+std::to_string(covered)+",\"alpha\":"+std::to_string(alpha)+",\"color\":"+std::to_string(color)+",\"cells\":[";
+                    for(size_t i=0;i<cells.size();i++)out+=(i?",":"")+std::to_string(cells[i]);
+                    return out+"]}";};
+                state.log->event("native_ui_burst_stat","\"frame\":"+std::to_string(frame)+",\"source_present\":"+std::to_string(uiSource.present)+",\"source_version\":"+std::to_string(uiSource.version)+
+                    ",\"image_index\":"+std::to_string(uiIndex)+",\"grid\":[16,9],\"stride\":4,\"native\":"+stat(native)+",\"xr\":"+stat(bytes));
+            }else if(capture){
+                const auto prefix=output+"/native-xr/ui-frame-"+std::to_string(frame);
+                if(!captureHalfSize()){   // EVR_CAPTURE_HALF: the eyes only (stereo_transfer.hpp)
+                const auto native=uiDraw::captureSource(state.device,uiSource);
+                for(const auto& pair:std::array<std::pair<std::string,const std::vector<uint8_t>*>,2>{{{"-native.rgba8",&native},{"-xr.rgba8",&bytes}}}){
+                    std::ofstream file(prefix+pair.first,std::ios::binary);file.write(reinterpret_cast<const char*>(pair.second->data()),std::streamsize(pair.second->size()));
+                    if(!file)throw std::runtime_error("native XR UI capture write failed");
+                }}
+                if(const auto& desk=state.uiTransfer->desktopCapture();!desk.empty()&&!captureHalfSize()){
+                    std::ofstream file(prefix+"-desktop.rgba8",std::ios::binary);file.write(reinterpret_cast<const char*>(desk.data()),std::streamsize(desk.size()));
+                    if(!file)throw std::runtime_error("native XR desktop UI capture write failed");
+                }
+                std::ofstream meta(prefix+".json");meta<<'{'<<fields<<"}\n";if(!meta)throw std::runtime_error("native XR UI metadata write failed");
+            }
+            state.log->event("native_ui_gpu_complete",fields);
+        }
+        // The eye left out: its kept picture warped to this frame's pose, into the image acquired for it.
+        for(uint32_t eye=0;eye<2;++eye){
+            if((eyes>>eye&1)||!xr.eyeWarpable(eye)||!state.warp||state.warpFailed)continue;
+            try{
+                // EVR_EYE_WARP_CAPTURE=N: the first N warped pictures as native-xr/warp-<frame>-eye-<eye>.ppm (from the frame
+                // EVR_EYE_WARP_CAPTURE_FROM, when given), for a look at the warp beside the drawn eye of the same frames.
+                static const unsigned captureWanted=[]{const auto f=std::getenv("EVR_EYE_WARP_CAPTURE");return f?unsigned(std::strtoul(f,nullptr,10)):0u;}();
+                static const uint64_t captureFrom=[]{const auto f=std::getenv("EVR_EYE_WARP_CAPTURE_FROM");return f?uint64_t(std::strtoull(f,nullptr,10)):0ull;}();
+                const bool capture=state.warpCaptures<captureWanted&&frame>=captureFrom;
+                TransferImage runtime;runtime.image=xr.targets[eye].images[snapshot.imageIndices[eye]].image;runtime.width=xr.targets[eye].width;runtime.height=xr.targets[eye].height;
+                runtime.format=xr.format;runtime.layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;runtime.usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+                const auto bytes=state.warp->draw(eye,runtime,snapshot.views[eye],frame,state.warpFromOther,capture,!async);
+                xr.markEyeWarped(eye,frame);
+                const auto n=++state.warpFrames;
+                if(capture){++state.warpCaptures;const auto path=output+"/native-xr/warp-"+std::to_string(frame)+"-eye-"+std::to_string(eye)+".ppm";
+                    std::filesystem::create_directories(std::filesystem::path(output)/"native-xr");state.warp->writePpm(path,bytes);}
+                if(n<=3||n%600==0||capture){const auto& k=state.warp->keptView(eye);std::ostringstream o;o<<std::setprecision(6)<<"\"frame\":"<<frame<<",\"eye\":"<<eye<<",\"warped_frames\":"<<n
+                    <<",\"from_self\":"<<(state.warp->lastFromSelf?"true":"false")<<",\"from_other\":"<<(state.warp->lastFromOther?"true":"false")<<",\"other_frame\":"<<state.warp->lastOtherFrame<<",\"draws_from_other\":"<<state.warp->drawsFromOther<<",\"fills\":"<<state.warp->fills
+                    <<",\"kept_frame\":"<<state.warp->keptFrame(eye)<<",\"kept_position\":["<<k.pose.position.x<<','<<k.pose.position.y<<','<<k.pose.position.z<<"],\"position\":["<<snapshot.views[eye].pose.position.x<<','<<snapshot.views[eye].pose.position.y<<','<<snapshot.views[eye].pose.position.z
+                    <<"],\"captured\":"<<(capture?"true":"false");state.log->event("eye_warp",o.str());}
+            }catch(const std::exception& e){state.warpFailed=true;state.log->event("eye_warp_failed","\"stage\":\"draw\",\"frame\":"+std::to_string(frame)+",\"eye\":"+std::to_string(eye)+",\"reason\":"+jsonString(e.what()));}
+        }
+        // The self-check of the third stage: on a frame that drew both eyes, every 120th, eye 1 made from eye 0 against eye 1 as drawn.
+        if(state.warpCheck&&eyes==3&&state.warp&&!state.warpFailed&&++state.warpCheckFrames%state.warpCheckEvery==0&&state.warp->keptThisFrame(0,frame)&&state.warp->keptThisFrame(1,frame)){
+            try{// EVR_EYE_WARP_CHECK_CAPTURE=N: the first N checks from EVR_EYE_WARP_CAPTURE_FROM also write the made and the drawn picture and their difference (x4, holes blue) as native-xr/check-<frame>-{made,drawn,diff}.ppm.
+                static const unsigned checkCaptureWanted=[]{const auto f=std::getenv("EVR_EYE_WARP_CHECK_CAPTURE");return f?unsigned(std::strtoul(f,nullptr,10)):0u;}();
+                static const uint64_t checkCaptureFrom=[]{const auto f=std::getenv("EVR_EYE_WARP_CAPTURE_FROM");return f?uint64_t(std::strtoull(f,nullptr,10)):0ull;}();
+                const bool checkCapture=state.warpCheckCaptures<checkCaptureWanted&&frame>=checkCaptureFrom;std::vector<uint8_t> made,drawn;
+                const auto c=state.warp->check(1,frame,checkCapture?&made:nullptr,checkCapture?&drawn:nullptr);++state.warpChecks;
+                if(checkCapture){++state.warpCheckCaptures;const auto prefix=output+"/native-xr/check-"+std::to_string(frame);std::filesystem::create_directories(std::filesystem::path(output)/"native-xr");
+                    state.warp->writePpm(prefix+"-made.ppm",made);state.warp->writePpm(prefix+"-drawn.ppm",drawn);std::vector<uint8_t> diff(made.size());
+                    for(size_t i=0;i+3<made.size();i+=4){if(made[i+3]==0){diff[i]=0;diff[i+1]=0;diff[i+2]=255;}else for(unsigned ch=0;ch<3;++ch){const int d=std::abs(int(made[i+ch])-int(drawn[i+ch]))*4;diff[i+ch]=uint8_t(d>255?255:d);}diff[i+3]=255;}
+                    state.warp->writePpm(prefix+"-diff.ppm",diff);}
+                std::ostringstream o;o<<std::setprecision(5)<<"\"frame\":"<<frame<<",\"eye_made\":1,\"from_eye\":0,\"mean_abs_diff\":"<<c.meanDifference<<",\"holes\":"<<c.holes<<",\"compared\":"<<c.compared<<",\"checks\":"<<state.warpChecks<<",\"cells\":"<<state.warp->cells;
+                state.log->event("eye_warp_check",o.str());}
+            catch(const std::exception& e){state.warpCheck=false;state.log->event("eye_warp_check_failed","\"frame\":"+std::to_string(frame)+",\"reason\":"+jsonString(e.what()));}
+        }
+        const auto transferComplete=std::chrono::steady_clock::now();
+        for(uint32_t eye=0;eye<2;++eye)if(eyes>>eye&1)xr.markEyeRendered(eye,frame);
+        if(eyes==3)xr.finishFrame();
+        else try{xr.finishFrame();}catch(const std::exception& e){
+            // The runtime did not take a frame with one eye's earlier picture: that frame is dropped (finishFrame
+            // ended it empty), and every later frame draws both eyes. The session goes on.
+            state.alternateRefused=true;
+            state.log->event("alternate_eyes_refused","\"frame\":"+std::to_string(frame)+",\"reason\":"+jsonString(e.what())+",\"both_eyes_from_now\":true");
+            return 0;
+        }
+        if(!captures[0].empty()&&!captures[1].empty()){
+            state.capturedFrame=frame;
+            // Capture-specific names stay below the session log cap, even after the per-frame pose log ends.
+            const auto& h=xr.headLocation.pose;std::ostringstream f;f<<std::setprecision(10)
+                <<"\"frame\":"<<frame<<",\"time\":"<<snapshot.predictedDisplayTime<<",\"head_flags\":"<<xr.headLocation.locationFlags
+                <<",\"position\":["<<h.position.x<<','<<h.position.y<<','<<h.position.z<<"],\"orientation\":["
+                <<h.orientation.x<<','<<h.orientation.y<<','<<h.orientation.z<<','<<h.orientation.w
+                <<"],\"strict_capture\":true,\"regular_async_policy\":"<<(state.asyncCompletion?"true":"false")<<",\"eyes\":[";
+            for(size_t eye=0;eye<2;++eye){const auto& v=snapshot.views[eye];const auto& p=v.pose;const auto& a=v.fov;if(eye)f<<',';
+                f<<"{\"eye\":"<<eye<<",\"position\":["<<p.position.x<<','<<p.position.y<<','<<p.position.z
+                 <<"],\"orientation\":["<<p.orientation.x<<','<<p.orientation.y<<','<<p.orientation.z<<','<<p.orientation.w
+                 <<"],\"fov\":["<<a.angleLeft<<','<<a.angleRight<<','<<a.angleUp<<','<<a.angleDown<<"],\"width\":"<<src[eye].width<<",\"height\":"<<src[eye].height<<'}';}
+            f<<']';state.log->event("native_capture_pose",f.str());
+        }
+        if(fixtureCapture)state.log->event("native_fixture_capture_complete","\"tag\":"+std::to_string(fixtureCapture)+",\"frame\":"+std::to_string(frame)+",\"ui_submitted\":"+(submitUi?"true":"false"));
+        if(burstCapture)state.log->event("native_burst_capture_complete","\"index\":"+std::to_string(burstCapture.index)+
+            ",\"total\":"+std::to_string(burstCapture.total)+",\"frame\":"+std::to_string(frame)+",\"ui_submitted\":"+(submitUi?"true":"false"));
+        const auto finishComplete=std::chrono::steady_clock::now();
+        const auto& transferTiming=state.transfer->cpuTiming();
+        const auto micros=[](auto start,auto end){return std::chrono::duration_cast<std::chrono::microseconds>(end-start).count();};
+        state.log->event("native_completion_cpu_timing","\"frame\":"+std::to_string(frame)+
+            ",\"evidence_us\":"+std::to_string(micros(completionStart,evidenceComplete))+
+            ",\"device_idle_us\":"+std::to_string(micros(evidenceComplete,idleComplete))+
+            ",\"transfer_and_capture_us\":"+std::to_string(micros(idleComplete,transferComplete))+
+            ",\"end_frame_us\":"+std::to_string(micros(transferComplete,finishComplete))+
+            ",\"total_us\":"+std::to_string(micros(completionStart,finishComplete))+
+            ",\"transfer_free_us\":"+std::to_string(transferTiming.freeUs)+
+            ",\"transfer_allocate_us\":"+std::to_string(transferTiming.allocateUs)+
+            ",\"transfer_record_us\":"+std::to_string(transferTiming.recordUs)+
+            ",\"transfer_submit_wait_us\":"+std::to_string(transferTiming.submitWaitUs)+
+            ",\"transfer_map_us\":"+std::to_string(transferTiming.mapUs)+
+            ",\"transfer_write_us\":"+std::to_string(transferTiming.writeUs)+
+            ",\"readback_memory_types\":["+std::to_string(transferTiming.memoryTypes[0])+','+std::to_string(transferTiming.memoryTypes[1])+']'+
+            ",\"readback_memory_flags\":["+std::to_string(transferTiming.memoryFlags[0])+','+std::to_string(transferTiming.memoryFlags[1])+']'+
+            ",\"capture\":"+std::string(captures[0].empty()&&captures[1].empty()?"false":"true")+
+            ",\"async\":"+std::string(async?"true":"false")+",\"previous_pending\":"+(transferTiming.previousPending?"true":"false")+
+            ",\"previous_wait_us\":"+std::to_string(transferTiming.previousWaitUs));
+        ++state.submittedPairs;++state.worldPairs;state.screenWanted=false;
+        state.log->event("native_game_pair_submitted","\"frame\":"+std::to_string(frame)+
+            ",\"time\":"+std::to_string(snapshot.predictedDisplayTime)+",\"pair\":"+std::to_string(state.submittedPairs)+",\"eyes\":"+std::to_string(eyes==3?2:1)+",\"eye_mask\":"+std::to_string(eyes)+",\"gpu_fence_complete\":"+(async?"false":"true")+
+            ",\"async_completion\":"+(async?"true":"false")+",\"queue_ordered_release\":true");
+        return 0;
+    }catch(const std::exception& e){note("native_xr_submit_failed","\"reason\":"+jsonString(e.what()));return 1;}
+}

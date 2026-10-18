@@ -1,0 +1,4 @@
+param([Parameter(Mandatory)][string]$Launch,[Parameter(Mandatory)][string]$Unused)
+$ErrorActionPreference='Stop'
+& 'S:/stable/Python31011/python.exe' vrmod/tools/run_render_resource_probe.py --launch $Launch --world-live-xr $Unused --live-frames 600 --world-shared-updates-once --world-share-vfx-lights --world-early-xr --world-shared-culling-camera --world-vfx-transparent-observe --world-vfx-transparent-render --world-water-feedback --world-culling-history --world-root-camera first-person --world-camera-modes --world-input-observe --world-input-head-walking --world-endurance --world-equipment-observe --world-head-visibility --world-attachments-observe --world-hands-only --world-motion-hands --world-motion-visual --world-vertical-stick
+if($LASTEXITCODE -ne 0){throw 'Vertical stick trial failed; preserve logs and close the game normally.'}

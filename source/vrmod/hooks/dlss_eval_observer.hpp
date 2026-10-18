@@ -1,0 +1,155 @@
+// Read-only DLSS evaluation observation (diagnostic, build 23966345, 2026-10-05).
+// 0xdbe9f0 is the game's inlined NGX_VULKAN_EVALUATE_DLSS_EXT wrapper, called only from the
+// upscaler command executor at 0xe11d51. Arguments: rcx command buffer, rdx NGX feature handle
+// (context+0xe8), r8 NGX parameter object (context+0xe0), r9 NVSDK_NGX_VK_DLSS_Eval_Params (NGX SDK layout: color +0, output +8,
+// depth +0x18, motion vectors +0x20, jitter +0x28/+0x2c, render subrect +0x30/+0x34, reset +0x38,
+// MV scale +0x3c/+0x40). NVSDK_NGX_Resource_VK: view +0, image +8, format +0x24, width +0x28,
+// height +0x2c, type +0x30. Nothing is written; the original call always runs.
+namespace dlssEval {
+using Evaluate=int(__fastcall*)(void*,void*,void*,void*);
+inline Evaluate original=nullptr;inline bool enabled=false,requested=false;
+inline std::atomic<bool> accepting{false};
+inline std::atomic<unsigned> callbacks{0},calls{0},failures{0},logged{0};
+constexpr uintptr_t rva=0xfa97c0,caller=0x10048d4;
+constexpr const char* pattern="48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 40 49 8B F8 49";
+constexpr unsigned logLimit=4000;
+inline bool registerDiagnostics=false;inline VkDevice diagDevice{};inline std::mutex diagMutex;inline std::array<uintptr_t,2> diagOutputs{};inline unsigned diagCount=0;
+// Alternate-eye warping (EVR_EYE_WARP=1 or 2, layer/native_xr.hpp evrNoteEyeDepth): every evaluation of an eye-sized
+// picture tells the layer which depth image the game gave DLSS for it (the output image names the picture). Read only.
+inline const bool depthNotes=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_EYE_WARP",v,sizeof v);return n==1&&(v[0]=='1'||v[0]=='2');}();
+inline std::atomic<unsigned> depthNoted{0},depthNoteFailures{0};
+inline void noteDepth(uintptr_t p){
+    if(!depthNotes||!diagDevice)return;
+    try{
+        const auto out=read<uintptr_t>(p+8),dep=read<uintptr_t>(p+0x18);if(!out||!dep)return;
+        const auto w=read<uint32_t>(out+0x28),h=read<uint32_t>(out+0x2c);
+        if(!((w==eyeWidth(0)&&h==eyeHeight(0))||(w==eyeWidth(1)&&h==eyeHeight(1))))return;
+        using Note=int(*)(VkDevice,VkImage,VkImage,uint32_t,uint32_t,VkFormat);
+        static const Note note=[]{const auto layer=GetModuleHandleW(L"evr_diagnostic.dll");return layer?reinterpret_cast<Note>(GetProcAddress(layer,"evrNoteEyeDepth")):nullptr;}();
+        if(!note){depthNoteFailures.fetch_add(1);return;}
+        const int r=note(diagDevice,reinterpret_cast<VkImage>(read<uintptr_t>(out+8)),reinterpret_cast<VkImage>(read<uintptr_t>(dep+8)),read<uint32_t>(dep+0x28),read<uint32_t>(dep+0x2c),VkFormat(read<uint32_t>(dep+0x24)));
+        const auto n=depthNoted.fetch_add(1)+1;
+        if(n<=2||r)logFile->event("dlss_depth_noted","\"count\":"+std::to_string(n)+",\"result\":"+std::to_string(r)+",\"output\":"+hex(read<uintptr_t>(out+8))+",\"depth\":"+hex(read<uintptr_t>(dep+8))+",\"depth_size\":["+std::to_string(read<uint32_t>(dep+0x28))+","+std::to_string(read<uint32_t>(dep+0x2c))+"],\"depth_format\":"+std::to_string(read<uint32_t>(dep+0x24)));
+    }catch(...){depthNoteFailures.fetch_add(1);}
+}
+struct CallbackScope {CallbackScope(){++callbacks;}~CallbackScope(){--callbacks;}};
+inline std::string resource(uintptr_t r){
+    if(!r)return "null";
+    std::ostringstream o;o<<"{\"image\":"<<hex(read<uintptr_t>(r+8))<<",\"w\":"<<read<uint32_t>(r+0x28)<<",\"h\":"<<read<uint32_t>(r+0x2c)
+        <<",\"format\":"<<read<uint32_t>(r+0x24)<<",\"type\":"<<read<uint32_t>(r+0x30)<<'}';return o.str();
+}
+__declspec(noinline) int __fastcall evaluate(void* command,void* handle,void* parameters,void* eval){
+    const CallbackScope callback;
+    const auto from=reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress;
+    std::string fields;
+    if(accepting&&from==caller&&logged.load()<logLimit){
+        const ObserverLastError preserve;
+        try{
+            const auto p=reinterpret_cast<uintptr_t>(eval),h=reinterpret_cast<uintptr_t>(handle),params=reinterpret_cast<uintptr_t>(parameters);
+            std::ostringstream o;o<<std::setprecision(6)<<"\"call\":"<<(calls.load()+1)<<",\"thread\":"<<GetCurrentThreadId()
+                <<",\"command\":"<<hex(reinterpret_cast<uintptr_t>(command))<<",\"feature\":"<<hex(h)<<",\"feature_id\":"<<(h?read<uint32_t>(h):0)<<",\"params\":"<<hex(params)
+                <<",\"color\":"<<resource(read<uintptr_t>(p))<<",\"output\":"<<resource(read<uintptr_t>(p+8))
+                <<",\"depth\":"<<resource(read<uintptr_t>(p+0x18))<<",\"motion\":"<<resource(read<uintptr_t>(p+0x20))
+                <<",\"jitter\":["<<read<float>(p+0x28)<<','<<read<float>(p+0x2c)<<"],\"subrect\":["<<read<uint32_t>(p+0x30)<<','<<read<uint32_t>(p+0x34)
+                <<"],\"reset\":"<<read<int32_t>(p+0x38)<<",\"mv_scale\":["<<read<float>(p+0x3c)<<','<<read<float>(p+0x40)<<']';
+            fields=o.str();
+        }catch(...){++failures;}
+    }
+    // Register the first two eye-sized DLSS outputs and their color inputs with the layer's
+    // diagnostic readback (slots 0/1 output, 2/3 input), once per image. Read-only.
+    if(accepting&&from==caller&&registerDiagnostics){
+        const ObserverLastError preserve;
+        try{
+            const auto p=reinterpret_cast<uintptr_t>(eval);const auto out=read<uintptr_t>(p+8),color=read<uintptr_t>(p);
+            if(out&&color&&read<uint32_t>(out+0x28)==eyeWidth(0)&&read<uint32_t>(out+0x2c)==eyeHeight(0)){
+                const auto image=read<uintptr_t>(out+8);
+                std::lock_guard<std::mutex> lock(diagMutex);
+                bool known=false;for(auto i:diagOutputs)known|=i==image;
+                if(!known&&diagCount<2){
+                    const unsigned slot=diagCount++;diagOutputs[slot]=image;
+                    const auto layer=GetModuleHandleW(L"evr_diagnostic.dll");
+                    using Track=int(*)(VkDevice,VkImage,uint32_t);
+                    const auto track=layer?reinterpret_cast<Track>(GetProcAddress(layer,"evrTrackDiagnosticImage")):nullptr;
+                    const auto device=diagDevice;
+                    const int a=track&&device?track(device,reinterpret_cast<VkImage>(image),slot):-1;
+                    const int b=track&&device?track(device,reinterpret_cast<VkImage>(read<uintptr_t>(color+8)),slot+2):-1;
+                    logFile->event("dlss_diagnostic_images","\"slot\":"+std::to_string(slot)+",\"output\":"+hex(image)+",\"color\":"+hex(read<uintptr_t>(color+8))+",\"output_result\":"+std::to_string(a)+",\"color_result\":"+std::to_string(b));
+                }
+            }
+        }catch(...){++failures;}
+    }
+    if(from==caller)noteDepth(reinterpret_cast<uintptr_t>(eval));
+    ++calls;
+    const int result=original(command,handle,parameters,eval);
+    if(!fields.empty()){
+        const ObserverLastError preserve;
+        try{++logged;logFile->event("dlss_eval",fields+",\"result\":"+hex(uint32_t(result))+",\"read_only\":true");}catch(...){++failures;}
+    }
+    return result;
+}
+// NGX parameter setter thunks (NVSDK_NGX_Parameter_SetUI / SetI): params->vtable[+0x20] / [+0x18].
+// Observed only for size/quality/subrect names so creation (Width/Height/OutWidth/OutHeight) and
+// per-evaluation values can be attributed to the shared parameter object.
+using SetValue=void(__fastcall*)(void*,const char*,uint32_t);
+inline SetValue originalSetUI=nullptr,originalSetI=nullptr;inline bool setEnabled=false;
+inline std::atomic<unsigned> setLogged{0};
+constexpr uintptr_t setUIRva=0x12d0870,setIRva=0x12d0810;
+constexpr const char* setUIPattern="48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56 48 83 EC 20 48 8B 01 4C 8B F1 41 8B F8 48 8B F2 48 8B 58 20";
+constexpr const char* setIPattern="48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56 48 83 EC 20 48 8B 01 4C 8B F1 41 8B F8 48 8B F2 48 8B 58 18";
+inline bool interesting(const char* name){
+    if(!name)return false;
+    for(const char* key:{"Width","Height","PerfQuality","Feature.Create","Subrect","Output.Subrects","Reset","Preset"})if(std::strstr(name,key))return true;
+    return false;
+}
+inline void logSet(const char* kind,void* params,const char* name,uint32_t value){
+    if(!accepting||setLogged.load()>=3000)return;
+    const ObserverLastError preserve;
+    try{
+        std::string n;for(size_t i=0;i<80&&name[i];++i)n.push_back(name[i]);
+        if(!interesting(n.c_str()))return;
+        ++setLogged;logFile->event("ngx_param_set","\"kind\":\""+std::string(kind)+"\",\"params\":"+hex(reinterpret_cast<uintptr_t>(params))+",\"name\":"+jsonString(n)+
+            ",\"value\":"+std::to_string(value)+",\"caller\":"+hex(reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress)+",\"thread\":"+std::to_string(GetCurrentThreadId()));
+    }catch(...){++failures;}
+}
+__declspec(noinline) void __fastcall setUI(void* params,const char* name,uint32_t value){const CallbackScope callback;logSet("ui",params,name,value);originalSetUI(params,name,value);}
+__declspec(noinline) void __fastcall setI(void* params,const char* name,uint32_t value){const CallbackScope callback;logSet("i",params,name,value);originalSetI(params,name,value);}
+inline void verify(){
+    for(const auto& [r,pat]:{std::pair<uintptr_t,const char*>{setUIRva,setUIPattern},{setIRva,setIPattern}}){
+        const auto bytes=parsePattern(pat);
+        if(scan(reinterpret_cast<const uint8_t*>(baseAddress+r),bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("NGX parameter setter signature changed");
+    }
+    const auto bytes=parsePattern(pattern);const auto site=baseAddress+caller-5;
+    if(scan(reinterpret_cast<const uint8_t*>(baseAddress+rva),bytes.size(),bytes)!=std::vector<size_t>{0}||
+       read<uint8_t>(site)!=0xe8||uintptr_t(int64_t(site+5)+read<int32_t>(site+1))!=baseAddress+rva)
+        throw std::runtime_error("DLSS evaluate signature/caller changed");
+}
+inline void install(){
+    verify();
+    if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+rva),reinterpret_cast<void*>(&evaluate),reinterpret_cast<void**>(&original))!=MH_OK)
+        throw std::runtime_error("DLSS evaluate observer hook creation failed");
+    if(MH_EnableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("DLSS evaluate observer enable failed");
+    enabled=true;
+    if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+setUIRva),reinterpret_cast<void*>(&setUI),reinterpret_cast<void**>(&originalSetUI))!=MH_OK||
+       MH_CreateHook(reinterpret_cast<void*>(baseAddress+setIRva),reinterpret_cast<void*>(&setI),reinterpret_cast<void**>(&originalSetI))!=MH_OK||
+       MH_EnableHook(reinterpret_cast<void*>(baseAddress+setUIRva))!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+setIRva))!=MH_OK)
+        throw std::runtime_error("NGX parameter setter observer hook failed");
+    setEnabled=true;accepting=true;
+    logFile->event("dlss_eval_observer_enabled","\"rva\":\"0xfa97c0\",\"caller\":\"0x10048cf\",\"log_limit\":"+std::to_string(logLimit)+",\"read_only\":true");
+}
+inline void disable(){
+    accepting=false;if(!enabled)return;
+    if(MH_DisableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("DLSS evaluate observer disable failed");
+    enabled=false;
+    if(setEnabled){
+        if(MH_DisableHook(reinterpret_cast<void*>(baseAddress+setUIRva))!=MH_OK||MH_DisableHook(reinterpret_cast<void*>(baseAddress+setIRva))!=MH_OK)
+            throw std::runtime_error("NGX parameter setter observer disable failed");
+        setEnabled=false;
+    }
+    const auto deadline=GetTickCount64()+500;
+    while(callbacks.load()&&GetTickCount64()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    verify();
+    logFile->event("dlss_eval_observer_removed","\"restored\":true,\"callbacks\":"+std::to_string(callbacks.load())+
+        ",\"calls\":"+std::to_string(calls.load())+",\"logged\":"+std::to_string(logged.load())+",\"param_sets_logged\":"+std::to_string(setLogged.load())+",\"failures\":"+std::to_string(failures.load()));
+    if(callbacks.load())throw std::runtime_error("DLSS evaluate callbacks still active");
+}
+}
