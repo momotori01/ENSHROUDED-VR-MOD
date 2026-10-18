@@ -130,16 +130,23 @@ inline void patch(const game::ClientInputBytes& source,game::ClientInputBytes& o
             }
         }
     }
-    // The bow's shot (2026-10-19, controllerUiFixture::BowAim): the sent camera is the shot's for a moment after the release,
-    // whatever the walking camera did - a client's arrows are made by the host's server from this camera.
-    if(vrLocomotion){
+    // The bow's shot (2026-10-19, controllerUiFixture::BowAim): the sent camera looks the shot's way for a moment after the
+    // release - a client's arrows are made by the host's server from this camera (the friend's arrows flew up).
+    // Only on a client (nativeImpactComponents::clientNow): a host's or single player's own arrows are aimed on its server
+    // (bow_tracked_aim_call). And only the camera's orientation: 0.9.0 sent the whole shot camera (its place at the bow,
+    // first-person distance 0) to every player, and after the first shot the bow never went back to aiming - no second
+    // arrow (Mock game-20261019-065035: 3 releases, 1 arrow; -065501 without it: 3 arrows; camera 7 = aiming came back
+    // for each draw only there). EVR_BOW_SENT_CAMERA: 0 off, 1 (default) as above, 2 the whole camera on a client (0.9.0's).
+    static const int bowSentCamera=[]{char v[4]{};return GetEnvironmentVariableA("EVR_BOW_SENT_CAMERA",v,sizeof v)==1&&v[0]>='0'&&v[0]<='2'?v[0]-'0':1;}();
+    if(vrLocomotion&&bowSentCamera&&nativeImpactComponents::clientNow(now)){
         controllerUiFixture::BowAim bow;{std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);bow=controllerUiFixture::bowAim;}
         if(bow.until>now){
-            std::memcpy(output.data()+0x20,bow.camera.data(),24);std::memcpy(output.data()+0x38,bow.camera.data()+24,16);
-            const float firstPersonDistance=0;std::memcpy(output.data()+0x48,&firstPersonDistance,4);
+            if(bowSentCamera==2){std::memcpy(output.data()+0x20,bow.camera.data(),24);const float firstPersonDistance=0;std::memcpy(output.data()+0x48,&firstPersonDistance,4);}
+            std::memcpy(output.data()+0x38,bow.camera.data()+24,16);
             static std::atomic<uint64_t> logged{0};
             if(logged.exchange(bow.serial)!=bow.serial)try{logFile->event("bow_sent_camera","\"tick\":"+std::to_string(tick)+",\"serial\":"+std::to_string(bow.serial)+
-                ",\"camera_bytes\":"+jsonString([&]{static const char* d="0123456789abcdef";std::string s;for(const auto v:bow.camera){s+=d[v>>4];s+=d[v&15];}return s;}())+",\"walking_camera\":\""+game::idleHeadStatusName(result.status)+"\"");}catch(...){}
+                ",\"camera_bytes\":"+jsonString([&]{static const char* d="0123456789abcdef";std::string s;for(const auto v:bow.camera){s+=d[v>>4];s+=d[v&15];}return s;}())+",\"walking_camera\":\""+game::idleHeadStatusName(result.status)+"\""+
+                ",\"orientation_only\":"+(bowSentCamera==2?"false":"true"));}catch(...){}
         }
     }
     // The guard faces where the hand holds it (user 2026-10-14: "decide the guard by the hand's direction, not the

@@ -86,6 +86,10 @@ inline bool actorBound(){std::lock_guard<std::mutex> lock(mutex);for(const auto&
 // World the player's Actor is bound to. The guest's throwing and bow (headset 01:09, the friend: no action bar seen at all,
 // so no throwable in the hand) depend on that path, which a single player never takes otherwise.
 inline const bool forceClientTicks=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FORCE_CLIENT_TICKS",v,sizeof v);return n==1&&v[0]=='1';}();
+// When those client updates last ran (GetTickCount64, inputActor final actor query): this player is a client while it
+// is recent - no World of this process has the player's Actor (or EVR_FORCE_CLIENT_TICKS=1).
+inline std::atomic<uint64_t> clientTickMs{0};
+inline bool clientNow(uint64_t now){const auto at=clientTickMs.load();return at&&now>=at&&now-at<=1000;}
 inline uintptr_t resolveWorld(uint32_t entity,uintptr_t pointer,unsigned bytes) noexcept {
  if(!requested||!entity||!pointer||(bytes!=176&&bytes!=3104))return 0;
  try{

@@ -231,7 +231,7 @@ __declspec(noinline) bool __fastcall advance(void* context,void* query,uint32_t 
             if((!actorWorld||forced)&&clientWorldTicks&&local.world&&GetTickCount64()-firstQuery>5000&&(forced||!nativeImpactComponents::actorBound())){
                 if(clientTicks.fetch_add(1)==0)logFile->event("client_world_ticks","\"world\":"+hex(local.world)+",\"entity\":"+std::to_string(entity)+
                     ",\"reason\":"+(forced?"\"forced (EVR_FORCE_CLIENT_TICKS=1)\"":"\"no World has the player's Actor (a client)\""));
-                clientWorldTicks(local.world,entity);}
+                nativeImpactComponents::clientTickMs.store(GetTickCount64());clientWorldTicks(local.world,entity);}
             actionSequenceObserver::capture(baseActor,entity,local.entity,tick,input,actor,actorWorld,slots);
             localJump::sample(actorWorld,entity);
             const auto position=read<WorldPositionQ32>(input+0x28);const auto q=read<Quat>(input+0x40);normalized(q);

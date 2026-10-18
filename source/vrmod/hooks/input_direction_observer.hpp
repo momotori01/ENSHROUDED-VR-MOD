@@ -3,6 +3,7 @@
 #include "input_pipeline_observer.hpp"
 #include "input_ui_observer.hpp"
 #include "compass_head.hpp"
+#include "native_impact_components.hpp"   // clientNow: the bow's sent camera on a client only
 #include "input_head_idle.hpp"
 #include "glide_launch_bridge.hpp"
 #include "building_cursor_ray.hpp"
