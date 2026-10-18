@@ -52,7 +52,7 @@ struct Run
     std::array<uint32_t, 2> width{}, height{}, fullWidth{}, fullHeight{};
     std::array<XrFovf, 2> fov{};
 };
-Run run(const char *logName)
+Run run(const char *logName, bool turned = false)
 {
     Log log(std::string("fov-crop-validation/") + logName, true);
     OpenXrClient xr(log, &get);
@@ -70,7 +70,11 @@ Run run(const char *logName)
         xr.finishFrame();
         for (int eye = 0; eye < 2; ++eye)
         {
-            require(std::memcmp(&submitted[eye].pose,&located[eye].pose,sizeof(XrPosef))==0,"submitted eye pose and IPD remain exactly the runtime pose");
+            if(!turned)require(std::memcmp(&submitted[eye].pose,&located[eye].pose,sizeof(XrPosef))==0,"submitted eye pose and IPD remain exactly the runtime pose");
+            else{   // turned toward the middle of the runtime fov (cantedEnvelope): same position, the turn added
+                const auto want=normalized(multiply(located[eye].pose.orientation,cantedEnvelope(located[eye].fov).turn));const auto& q=submitted[eye].pose.orientation;
+                require(std::memcmp(&submitted[eye].pose.position,&located[eye].pose.position,sizeof(XrVector3f))==0&&
+                        std::abs(q.x-want.x)<1e-6f&&std::abs(q.y-want.y)<1e-6f&&std::abs(q.z-want.z)<1e-6f&&std::abs(q.w-want.w)<1e-6f,"turned eye keeps its position (IPD) and adds the turn");}
             require(std::memcmp(&submitted[eye].fov, &f.views[eye].fov, sizeof(XrFovf)) == 0, "submitted fov is the fov the eye was rendered with");
             require(submitted[eye].subImage.imageRect.extent.width == int32_t(xr.targets[eye].width) &&
                         submitted[eye].subImage.imageRect.extent.height == int32_t(xr.targets[eye].height) &&
@@ -121,14 +125,31 @@ int main(int argc,char** argv)
             const auto runtimeFov = mockFov(eye);
             require(full.width[eye] == full.fullWidth[eye] && std::memcmp(&full.fov[eye], &runtimeFov, sizeof(XrFovf)) == 0, "full mask leaves the runtime fov");
         }
-        _putenv_s("EVR_SYMMETRIC_FOV","1");
+        _putenv_s("EVR_SYMMETRIC_FOV","1");_putenv_s("EVR_CANTED_FOV","0");
         const auto symmetric=run("symmetric.jsonl");
-        _putenv_s("EVR_SYMMETRIC_FOV","");
+        _putenv_s("EVR_SYMMETRIC_FOV","");_putenv_s("EVR_CANTED_FOV","");
         for(unsigned eye=0;eye<2;++eye){
             const auto expected=symmetricEnvelope(mockFov(eye));
             require(std::memcmp(&symmetric.fov[eye],&expected,sizeof(XrFovf))==0,"engine and submitted layer receive the symmetric runtime envelope");
             require(symmetric.width[eye]==symmetric.fullWidth[eye]&&symmetric.height[eye]==symmetric.fullHeight[eye],"symmetric compatibility retains allocated eye extent");
         }
+        // Turned toward the middle (2026-10-19, the default with EVR_SYMMETRIC_FOV): with a lens mask touching the fov's
+        // sides (an ellipse at 1.0) and without one (the runtime rectangle's corners).
+        for(const char* mask:{"1",""}){
+            _putenv_s("EVR_SYMMETRIC_FOV","1");_putenv_s("EVR_MOCK_VISIBILITY_MASK",*mask?mask:"0");
+            const auto turned=run(*mask?"canted-mask.jsonl":"canted-corners.jsonl",true);
+            _putenv_s("EVR_SYMMETRIC_FOV","");
+            for(unsigned eye=0;eye<2;++eye){
+                const auto& f=turned.fov[eye];
+                require(f.angleLeft==-f.angleRight&&f.angleDown==-f.angleUp,"turned render frustum is centred");
+                require(turned.width[eye]<=turned.fullWidth[eye]&&turned.height[eye]<=turned.fullHeight[eye],"turned extent never grows");
+            }
+            require(turned.width[0]==turned.width[1]&&turned.height[0]==turned.height[1],"both eyes keep one extent");
+            const double saving=1.0-double(turned.width[0])*turned.height[0]/(double(turned.fullWidth[0])*turned.fullHeight[0]);
+            std::cout<<"turned pixel saving "<<(*mask?"(mask) ":"(corners) ")<<saving<<'\n';
+            if(recordedFov)require(*mask?saving>.2:saving>.1,*mask?"the user's headset with a lens mask saves over 20 %":"the user's headset without a mask saves over 10 %");
+        }
+        _putenv_s("EVR_MOCK_VISIBILITY_MASK","0.85");
         std::cout << checks << " checks passed\n";
         return 0;
     }

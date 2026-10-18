@@ -49,6 +49,7 @@ inline std::atomic<unsigned> attempted{0},applied{0};
 inline void observeState(uint32_t entity,uint32_t flags,uintptr_t actor,uintptr_t gravity,bool finalActor=false){
     if(!requested)return;
     State value;value.entity=entity;value.flags=flags;value.milliseconds=GetTickCount64();value.finalActor=finalActor;
+    menuPointer::playerFlags.store(flags);menuPointer::playerFlagsMs.store(value.milliseconds);   // the death screen (menuPointer::uiCover)
     if(walkingRequested){
         // Publish no stale positive Actor/Gravity proof after a failed read.
         {std::lock_guard<std::mutex> lock(mutex);latest={};}

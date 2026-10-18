@@ -13,6 +13,7 @@ Fight by swinging your sword, draw and loose your bow, and cast your fishing rod
 - Changing weapons with holsters on your body
 - Sneaking with room scale: crouch for real
 - A UI that fades out by itself 5 seconds after the last change
+- Draws only what your lenses show: at every start the mod reads your headset's field of view and the area its lenses show, and fits each eye's picture to it - about 15-25 % fewer pixels at the same sharpness, from the very first start
 - And much more.
 
 ## Download
@@ -119,6 +120,7 @@ For details, see EnshroudedVR\README.txt in the package.
 
 ## Known issues
 - Now and then some objects do not line up between the eyes (wrong parallax).
+- While falling or gliding high above the ground, distant buildings and ruins seen from above can turn see-through for a moment (being looked into).
 
 ---
 

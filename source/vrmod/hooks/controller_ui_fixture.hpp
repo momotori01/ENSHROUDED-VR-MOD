@@ -703,7 +703,11 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // Native ranged aim (bow, staff) keeps the gameplay screen but switches the auxiliary HUD to 3
                 // (surveys game081611, game233325). That is still gameplay: without this the aim was
                 // mapped as a menu and a held attack button dropped out every few frames.
-                const auto screenKind=valid&&screen==1&&auxiliary==3&&!nativeBlocked?evr::motion::LiveScreen::Gameplay:evr::motion::liveScreen(valid,normalHud,auxiliary);
+                // The death screen keeps the HUD screen 1 but raises the player's UiCoverRequest: it is a menu
+                // (menuPointer::uiCover; user 2026-10-19 "when I die I cannot respawn").
+                const bool uiCover=valid&&screen==1&&menuPointer::uiCover(now);
+                const auto screenKind=uiCover?evr::motion::LiveScreen::Ui:valid&&screen==1&&auxiliary==3&&!nativeBlocked?evr::motion::LiveScreen::Gameplay:evr::motion::liveScreen(valid,normalHud,auxiliary);
+                {static bool was=false;if(uiCover!=was){was=uiCover;logFile->event("live_ui_cover","\"on\":"+std::to_string(int(uiCover))+",\"flags\":"+std::to_string(menuPointer::playerFlags.load())+",\"milliseconds\":"+std::to_string(now));}}
                 const bool fresh=received&&now>=received&&now-received<=200;
                 liveScreenGameplay=screenKind==evr::motion::LiveScreen::Gameplay;liveScreenAt=now;
                 // The stick mapper checks age/identity itself and resets on stale or unavailable input.

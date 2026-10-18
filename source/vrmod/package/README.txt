@@ -33,6 +33,13 @@ VR ON / OFF
   does not suit you.
 - While VR is on, the mod sets the game's anti-aliasing to DLSS. Your own setting comes
   back the next time the game is started with VR off.
+- Only what your lenses show is drawn: at every start the mod reads your headset's field
+  of view and the area its lenses show, turns each eye's camera toward the middle of it
+  and draws a picture that just covers it - about 15 to 25 % fewer pixels at the same
+  sharpness. Nothing to set. To turn it off (for a test), add these two lines to
+  EnshroudedVR\EnshroudedVR.ini:
+    [Environment]
+    EVR_CANTED_FOV=0
 
 UPDATE
 - "Enshrouded VR setting.exe" shows the installed version and the newest release.
@@ -103,6 +110,12 @@ VR の入・切
   あります。試験中の機能です。合わなければ「Both eyes every frame」に戻してください。
 - VR が「入」の間、MOD はゲームのアンチエイリアスを DLSS にします。元の設定は、次に VR
   「切」でゲームを起動した時に戻ります。
+- レンズに映る所だけを描きます。起動のたびにヘッドセットの視野とレンズの見える範囲を
+  読み、目のカメラをその中心の方へ向けて、ちょうど覆う大きさの絵を描きます（同じ細かさで
+  画素が約 15〜25% 減ります）。設定は要りません。試しに切る時は、
+  EnshroudedVR\EnshroudedVR.ini に次の 2 行を足します：
+    [Environment]
+    EVR_CANTED_FOV=0
 
 アップデート
 - 「Enshrouded VR setting.exe」に、入っている版と最新版が出ます。「Update now」を押すと、

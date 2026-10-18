@@ -1,5 +1,6 @@
 ﻿param(
     [ValidateRange(1,240)][int]$Minutes=15,
+    [ValidateRange(20,180)][int]$StartAfterSeconds=90, # the live probe starts this long after the game (2026-10-19, user: "shorten the wait before the Mock moves"); the probe waits for the camera itself since 10-16
     [string]$Pose='./vrmod/test_env/world-static-pose-1280x1440.csv',
     [ValidatePattern('^([0-9a-f]{8})?$')][string]$ExpectedWorld='', # verify native selection before any play input
     [switch]$MockNavigate,                     # short external commands, Mock only
@@ -347,7 +348,7 @@ try{
         & $pw -NoProfile -File ./vrmod/build.ps1 -SkipTests *>&1 | Out-File "$($g.FullName)/play-session-build.log" -Encoding utf8
         if($LASTEXITCODE -ne 0){throw 'fresh DLL build failed (see play-session-build.log)'}
         }
-        $wait=90-((Get-Date)-$p.StartTime).TotalSeconds;if($wait -gt 0){Start-Sleep -Seconds ([int]$wait)}
+        $wait=$StartAfterSeconds-((Get-Date)-$p.StartTime).TotalSeconds;if($wait -gt 0){Start-Sleep -Seconds ([int]$wait)}
         if($Interactive -and !$Menu){
             # 2026-10-06: spawn points are fixed to bases, so the user walks/travels in the visible window first.
             "READY_FOR_USER $(Get-Date -Format HH:mm:ss): waiting for $($g.FullName)\start.request"

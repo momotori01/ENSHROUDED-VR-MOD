@@ -71,6 +71,14 @@ class OpenXrClient : private OpenXrDispatch
     Log &log;
     bool ownsXrInstance = true;
     bool symmetricFov = false; // explicit per-client compatibility mode; default unchanged
+    // With symmetricFov: the symmetric frustum turned toward the middle of the runtime's (symmetric_fov.hpp
+    // cantedEnvelope, 2026-10-19), the eye extent shrunk to keep the pixels per degree. EVR_CANTED_FOV=0: the plain
+    // envelope at the full extent, as before.
+    bool cantedFov = true;
+    // masked: the turned frustums of the first frame hold the lens' visible area (cantedEnvelope with the mask) and are
+    // used while the runtime fov stays that of the first frame; a changed mask or fov goes back to the corners' frustum.
+    struct Cant {bool decided = false, masked = false; std::array<uint32_t, 2> fullWidth{}, fullHeight{};
+        std::array<XrFovf, 2> runtime{}; std::array<CantedFov, 2> turned{};} cant;
     bool running = false, exit = false, loss = false;
     XrSessionState state = XR_SESSION_STATE_UNKNOWN;
     XrEnvironmentBlendMode blend = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
@@ -139,11 +147,123 @@ class OpenXrClient : private OpenXrDispatch
         }
         return false;
     }
+    // The eye extent for the turned symmetric frustum (cantedEnvelope), decided once on the first rendered frame as the
+    // crop below: the pixels per tangent unit of the plain envelope at the full extent, for the smaller turned frustum.
+    // One extent for both eyes (the larger of the two), as the layer's eye passes expect (the GI and fog copies find
+    // the other eye by its extent, the eye warp needs both alike); the swapchain images keep their full size.
+    void decideCant(const std::array<XrView, 2> &views)
+    {
+        cant.decided = true;
+        std::ostringstream detail;
+        detail << std::setprecision(6);
+        uint32_t width = 0, height = 0;
+        try
+        {
+            // the lens' visible area of both eyes, when the runtime gives a plausible one
+            std::array<std::vector<XrVector2f>, 2> visible;
+            bool masked = xrGetVisibilityMaskKHR && fovCropRequested();
+            const char *kind = "none";
+            for (uint32_t eye = 0; eye < 2 && masked; ++eye)
+                masked = visiblePoints(eye, fovcrop::fromFov(views[eye].fov), visible[eye], kind);
+            const float margin = fovCropMarginDegrees() * pi / 180.f;
+            detail << "\"mask\":\"" << (masked ? kind : "none") << "\",\"margin_deg\":" << fovCropMarginDegrees() << ",\"eyes\":[";
+            for (uint32_t eye = 0; eye < 2; ++eye)
+            {
+                const auto plain = symmetricEnvelope(views[eye].fov);
+                const auto turned = cantedEnvelope(views[eye].fov, masked ? &visible[eye] : nullptr, margin);
+                cant.runtime[eye] = views[eye].fov; cant.turned[eye] = turned;
+                const double sx = std::tan(plain.angleRight), sy = std::tan(plain.angleUp);
+                const double cx = std::tan(turned.fov.angleRight), cy = std::tan(turned.fov.angleUp);
+                width = std::max(width, uint32_t(std::ceil(targets[eye].width * cx / sx)));
+                height = std::max(height, uint32_t(std::ceil(targets[eye].height * cy / sy)));
+                detail << (eye ? "," : "") << "{\"eye\":" << eye << ",\"runtime_fov\":[" << views[eye].fov.angleLeft << ','
+                       << views[eye].fov.angleRight << ',' << views[eye].fov.angleUp << ',' << views[eye].fov.angleDown
+                       << "],\"turned_fov\":[" << turned.fov.angleRight << ',' << turned.fov.angleUp << "],\"plain_fov\":["
+                       << plain.angleRight << ',' << plain.angleUp << "],\"turn\":[" << turned.turn.x << ',' << turned.turn.y << ','
+                       << turned.turn.z << ',' << turned.turn.w << "]}";
+            }
+            cant.masked = masked;
+        }
+        catch (const std::exception &e)
+        {
+            cantedFov = false;
+            log.event("canted_fov", "\"applied\":false,\"reason\":" + jsonString(e.what()));
+            return;
+        }
+        width += width & 1; height += height & 1;
+        detail << "],\"full\":[" << targets[0].width << ',' << targets[0].height << "]";
+        if (targets[0].width != targets[1].width || targets[0].height != targets[1].height ||
+            width > targets[0].width || height > targets[0].height || width < 64 || height < 64)
+        {
+            detail << ",\"extent_kept\":true";   // the turn still applies: the pixels per degree only rise
+            log.event("canted_fov", detail.str() + ",\"applied\":true");
+            return;
+        }
+        for (uint32_t eye = 0; eye < 2; ++eye)
+        {
+            cant.fullWidth[eye] = targets[eye].width; cant.fullHeight[eye] = targets[eye].height;
+            targets[eye].width = width; targets[eye].height = height;
+        }
+        detail << ",\"extent\":[" << width << ',' << height << "],\"pixel_saving\":"
+               << 1.0 - double(width) * height / (double(cant.fullWidth[0]) * cant.fullHeight[0]);
+        log.event("canted_fov", detail.str() + ",\"applied\":true");
+    }
+    // The lens' visible area as points (tangents on z = -1 of the runtime eye) for cantedEnvelope: the vertices of a
+    // visible mesh or line loop, or for a hidden mesh the corners of the visible cells of a grid. Only a plausible area
+    // (fovcrop::plausible: inside the fov, most of each axis, around the centre); false leaves the corners' frustum.
+    bool visiblePoints(uint32_t eye, const fovcrop::TanRect &fov, std::vector<XrVector2f> &out, const char *&kind)
+    {
+        out.clear();
+        fovcrop::TanRect bounds{};
+        if (!fov.valid() || !visibleBounds(eye, fov, bounds, kind) || !fovcrop::plausible(fov, bounds)) return false;
+        for (auto type : {XR_VISIBILITY_MASK_TYPE_VISIBLE_TRIANGLE_MESH_KHR, XR_VISIBILITY_MASK_TYPE_LINE_LOOP_KHR,
+                          XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR})
+        {
+            XrVisibilityMaskKHR mask{XR_TYPE_VISIBILITY_MASK_KHR};
+            if (XR_FAILED(xrGetVisibilityMaskKHR(session, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, eye, type, &mask)) ||
+                !mask.vertexCountOutput || !mask.indexCountOutput || mask.vertexCountOutput > 65536 || mask.indexCountOutput > 196608)
+                continue;
+            std::vector<XrVector2f> vertices(mask.vertexCountOutput);
+            std::vector<uint32_t> indices(mask.indexCountOutput);
+            mask.vertexCapacityInput = uint32_t(vertices.size()); mask.vertices = vertices.data();
+            mask.indexCapacityInput = uint32_t(indices.size()); mask.indices = indices.data();
+            if (XR_FAILED(xrGetVisibilityMaskKHR(session, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, eye, type, &mask)))
+                continue;
+            vertices.resize(std::min<size_t>(vertices.size(), mask.vertexCountOutput));
+            indices.resize(std::min<size_t>(indices.size(), mask.indexCountOutput));
+            const auto clampIn = [&](XrVector2f p) { return XrVector2f{std::clamp(p.x, fov.left, fov.right), std::clamp(p.y, fov.down, fov.up)}; };
+            if (type == XR_VISIBILITY_MASK_TYPE_HIDDEN_TRIANGLE_MESH_KHR)
+            {
+                if (indices.size() % 3) continue;
+                bool bad = false; for (uint32_t i : indices) bad |= i >= vertices.size(); if (bad) continue;
+                constexpr int grid = 96;
+                const float sx = fov.width() / grid, sy = fov.height() / grid;
+                for (int j = 0; j < grid; ++j)
+                    for (int i = 0; i < grid; ++i)
+                    {
+                        const float x = fov.left + (i + .5f) * sx, y = fov.down + (j + .5f) * sy;
+                        bool hidden = false;
+                        for (size_t t = 0; t < indices.size() && !hidden; t += 3)
+                            hidden = fovcrop::insideTriangle(x, y, vertices[indices[t]], vertices[indices[t + 1]], vertices[indices[t + 2]]);
+                        if (!hidden)
+                            for (float dx : {-.5f, .5f}) for (float dy : {-.5f, .5f}) out.push_back(clampIn({x + dx * sx, y + dy * sy}));
+                    }
+            }
+            else
+            {
+                bool bad = false; for (uint32_t i : indices) bad |= i >= vertices.size(); if (bad) continue;
+                for (uint32_t i : indices) out.push_back(clampIn(vertices[i]));
+            }
+            if (out.size() >= 3) return true;
+            out.clear();
+        }
+        return false;
+    }
     void decideFovCrop(const std::array<XrView, 2> &views)
     {
         crop.decided = true;
         const auto skip = [&](const char *reason) { log.event("fov_crop", std::string("\"applied\":false,\"reason\":") + jsonString(reason)); };
-        if (symmetricFov) return skip("symmetric_projection_keeps_full_runtime_fov");
+        if (symmetricFov) { if (cantedFov) decideCant(views); return skip("symmetric_projection_keeps_full_runtime_fov"); }
         if (!fovCropRequested()) return skip("disabled_by_EVR_FOV_CROP");
         if (!xrGetVisibilityMaskKHR) return skip("runtime_without_visibility_mask");
         const float margin = fovCropMarginDegrees();
@@ -187,6 +307,8 @@ class OpenXrClient : private OpenXrDispatch
     // pixel density drops but nothing visible is cut). The eye extent cannot grow during a session.
     void visibilityMaskChanged(uint32_t eye)
     {
+        // the turned frustums held the first mask: from now on they hold the runtime rectangle (safe, a little wider)
+        if (cant.masked) { cant.masked = false; log.event("canted_fov_mask_changed", "\"eye\":" + std::to_string(eye) + ",\"corners_from_now\":true"); }
         if (!crop.active || eye >= 2) return;
         fovcrop::TanRect visible{};
         const char *kind = "none";
@@ -254,6 +376,7 @@ class OpenXrClient : private OpenXrDispatch
     {
         const auto symmetricFlag=std::getenv("EVR_SYMMETRIC_FOV");
         symmetricFov=symmetricFlag&&!std::strcmp(symmetricFlag,"1");
+        {const auto cantFlag=std::getenv("EVR_CANTED_FOV");cantedFov=!(cantFlag&&!std::strcmp(cantFlag,"0"));}
         if (instance || vk.instance)
             throw std::runtime_error("OpenXrClient init is single-use; create a new client for recreation");
         if (borrowedXr && (!borrowed || !borrowedXr->instance || !borrowedXr->vulkanEnable1Enabled))
@@ -817,7 +940,15 @@ class OpenXrClient : private OpenXrDispatch
                 for (uint32_t eye = 0; eye < 2; ++eye) views[eye].fov = fovcrop::apply(views[eye].fov, crop.rect[eye]);
             if (symmetricFov) for(uint32_t eye=0;eye<2;++eye) {
                 const auto runtime=views[eye].fov;
-                const auto render=symmetricEnvelope(runtime);
+                XrFovf render{};
+                if(cantedFov){   // turned toward the middle of the runtime's field (cantedEnvelope); pose and fov together
+                    const auto& first=cant.runtime[eye];
+                    const bool same=cant.masked&&std::abs(runtime.angleLeft-first.angleLeft)<1e-5f&&std::abs(runtime.angleRight-first.angleRight)<1e-5f&&
+                        std::abs(runtime.angleUp-first.angleUp)<1e-5f&&std::abs(runtime.angleDown-first.angleDown)<1e-5f;
+                    const auto turned=same?cant.turned[eye]:cantedEnvelope(runtime);
+                    views[eye].pose.orientation=normalized(multiply(views[eye].pose.orientation,turned.turn));
+                    render=turned.fov;
+                }else render=symmetricEnvelope(runtime);
                 views[eye].fov=render; // same snapshot reaches game cameras and xrEndFrame
                 if(frames<=3||frames%300==0){
                     const auto a=fovcrop::fromFov(runtime),b=fovcrop::fromFov(render);
@@ -825,7 +956,7 @@ class OpenXrClient : private OpenXrDispatch
                      <<",\"runtime_fov\":["<<runtime.angleLeft<<','<<runtime.angleRight<<','<<runtime.angleUp<<','<<runtime.angleDown<<']'
                      <<",\"render_fov\":["<<render.angleLeft<<','<<render.angleRight<<','<<render.angleUp<<','<<render.angleDown<<']'
                      <<",\"pixel_density_ratio\":["<<a.width()/b.width()<<','<<a.height()/b.height()
-                     <<"],\"pose_unchanged\":true,\"extent_unchanged\":true";
+                     <<"],\"pose_unchanged\":"<<(cantedFov?"false":"true")<<",\"extent\":["<<targets[eye].width<<','<<targets[eye].height<<']';
                     log.event("symmetric_render_fov",f.str());
                 }
             }

@@ -76,6 +76,29 @@ int main()
             sameRays&=u>=-1e-6f&&u<=1.000001f&&v>=-1e-6f&&v<=1.000001f&&std::abs(b.left+b.width()*u-x)<1e-6f&&std::abs(b.down+b.height()*v-y)<1e-6f;
         }
         check(sameRays,"display remapping preserves all sampled physical rays");
+        // turned toward the middle (2026-10-19): centred, every runtime ray inside, no larger than the plain envelope
+        const auto canted=evr::cantedEnvelope(source);const auto c=fromFov(canted.fov);
+        check(canted.fov.angleLeft==-canted.fov.angleRight&&canted.fov.angleDown==-canted.fov.angleUp,"turned render frustum is centered on both axes");
+        bool inside=true;const auto back=evr::inverse(canted.turn);
+        for(unsigned i=0;i<=20;++i)for(unsigned j=0;j<=20;++j){
+            const auto d=evr::rotate(back,XrVector3f{a.left+a.width()*i/20,a.down+a.height()*j/20,-1.f});
+            inside&=d.z<0&&d.x/-d.z>=c.left-1e-5f&&d.x/-d.z<=c.right+1e-5f&&d.y/-d.z>=c.down-1e-5f&&d.y/-d.z<=c.up+1e-5f;
+        }
+        check(inside,"turned frustum contains every sampled runtime ray");
+        const float ratio=c.width()*c.height()/(b.width()*b.height());
+        const bool centred=source.angleLeft==-source.angleRight&&source.angleUp==-source.angleDown;
+        check(centred?ratio>.999f&&ratio<1.001f&&std::abs(canted.turn.w-1.f)<1e-6f:ratio<.86f,
+              centred?"a centred runtime fov is not turned":"turned frustum around the corners saves over 14 % of the envelope's area");
+        // with the lens' visible area (an ellipse touching the fov's sides) and one degree of margin
+        const auto lens=ellipse(a,1.f,96,false);
+        const auto masked=evr::cantedEnvelope(source,&lens,3.14159265f/180.f);const auto m=fromFov(masked.fov);
+        bool lensInside=true;const auto mback=evr::inverse(masked.turn);
+        for(const auto& p:lens){const auto d=evr::rotate(mback,XrVector3f{p.x,p.y,-1.f});
+            lensInside&=d.z<0&&std::abs(d.x/-d.z)<=m.right+1e-5f&&std::abs(d.y/-d.z)<=m.up+1e-5f;}
+        check(lensInside&&m.width()<=c.width()+1e-6f&&m.height()<=c.height()+1e-6f,"masked turned frustum holds the lens and never exceeds the corners' frustum");
+        const float maskedRatio=m.width()*m.height()/(b.width()*b.height());
+        std::cout<<"turned area / envelope: corners "<<ratio<<", lens "<<maskedRatio<<'\n';
+        if(!centred)check(maskedRatio<.76f,"turned frustum around the lens saves over 24 % of the envelope's area");
     }
     try{evr::symmetricEnvelope({.9f,.8f,.8f,-.8f});check(false,"invalid runtime FOV rejected");}
     catch(const std::invalid_argument&){check(true,"invalid runtime FOV rejected");}

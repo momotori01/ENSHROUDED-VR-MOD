@@ -76,6 +76,14 @@ inline unsigned leadFrames=6;
 inline std::atomic<uint64_t> moves{0},clicks{0};
 // From the frontend's scope (input_ui_observer.hpp): the screen that is open and the device the game listens to.
 inline std::atomic<uint8_t> screen{255},deviceMode{255};
+// A UI that covers the HUD screen (user 2026-10-19 03:00: "when I die I cannot respawn"): the death screen keeps the HUD
+// screen 1, but the player's PlayerFlags gain UiCoverRequest (bit 2; InFullScreenUi is bit 1) - 517 from just before the
+// player stopped moving to the end of that session (log 20261019-024824), and never in the earlier sessions' 6000 samples
+// of play. While it stands, the pointer and the controller treat the screen as a menu: the ray clicks, the sticks choose,
+// A confirms and B goes back (before, the death screen was played as the HUD: no pointer, the stick turned the player,
+// and nothing reached the game's buttons). Published by input_head_idle.hpp observeState (the player's state each tick).
+inline std::atomic<uint32_t> playerFlags{0};inline std::atomic<uint64_t> playerFlagsMs{0};
+inline bool uiCover(uint64_t now){const auto at=playerFlagsMs.load();return at&&now>=at&&now-at<=500&&(playerFlags.load()&((1u<<1)|(1u<<2)))!=0;}
 // For the pad that is sent (controller_ui_fixture.hpp): the right trigger and B are the mouse's buttons just now.
 inline std::atomic<bool> trigger{false},secondary{false};
 using CursorFn=int(*)(float,float,int);
@@ -127,7 +135,7 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
         // the tabs; the other screens with a cursor (chests, craftsmen) get the pointer. The game's HudScreenType moved
         // in 1.0 (LogicEditor came in at 20): the building mode 28 -> 29, the summoner 33 -> 37, and 33 is now the
         // screwdriver's building mode (ScrewdriverMultiToolBuildingMode), which aims at the world as the building mode.
-        const bool menu=open!=1&&open!=29&&open!=33&&open!=37&&open!=255;
+        const bool menu=(open!=1&&open!=29&&open!=33&&open!=37&&open!=255)||(open==1&&uiCover(now));   // + the death screen (uiCover)
         const auto& hand=f.hands[1];
         const bool headTracked=(head.flags&15)==15&&evr::finite(head.pose.position);
         const bool tracked=f.focused&&hand.aimActive&&(hand.aimFlags&15)==15&&headTracked;
