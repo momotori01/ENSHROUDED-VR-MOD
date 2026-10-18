@@ -49,6 +49,11 @@ float farthestSeen(vec2 uv, vec2 footprint, int n) {
     return seen;
 }
 
+vec3 unpackE5(uint w) {
+    float scale = exp2(float(int(w >> 27u)) - 15.0 - 9.0);
+    return vec3(float(w & 511u), float((w >> 9u) & 511u), float((w >> 18u) & 511u)) * scale;
+}
+
 uint packE5(vec3 rgb) {
     const float maxValue = 65408.0;   // (2^9 - 1) / 2^9 * 2^(31 - 15)
     rgb = clamp(rgb, vec3(0.0), vec3(maxValue));
@@ -83,6 +88,17 @@ void main() {
     vec3 ndc = clip.xyz / clip.w;
     vec2 uv = vec2(ndc.x + 1.0, 1.0 - ndc.y) * 0.5;
     if (ndc.z <= 0.0) return;
+    // Beside the first eye's view (2026-10-19, the eyes turned toward the middle of their fields, openxr_client.hpp
+    // decideCant; headset reports 1 and 2 of 04:26 / 04:29, the user: "a light flickers in the right eye - at its edge,
+    // outside the left eye's view"): turned outward, the second eye sees about 12 degrees (some 13 cells) past the first
+    // eye's side. Each of those cells took the first eye's nearest edge cell, so that band was the first eye's edge column
+    // drawn out sideways and flashed whenever that column passed something bright. There this eye keeps its own fog,
+    // taking the first eye's more and more over the last fadeCells cells inside its picture (no seam at its edge). Decided
+    // at the cell's own place, before the search below can move it inside.
+    const float fadeCells = 3.0;
+    vec2 inside = min(uv, 1.0 - uv) * vec2(size.xy) - 0.5;   // cells inside the first eye's picture (negative: outside)
+    float take = keepOwn != 0u ? 1.0 : clamp(min(inside.x, inside.y) / fadeCells, 0.0, 1.0);
+    if (take <= 0.0) return;   // wholly outside: this eye's own, as the game made it
     // Behind what the first eye sees there (2026-10-17 night; user: "the feet and hands look see-through"; Mock: a green
     // square and a dark band beside the arm in the second eye only, gone without this pass): the game does not keep the
     // fog cells behind the visible surface up to date (guess), so a cell the first eye cannot see keeps this eye's own.
@@ -91,23 +107,28 @@ void main() {
     // and its centre's one depth sample flipped from cell to cell between leaves and the gaps behind them, so this eye's
     // own fog and the first eye's alternated. Now the farthest surface the first eye sees over the cell's footprint (4 x 4
     // samples) decides: kept as its own only where the first eye sees nothing beyond the cell anywhere in it (an arm).
+    // 2026-10-19 (the eyes turned toward the middle of their fields; headset reports of 04:26 .. 04:39, the user: "a whitish
+    // light in the right eye, mostly on the right of the sword, faintly on its left, always at the right edge"): Mock with the
+    // sword held still (test_env/sword-static-1019-*): white puffs on the walls in the right eye only (game-20261019-045112);
+    // none without this pass (-045431, EVR_FOG_REPROJECT=0), none with the eyes not turned (-044822), faint seams only with
+    // the own fog kept behind and outside (-045732, EVR_FOG_KEEP_OWN=1). The puffs came from the cells the first eye cannot
+    // see: the search below took the first eye's fog up to 16 cells away - beside the pillar, the light of the gate - and
+    // the turned eyes see more of each other's blind parts. Now no search: the share of the cell's footprint over which the
+    // first eye sees beyond the cell (4 x 4 samples of its depth) is how much of the first eye's fog the cell takes; the
+    // rest is this eye's own. A cell hidden from the first eye keeps its own, and its edge blends instead of switching.
+    // EVR_FOG_BEHIND_SEARCH (behindSearch) is no longer read here.
     vec2 footprint = kept.scale.zw / vec2(size.xy);   // the cell's size in the first eye's depth pixels
-    float seen = farthestSeen(uv, footprint, 4);      // reversed: larger is nearer, 0 the sky; the farthest is the smallest
-    float sampleDepth = ndc.z;
-    float limit = ndc.z * 1.05 + 1e-7;
-    if (seen > limit) {
-        if (keepOwn != 0u) return;
-        bool found = false;
-        vec2 cell = 1.0 / vec2(size.xy);
-        for (uint k = 1u; k <= behindSearch && !found; ++k) {
-            for (int s = 0; s < 4 && !found; ++s) {
-                vec2 c = uv + vec2(s == 0 ? 1.0 : s == 1 ? -1.0 : 0.0, s == 2 ? -1.0 : s == 3 ? 1.0 : 0.0) * float(k) * cell;
-                if (any(lessThan(c, vec2(0.0))) || any(greaterThan(c, vec2(1.0)))) continue;
-                if (farthestSeen(c, footprint, 2) <= limit) { uv = c; found = true; }
-            }
-        }
-        if (!found) sampleDepth = seen;   // behind everything the first eye sees near it: its fog up to its farthest surface
+    float limit = ndc.z * 1.05 + 1e-7;               // reversed depth: the first eye sees beyond the cell where its depth <= limit
+    float beyond = 0.0;
+    for (int j = 0; j < 4; ++j) for (int i = 0; i < 4; ++i) {
+        vec2 o = (vec2(i, j) + 0.5) / 4.0 - 0.5;
+        ivec2 q = clamp(ivec2(uv * kept.scale.zw + o * footprint), ivec2(0), ivec2(kept.scale.zw) - 1);
+        if (imageLoad(keptDepth, q).x <= limit) beyond += 1.0;
     }
+    beyond /= 16.0;
+    if (keepOwn != 0u) { if (beyond < 1.0) return; } else take *= beyond;
+    if (take <= 0.0) return;
+    float sampleDepth = ndc.z;
     float otherViewDepth = m3.x / (1.0 - m3.y + sampleDepth * m3.y);
     float z = log2(otherViewDepth * m10.x + m10.y) * m10.z;
     // the first eye's volume covers [0, 1]; half a cell inside its edge, else this eye keeps its own
@@ -115,8 +136,14 @@ void main() {
     vec3 at = vec3(uv, z);
     if (any(lessThan(at, halfCell)) || any(greaterThan(at, 1.0 - halfCell))) {
         if (keepOwn != 0u) return;
-        at = clamp(at, halfCell, 1.0 - halfCell);   // beyond the first eye's view: its nearest cell
+        at = clamp(at, halfCell, 1.0 - halfCell);   // beyond the first eye's depth range (z): its nearest cell
     }
-    imageStore(scatter, p, uvec4(packE5(textureLod(sampler3D(firstScatter, linearClamp), at, 0.0).rgb)));
-    imageStore(through, p, uvec4(packE5(textureLod(sampler3D(firstPass, linearClamp), at, 0.0).rgb)));
+    vec3 firstS = textureLod(sampler3D(firstScatter, linearClamp), at, 0.0).rgb;
+    vec3 firstP = textureLod(sampler3D(firstPass, linearClamp), at, 0.0).rgb;
+    if (take < 1.0) {
+        firstS = mix(unpackE5(imageLoad(scatter, p).x), firstS, take);
+        firstP = mix(unpackE5(imageLoad(through, p).x), firstP, take);
+    }
+    imageStore(scatter, p, uvec4(packE5(firstS)));
+    imageStore(through, p, uvec4(packE5(firstP)));
 }

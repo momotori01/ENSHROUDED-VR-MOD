@@ -1,5 +1,6 @@
 ﻿param(
     [ValidateRange(1,240)][int]$Minutes=15,
+    [switch]$CullingFillOnly,                   # diagnostic (2026-10-19, objects see-through while falling): the eyes keep the game's one visibility history, not one each; the head is not hidden then
     [ValidateRange(20,180)][int]$StartAfterSeconds=90, # the live probe starts this long after the game (2026-10-19, user: "shorten the wait before the Mock moves"); the probe waits for the camera itself since 10-16
     [string]$Pose='./vrmod/test_env/world-static-pose-1280x1440.csv',
     [ValidatePattern('^([0-9a-f]{8})?$')][string]$ExpectedWorld='', # verify native selection before any play input
@@ -192,7 +193,7 @@ $vfxParticles=-not $NoVfxParticles -and -not $NoSharedStages
 # The live probe's arguments: for the session below, and for the package's profile (-WriteProfile).
 function Get-ProbeArguments([string]$launchFolder,[string]$proofFolder){
         $probe=@('--launch',$launchFolder,'--world-live-xr',$proofFolder,'--live-frames',$(if($CaptureWorldFinal){"$CapturePair"}else{'3000'}),'--render-scale',$RenderScale.ToString([Globalization.CultureInfo]::InvariantCulture),'--world-eye-private-transient','--world-shared-updates-once','--world-root-camera','first-person','--world-endurance','--world-session',"$Minutes")
-        if(-not $NoSharedStages){if(-not $NoShareLights){$probe+='--world-share-vfx-lights'};$probe+=@('--world-early-xr','--world-shared-culling-camera','--world-water-feedback','--world-culling-history');if($ShareDecals){$probe+='--world-share-vfx-decals'};if($ShareVfxModels){$probe+='--world-share-vfx-models'}}
+        if(-not $NoSharedStages){if(-not $NoShareLights){$probe+='--world-share-vfx-lights'};$probe+=@('--world-early-xr','--world-shared-culling-camera','--world-water-feedback','--world-culling-history');if($CullingFillOnly){$probe+='--world-culling-fill-only'};if($ShareDecals){$probe+='--world-share-vfx-decals'};if($ShareVfxModels){$probe+='--world-share-vfx-models'}}
         if($vfxParticles){$probe+=@('--world-vfx-transparent-observe','--world-vfx-transparent-render')}
         if($DesktopSkip -ge 0){$probe+=@('--world-desktop-skip',"$DesktopSkip")}
         if($DesktopRender){$probe+='--world-desktop-render'}
@@ -250,7 +251,7 @@ function Get-ProbeArguments([string]$launchFolder,[string]$proofFolder){
         if($FixtureAfter -gt 0){$probe+=@('--world-controller-fixture-after',"$FixtureAfter")}
         if($MenuFixture){$probe+='--world-input-observe';$probe+=$(if($MenuFixture -eq 'Tour'){'--world-controller-menu-tour'}elseif($MenuFixture -eq 'Tabs'){'--world-controller-tabs-fixture'}else{'--world-controller-menu-fixture'})}
         if($StatusTint -ge 0){$probe+=@('--world-status-tint',"$StatusTint")}
-        if($HandsOnly -or $LiveInput){$probe+=@('--world-hands-only','--world-head-visibility','--world-camera-modes','--world-equipment-observe')}
+        if($HandsOnly -or $LiveInput){$probe+=@('--world-hands-only','--world-camera-modes','--world-equipment-observe');if(-not $CullingFillOnly){$probe+='--world-head-visibility'}}
         if($ObserveHeldVfx){$probe+='--world-held-vfx-observe'}
         if($MoveHeldVfx){$probe+='--world-held-vfx-mount'}
         if($LiveInput){$probe+=@('--world-weapon-pitch',$WeaponPitch.ToString([Globalization.CultureInfo]::InvariantCulture),'--world-live-input','--world-motion-visual','--world-motion-hands','--world-attachments-observe','--world-input-observe','--world-input-head-walking')}
