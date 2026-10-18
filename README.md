@@ -1,4 +1,4 @@
-# Enshrouded VR - Motion Controls
+# Enshrouded VR - 6DoF Motion Controls
 
 Fight by swinging your sword, draw and loose your bow, and cast your fishing rod with a swing. Made with VHVR (ValheimVR) as the model.
 
@@ -12,10 +12,39 @@ Fight by swinging your sword, draw and loose your bow, and cast your fishing rod
 - Throwing with your left hand as the guide line
 - Changing weapons with holsters on your body
 - Sneaking with room scale: crouch for real
-- The HUD fades out by itself and comes back when something changes
+- A UI that fades out by itself 5 seconds after the last change
+- And much more.
 
 ## Download
 Download **EnshroudedVR-x.y.z.zip** under **Assets** on the [Releases](https://github.com/momotori01/ENSHROUDED-VR-MOD/releases) page (not the source code archives).
+
+## Bug reports
+1. Hold the left controller at the left side of your head and press the left stick. The start menu opens with the red **"! VR bug report !"** button.
+2. Press the button and close the menu. The mod now records 30 seconds of detailed logs and pictures of both eyes (the last seconds before you pressed it are kept too). Keep playing - show the problem if you can.
+3. A zip appears in the game folder (the folder with enshrouded.exe): **VR_bug_report_<time>.zip** (with the game in Japanese: バグ報告_<time>.zip).
+
+If you would like to help fix bugs, please send that zip with a short description of what happened (on Discord or as a GitHub issue). The logs contain no personal information: names, the PC's name, IP addresses and Steam IDs are replaced in the zip. I fix what I can.
+If the game crashes while it records, the zip is still made. A report that was cut short is finished by **Make zip** in "Enshrouded VR setting.exe".
+
+## Updating
+Press **Update now** in "Enshrouded VR setting.exe" (with the game closed). The mod is updated to the latest version automatically: it downloads the newest release, checks it, and replaces the mod's files. Your settings are kept, and the replaced files are saved in EnshroudedVR\backup.
+
+## Enshrouded VR setting.exe
+The program next to enshrouded.exe holds the settings that cannot be changed in the game. Start the game from Steam as usual; it uses these settings every time. They can be changed only while the game is closed and take effect at the next start.
+
+| Setting | What it does |
+|---|---|
+| Update | Shows the installed and the newest version. **Update now** installs the newest release. |
+| Play mode | **VR**: play with the headset. **Normal**: play on your monitor without VR. Other VR players' movements show in both. |
+| Picture size (VR) | Low 0.7 (faster) / Normal 0.8 / High 1.0 (sharper, slower) |
+| DLSS (VR) | Quality / Balanced / Performance / DLAA (sharpest, slower) |
+| Sharpening (VR) | Off / Soft 0.2 / Strong 0.5 |
+| Frame mode (VR) | Both eyes every frame (normal), or one eye a frame (a test for more FPS) |
+| Problem report | **Make zip**: the mod's logs, its settings and the game's log in one zip next to the program, to send with a description. It also finishes a VR bug report that a crash cut short. |
+| Put settings back | All settings back to how they came. |
+
+It also shows what the mod did at the last start of the game.
+Real crouching for sneaking is switched on or off, and its depth set, in the game itself: the **VR settings** button next to the bug report button in the start menu.
 
 ## Combat
 ### Melee
@@ -70,9 +99,9 @@ Download **EnshroudedVR-x.y.z.zip** under **Assets** on the [Releases](https://g
 
 ### More
 - **Reset the view:** look at both palms in front of your face for 3 seconds (the headset's own reset works too).
-- **"!VR bug report button!"** in the start menu: saves the 30 seconds around the press and pictures of both eyes into a zip. Please use it to report problems.
+- **Bug report:** left controller at the left side of your head + left stick, then the red button (see [Bug reports](#bug-reports)).
 - **VR or desktop:** with the game closed, open "Enshrouded VR setting.exe" and choose "VR" or "Normal". Players with the mod see VR players' movements in both modes; players without the mod can still play with you.
-- **Update:** "Update now" in "Enshrouded VR setting.exe" installs the newest release and keeps your settings.
+- **Update:** "Update now" in "Enshrouded VR setting.exe" (see [Updating](#updating)).
 
 ## Installation
 1. Start the Steam version of Enshrouded normally once, then quit.
