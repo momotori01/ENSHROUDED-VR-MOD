@@ -1,19 +1,22 @@
 # Enshrouded VR - 6DoF Motion Controls
 
-Fight by swinging your sword, draw and loose your bow, and cast your fishing rod with a swing. Made with VHVR (ValheimVR) as the model.
+Fight by swinging your sword, cast spells by swinging your wand, draw and loose your bow, and fish with the rod in your hand. Made with VHVR (ValheimVR) as the model.
 
 ## Features
 - Native stereo rendering
-- Multiplayer: other players' full-body IK is shown
+- Multiplayer: other players' full-body IK is shown - including the fish they just caught
 - Switch between VR mode and desktop mode. VR and desktop players can play together
-- Combat by motion controls
+- Combat by motion controls: melee, wand, bow, throwing
 - Rising slashes, downward slashes, and the movement of skill attacks follow your swing.
   Example: when you attack in the air, swing down for a plunging attack, swing up for a rising slash.
+- Fishing by motion controls: cast with a swing, fight the fish by pulling the rod against it, flick the rod to hook and reel in, feel the fish in the controller, and hold up your catch
+- Enemy health bars and the lock-on arrow above the enemies, not on the HUD
 - Throwing with your left hand as the guide line
 - Changing weapons with holsters on your body
 - Sneaking with room scale: crouch for real
 - A UI that fades out by itself 5 seconds after the last change
 - Draws only what your lenses show: at every start the mod reads your headset's field of view and the area its lenses show, and fits each eye's picture to it - about 15-25 % fewer pixels at the same sharpness, from the very first start
+- An update notice in the game when a new version is out
 - And much more.
 
 ## Download
@@ -28,6 +31,7 @@ If you would like to help fix bugs, please send that zip with a short descriptio
 If the game crashes while it records, the zip is still made. A report that was cut short is finished by **Make zip** in "Enshrouded VR setting.exe".
 
 ## Updating
+When a newer version is out, **"MOD Update"** blinks slowly in the game's main menu (above "Play") and in the start menu next to the VR buttons.
 Press **Update now** in "Enshrouded VR setting.exe" (with the game closed). The mod is updated to the latest version automatically: it downloads the newest release, checks it, and replaces the mod's files. Your settings are kept, and the replaced files are saved in EnshroudedVR\backup.
 
 ## Enshrouded VR setting.exe
@@ -49,7 +53,7 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 
 ## Combat
 ### Melee
-- **Attack:** swing your weapon. The hit lands where your blade really hits - you have to land it yourself.
+- **Attack:** swing your weapon. The hit lands where your blade really hits - you have to land it yourself. The hit area is slightly larger than the blade, and quick wrist flicks count along the path of the blade's tip.
 - **Heavy attack:** swing while holding the right trigger.
 - **In the air:** swing down for a plunging attack, swing up for a rising slash.
 - **Skill attacks:** they move you as far as in vanilla; you still land the hit with your own weapon.
@@ -63,6 +67,14 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
   - press the left grip just as the attack comes (the moment you raise the guard is a parry), or
   - while guarding, flick your left hand quickly (with a two-handed weapon: the left hand alone; both hands swung together is an attack).
   - A flick parry lowers your guard for a moment, so time it to the enemy's blow. The next flick parry is ready after 1 second.
+  - In solo play and as the host, a flick a little before or after the enemy's parry moment (0.2 s) still counts.
+
+### Wand
+- Swing the wand to cast its normal attack. A normal, deliberate swing is enough; the cooldown is the vanilla one.
+- The trigger casts as well.
+
+### Lock-on
+- The game's own lock-on works as usual. The enemy's health bar and the lock-on arrow are shown above the enemy instead of on the HUD - for the locked enemy, the lock-on candidate and enemies that are aware of you. Moving stays headset-based while locked on.
 
 ### Bow
 - Bring your right hand to the string, hold the right trigger and pull back. Let go of the trigger to shoot.
@@ -77,7 +89,13 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 - **Holsters:** left shoulder + left grip = bow, right shoulder + right grip = your current weapon, left hip + left grip = shield. A short vibration tells you it switched.
 - **Quick slots:** hold right B, point your hand at the slot you want and let go.
 - **Tools** (pickaxe, axe, ...): swing them like weapons. You aim with your right hand's direction.
-- **Fishing rod:** swing it and let go of the trigger during the swing to cast. A stronger swing casts farther.
+
+### Fishing
+- **Cast:** hold the trigger, swing the rod and let go of the trigger during the swing. A faster swing casts farther (how long you hold the trigger does not matter).
+- **Reel in:** hold the trigger.
+- **Hook, reel in, land:** instead of the trigger you can **flick the rod upward** (nearly straight up). The flick is ignored while you fight the fish.
+- **Fight:** when the fish pulls to one side, lean the rod tip to the other side (the same as A / D on keyboard). The controller pulses while you are tiring the fish.
+- **The catch:** when the fish is landed, you hold it in your left hand the way the game holds it. Other players with the mod see it in your hand too - show it off.
 
 ## Other controls
 ### Movement
@@ -90,8 +108,9 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 - **Sneak:** crouch in real life. Switch it on or off and set how deep you must crouch in the in-game "VR settings".
 
 ### HUD
-- The HUD fades out after 5 seconds without changes and comes back when your health, stamina and the like change.
+- The HUD fades out after 5 seconds without changes and comes back when your health, stamina and the like change. The held item's name and button hints at the bottom fade with it.
 - The crosshair and gauges appear where your right hand points.
+- Enemy health bars and the lock-on arrow stand above the enemies.
 
 ### Menus
 - The title screen and the menus appear on a panel in front of you. Point at it with the controller and pull the trigger to click.
@@ -119,8 +138,10 @@ For details, see EnshroudedVR\README.txt in the package.
 - An OpenXR runtime (tested with SteamVR)
 
 ## Known issues
-- Now and then some objects do not line up between the eyes (wrong parallax).
-- While falling or gliding high above the ground, distant buildings and ruins seen from above can turn see-through for a single frame in the right eye (much rarer since 0.9.1; being looked into).
+Most of the parallax and visual differences between the eyes are fixed. Three visual issues remain:
+- Water reflections can look different between the left and right eye.
+- Buildings occasionally disappear for a moment while you are falling from a height.
+- The distance at which trees switch their level of detail differs slightly between the left and right eye.
 
 ---
 
