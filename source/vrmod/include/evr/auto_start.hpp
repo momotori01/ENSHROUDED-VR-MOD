@@ -45,6 +45,11 @@ inline bool parseRecord(const std::string& text,RenderRecord& out){
 // the chosen mode. What stood there is recorded. With a record of an earlier start that was not put back yet, a field
 // that still holds what that start wrote keeps the original of that record.
 // giQuality (2026-10-15): dynamicGi for the VR start as well (vr_settings.hpp Values::giQuality); "" or Keep leaves it.
+inline std::string fsr3Preset(const std::string& dlssMode){
+    if(dlssMode=="Dlaa")return "Native";if(dlssMode=="Balanced")return "Balance";
+    if(dlssMode=="Quality"||dlssMode=="Performance"||dlssMode=="UltraPerformance")return dlssMode;
+    return "";
+}
 inline bool applyVr(const std::string& text,const std::string& mode,const RenderRecord* earlier,std::string& out,RenderRecord& record,std::string& reason,const std::string& giQuality=""){
     out=text;record.changes.clear();
     const auto original=[&](const std::string& name,const std::string& now){
@@ -59,6 +64,11 @@ inline bool applyVr(const std::string& text,const std::string& mode,const Render
     if(!put("antiAliasing",mode=="Dlaa"?"Dlaa":"Dlss"))return false;
     // DLAA belongs to antiAliasing; the upscaling mode the player chose stays for when they go back to DLSS.
     if(!put("dlss",mode=="Dlaa"||mode.empty()?dlssNow:mode))return false;
+    // A graphics card without DLSS (2026-10-20, a guest's report: AMD Radeon RX 9070 XT, "Skipping DLSS on non-Nvidia
+    // GPU") draws with FSR 3 and the player's fsr3 preset instead - there "Native", both eyes at 1997x2150 and 16..20
+    // pairs a second. The same scale for FSR 3 (keen::pc::RenderFsr3PresetSetting: UltraPerformance, Performance,
+    // Balance, Quality, Native - "Balance", not "Balanced"); DLAA is FSR 3's Native. A file without the field is left.
+    if(field(out,"fsr3",b,e)){const auto fsr=fsr3Preset(mode);if(!fsr.empty()&&!put("fsr3",fsr))return false;}
     if(giQuality.empty()||giQuality=="Keep")return true;
     if(!word(giQuality)){reason="the GI quality '"+giQuality+"' is not a word";return false;}
     return put("dynamicGi",giQuality);

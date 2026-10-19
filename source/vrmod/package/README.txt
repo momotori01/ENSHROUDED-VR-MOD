@@ -26,13 +26,14 @@ VR ON / OFF
   (a small block moves along its lower edge), then VR begins. The very first time on a
   PC this takes about half a minute; after that about 10 to 20 seconds.
   If you turn away from the screen, it comes back in front of you after a moment.
-- The picture size, DLSS mode and sharpening for VR are in the same program.
+- The picture size, DLSS / FSR 3 mode and sharpening for VR are in the same program.
 - "Frame mode (VR)": "One eye a frame" draws the left and the right eye in turn, and the
   other eye shows the picture it had. It gives more frames a second; things that move
   can look a little doubled. It is a test - switch back to "Both eyes every frame" if it
   does not suit you.
-- While VR is on, the mod sets the game's anti-aliasing to DLSS. Your own setting comes
-  back the next time the game is started with VR off.
+- While VR is on, the mod sets the game's anti-aliasing to DLSS, and FSR 3 to the same
+  scale (a card without DLSS, such as AMD, uses FSR 3). Your own settings come back the
+  next time the game is started with VR off.
 - Only what your lenses show is drawn: at every start the mod reads your headset's field
   of view and the area its lenses show, turns each eye's camera toward the middle of it
   and draws a picture that just covers it - about 15 to 25 % fewer pixels at the same
@@ -57,7 +58,7 @@ REQUIREMENTS
 - The game version this package was made for (see EnshroudedVR\version.txt). After a
   game update the mod switches itself off and the game runs without it, until a new
   package is out.
-- An NVIDIA graphics card with DLSS for VR.
+- A graphics card that runs the game in VR: NVIDIA cards use DLSS, AMD cards FSR 3.
 - The Microsoft Visual C++ x64 runtime (normally installed with Steam games):
   https://aka.ms/vs/17/release/vc_redist.x64.exe
 - For VR: an OpenXR runtime (tested with SteamVR).
@@ -104,12 +105,13 @@ VR の入・切
   ます）、その後 VR が始まります。その PC で最初の 1 回だけ約 30 秒、2 回目からは約 10〜20
   秒です。
   板から顔を背けると、少しして板が目の前に戻ります。
-- VR の絵の大きさ・DLSS のモード・シャープさも同じプログラムで選べます。
+- VR の絵の大きさ・DLSS / FSR 3 のモード・シャープさも同じプログラムで選べます。
 - 「Frame mode (VR)」の「One eye a frame」は、左右の目を 1 コマずつ交互に描き、描かない
   方の目は前の絵を見せます。1 秒あたりのコマ数が増えます。動く物は少し二重に見える事が
   あります。試験中の機能です。合わなければ「Both eyes every frame」に戻してください。
-- VR が「入」の間、MOD はゲームのアンチエイリアスを DLSS にします。元の設定は、次に VR
-  「切」でゲームを起動した時に戻ります。
+- VR が「入」の間、MOD はゲームのアンチエイリアスを DLSS にし、FSR 3 も同じ倍率にします
+  （DLSS の無い AMD などのカードは FSR 3 で描きます）。元の設定は、次に VR「切」で
+  ゲームを起動した時に戻ります。
 - レンズに映る所だけを描きます。起動のたびにヘッドセットの視野とレンズの見える範囲を
   読み、目のカメラをその中心の方へ向けて、ちょうど覆う大きさの絵を描きます（同じ細かさで
   画素が約 15〜25% 減ります）。設定は要りません。試しに切る時は、
@@ -132,7 +134,7 @@ VR の入・切
 必要な物
 - このパッケージが対応するゲームのバージョン（EnshroudedVR\version.txt）。ゲームが更新
   されると MOD は自分で止まり、新しいパッケージが出るまでゲームは MOD なしで動きます。
-- VR には DLSS の使える NVIDIA のグラフィックカード。
+- VR を動かせるグラフィックカード（NVIDIA は DLSS、AMD は FSR 3 を使います）。
 - Microsoft Visual C++ x64 ランタイム（ふつうは Steam のゲームと一緒に入っています）：
   https://aka.ms/vs/17/release/vc_redist.x64.exe
 - VR には OpenXR ランタイム（SteamVR で確認しています）。

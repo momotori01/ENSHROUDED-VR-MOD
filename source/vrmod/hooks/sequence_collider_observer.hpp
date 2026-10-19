@@ -6,6 +6,70 @@
 #include "sequence_collider_identity.hpp"
 #include "motion_collider_shadow.hpp"
 #include "motion_collider_apply.hpp"
+// Other players' melee hits on this host (2026-10-20; user 2026-10-19: "the guest finds the contact on its PC, the
+// host's mod makes the game's own hit" - docs/analysis/online_sync_20261013/guest_melee_20261019.md). The host's server
+// sweeps every attack collider here, the guests' too; a guest's collider follows the guest's character's animation on
+// the server, not the guest's VR weapon. A collider whose action sequence is the running sequence of another player's
+// Actor (the attacker - not a nearby enemy's swing) is swept with that player's weapon as their mod sends it (the held
+// item's pose in the hand, online_sync.hpp publishItems: the weapon this host draws in their hand), when one arrived in
+// the last quarter second and their character stands within 2.5 m of where that weapon was sent from. Everything after
+// (damage, stamina, the reaction) stays the game's. Without a sent weapon (a player without the mod, a desktop player)
+// the game's own sweep stays. EVR_REMOTE_MELEE=0: off.
+namespace remoteMelee {
+struct Weapon {uint32_t character=0;WorldPositionQ32 root{};std::array<uint8_t,40> transform{};uint64_t ms=0;};
+struct Player {uint32_t entity=0;WorldPositionQ32 at{};uint64_t ms=0;};
+inline const bool enabled=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_MELEE",v,sizeof v);return !(n==1&&v[0]=='0');}();
+// EVR_REMOTE_MELEE_SELF=1 (a test for one player, with EVR_ONLINE_SYNC=1 EVR_SYNC_SELF=1): the own strokes take this way -
+// the own character as "another player" and the own weapon as it came back through Steam.
+inline const bool self=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_MELEE_SELF",v,sizeof v);return n==1&&v[0]=='1';}();
+inline std::mutex mutex;inline std::array<Weapon,8> weapons{};inline std::array<Player,8> players{};
+inline std::atomic<uint64_t> weaponMs{0};inline std::atomic<unsigned> applied{0},noWeapon{0},checked{0};inline std::atomic<uint64_t> serial{0};
+// online_sync.hpp: the main hand's weapon of a driven character (world position Q32 and orientation, as drawn here).
+inline void publishWeapon(uint32_t character,const WorldPositionQ32& root,const std::array<uint8_t,40>& transform,uint64_t now){
+ if(!enabled)return;std::lock_guard<std::mutex> lock(mutex);
+ Weapon* slot=nullptr;for(auto& w:weapons)if(w.character==character){slot=&w;break;}
+ if(!slot){slot=&weapons[0];for(auto& w:weapons)if(w.ms<slot->ms)slot=&w;}
+ *slot={character,root,transform,now};weaponMs=now;
+}
+// live_melee_targets.hpp: the other players of the World the local player's Actor ticks in, after each pass of its map.
+inline void publishPlayers(const std::vector<Player>& list){
+ std::lock_guard<std::mutex> lock(mutex);players={};for(size_t i=0;i<list.size()&&i<players.size();++i)players[i]=list[i];
+}
+struct Types {uintptr_t registry=0;int actor=-1;unsigned actorBytes=0;};inline Types types;
+inline void learn(uintptr_t world){
+ const auto registry=read<uintptr_t>(world);if(types.registry==registry)return;types={};types.registry=registry;
+ for(unsigned i=0;i<nativeImpactComponents::componentCapacity;++i){try{const auto t=nativeImpactComponents::componentType(world,i);
+   if(t.qualifiedName=="keen::ecs::Actor"&&t.bytes>=0x40){types.actor=int(i);types.actorBytes=t.bytes;break;}}catch(...){break;}}
+ logFile->event("remote_melee_types","\"world\":"+hex(world)+",\"actor\":"+std::to_string(types.actor)+",\"actor_bytes\":"+std::to_string(types.actorBytes));
+}
+inline double metres(const WorldPositionQ32& a,const WorldPositionQ32& b){const double x=relativeQ32(a.x,b.x),y=relativeQ32(a.y,b.y),z=relativeQ32(a.z,b.z);return std::sqrt(x*x+y*y+z*z);}
+// sequence_collider_observer.hpp ready(): a collider that is not the local player's.
+inline void collider(uintptr_t state,uint32_t entity,void* query,uint32_t sequence,uint32_t localActor,unsigned sample,const Player* own=nullptr) noexcept {
+ try{
+  const auto now=GetTickCount64();const auto last=weaponMs.load();
+  if(!enabled||!sequence||!last||now<last||now-last>500)return;
+  const auto world=read<uintptr_t>(state+0x30);if(!world)return;
+  std::array<Player,8> list;std::array<Weapon,8> sent;{std::lock_guard<std::mutex> lock(mutex);list=players;sent=weapons;}
+  if(own)list[list.size()-1]=*own;
+  learn(world);if(types.actor<0)return;
+  for(const auto& p:list){
+   if(!p.entity||p.entity==localActor||now<p.ms||now-p.ms>3000)continue;
+   uint32_t running=0;
+   try{const auto e=nativeImpactComponents::entityAtWorld(world,p.entity);const auto a=nativeImpactComponents::component(e,unsigned(types.actor),types.actorBytes);if(!a)continue;running=read<uint32_t>(a);}catch(...){continue;}
+   if(running!=sequence)continue;
+   ++checked;const Weapon* best=nullptr;double bestMetres=2.5;
+   for(const auto& w:sent){if(!w.ms||now<w.ms||now-w.ms>250)continue;const double m=metres(w.root,p.at);if(m<bestMetres){bestMetres=m;best=&w;}}
+   if(!best){if(noWeapon.fetch_add(1)<50)logFile->event("remote_melee_no_weapon","\"entity\":"+std::to_string(p.entity)+",\"collider\":"+std::to_string(entity)+",\"sequence\":"+std::to_string(sequence));return;}
+   motion::ColliderPose pose;pose.valid=true;pose.frame=1;pose.serial=++serial;pose.predictedTime=1;pose.milliseconds=now;
+   std::memcpy(pose.transform.data(),best->transform.data(),40);
+   motionColliderApply::begin(world,entity,query,sample,pose,false,true);
+   if(applied.fetch_add(1)<300)logFile->event("remote_melee_collider","\"attacker\":"+std::to_string(p.entity)+",\"collider\":"+std::to_string(entity)+",\"sequence\":"+std::to_string(sequence)+
+    ",\"character\":"+std::to_string(best->character)+",\"weapon_age_ms\":"+std::to_string(now-best->ms)+",\"attacker_to_sent_metres\":"+std::to_string(bestMetres));
+   return;
+  }
+ }catch(...){}
+}
+}
 namespace sequenceColliderObserver {
 inline std::mutex quotaMutex;inline std::map<std::pair<uint32_t,bool>,unsigned> quotas;
 inline bool requested=false;
@@ -74,7 +138,12 @@ inline void ready(uintptr_t sp,void* context,void* query,uint32_t bytes,bool jun
   blockedActionLifetime::collider(read<uintptr_t>(state+0x30),entity,event);
   actor=qualifiedActor(state,actor);
   nativeImpactComponents::learnCurrent(state,entity,slots[1]);
-  if((!actor.active||!actor.sequence||sequence!=actor.sequence)&&!motionColliderApply::owns(read<uintptr_t>(state+0x30),entity,event))return;
+  if((!actor.active||!actor.sequence||sequence!=actor.sequence)&&!motionColliderApply::owns(read<uintptr_t>(state+0x30),entity,event)){
+   if(juneShape)remoteMelee::collider(state,entity,query,sequence,actor.entity,0);   // another player's stroke (2026-10-20)
+   return;}
+  if(remoteMelee::self&&juneShape){const auto r=rootCamera::snapshot();
+   const remoteMelee::Player own{actor.entity,WorldPositionQ32{r.stable.position.x,r.stable.position.y,r.stable.position.z},GetTickCount64()};
+   remoteMelee::collider(state,entity,query,sequence,0,0,&own);return;}
   const auto observation=readyRecordingBudget.observe();++readySamples;currentReadySample=static_cast<unsigned>(observation.ordinal);
   if(observation.record||observation.witness)try{
   std::ostringstream o;o<<"\"sample\":"<<currentReadySample<<",\"entity\":"<<entity<<",\"sequence\":"<<sequence<<",\"event_bytes\":"<<jsonString(bytesHex(event))<<",\"collider_id_before_native\":"<<id<<",\"thread\":"<<GetCurrentThreadId()<<",\"milliseconds\":"<<GetTickCount64()<<",\"latest_actor_entity\":"<<actor.entity<<",\"latest_actor_item\":"<<actor.usedItem<<",\"read_only\":true";

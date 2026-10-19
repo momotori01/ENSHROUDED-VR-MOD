@@ -19,6 +19,10 @@ namespace evr::motion {
 // fourteen times, rolled 42 to 48 degrees counter-clockwise from level (as the user sees it), 45 on average. So the twist is
 // measured from 45 degrees of roll against the horizon about the controller's forward axis (levelRoll). `rollFromOpen`
 // true: from the wheel's opening (14:40).
+// Holding the interaction (2026-10-20, both players of an online session: "I cannot revive the other"): the game revives
+// a fallen player while its interaction is held for reviveDuration, which the tap above never does and a longer hold
+// turned into the wheel. With `holdInteract` (the caller saw a fallen player close by) a press of B is the game's Y from the
+// moment it goes down until it comes up, and the wheel does not open.
 struct QuickSlotSettings {
  bool roll=true;             // the wrist's roll as a dial (false: the hand's movement)
  float rollEngage=.2094f,rollRelease=.1396f,rollGain=2.f;   // 12 and 8 degrees; the wheel turns twice as far as the wrist
@@ -33,10 +37,10 @@ struct QuickSlotSettings {
 };
 struct QuickSlotResult {
  uint16_t buttons=0;bool steer=false;float x=0,y=0; // steer: replace the right stick with (x, y)
- bool opened=false,chosen=false,cancelled=false,tapped=false;
+ bool opened=false,chosen=false,cancelled=false,tapped=false,held=false;   // held: a hold of the interaction began
 };
 class QuickSlot {
- enum class State {Idle,Pending,Open,Confirm,Tap,Blocked};
+ enum class State {Idle,Pending,Open,Confirm,Tap,Blocked,Hold};
  QuickSlotSettings settings_{};State state_=State::Blocked;
  uint64_t since_=0,session_=0,origin_=0;XrTime time_=0;
  Vec3 centre_{},right_{1,0,0};Quat openRoll_{0,0,0,1};float x_=0,y_=0,twist_=0;bool pointing_=false;
@@ -63,10 +67,11 @@ public:
   while(a>pi)a-=2*pi;while(a<=-pi)a+=2*pi;return a;
  }
  bool open()const{return state_==State::Open;}
- bool busy()const{return state_==State::Pending||state_==State::Open||state_==State::Confirm;}
+ bool busy()const{return state_==State::Pending||state_==State::Open||state_==State::Confirm||state_==State::Hold;}
+ bool holding()const{return state_==State::Hold;}
  // allowed: gameplay (or the wheel this gesture opened), fresh hands, no other gesture.
  // head: for the sideways direction; the mapping is frozen when the wheel opens.
- QuickSlotResult update(const HandFrame& f,Pose head,bool allowed,uint64_t now){
+ QuickSlotResult update(const HandFrame& f,Pose head,bool allowed,uint64_t now,bool holdInteract=false){
   QuickSlotResult out;const auto& hand=f.hands[1];
   const bool scope=allowed&&f.focused&&f.sessionGeneration&&hand.tracked()&&hand.secondaryActive&&finite(hand.grip.position)&&finite(head.position);
   const bool changed=session_!=f.sessionGeneration||origin_!=f.originGeneration||(time_&&f.predictedTime>time_&&f.predictedTime-time_>settings_.maximumGap);
@@ -76,9 +81,11 @@ public:
   if(!scope||changed){if(busy())out.cancelled=true;idle(down||!scope?State::Blocked:State::Idle);return out;}
   switch(state_){
   case State::Blocked:if(!down)idle();break;
-  case State::Idle:if(down){state_=State::Pending;since_=now;}break;
+  case State::Idle:if(down){if(holdInteract){state_=State::Hold;out.held=true;}else{state_=State::Pending;since_=now;}}break;
+  case State::Hold:if(!down)idle();break;
   case State::Pending:
-   if(!down){state_=State::Tap;since_=now;out.tapped=true;out.buttons=tap;}
+   if(down&&holdInteract){state_=State::Hold;out.held=true;}
+   else if(!down){state_=State::Tap;since_=now;out.tapped=true;out.buttons=tap;}
    else if(now-since_>=settings_.holdMs){
     state_=State::Open;centre_=hand.grip.position;openRoll_=hand.grip.orientation;twist_=0;out.opened=true;
     const auto forward=rotate(head.orientation,{0,0,-1});Vec3 flat{forward.x,0,forward.z};
@@ -106,7 +113,7 @@ public:
   }
   if(state_==State::Open){out.buttons=wheel;out.steer=true;out.x=x_;out.y=y_;}
   else if(state_==State::Confirm){out.steer=true;out.x=x_;out.y=y_;} // wheel button up, stick still on the item
-  else if(state_==State::Tap)out.buttons=tap;
+  else if(state_==State::Tap||state_==State::Hold)out.buttons=tap;
   return out;
  }
 };

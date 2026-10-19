@@ -601,6 +601,7 @@ namespace inputActor {inline const bool clientTicksSet=[]{clientWorldTicks=[](ui
 #include "vfx_cpu_draw_probe.hpp"
 #include "vfx_decal_rebase.hpp"
 #include "grass_movement_bridge.hpp"
+#include "snow_displacement_bridge.hpp"
 #include "parry_observer.hpp"
 #include "melee_trigger_observer.hpp"
 #include "opportunity_take_observer.hpp"
@@ -2413,7 +2414,23 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
         const bool begunEarly=earlyPrepared&&serial==pair->xrAttemptSerial;
         if(serial!=pair->serial&&(begunEarly||serial!=pair->xrAttemptSerial)){
             ++desktopSkipCandidates;
-            if(!desktopSkipEvery||desktopSkipCandidates%desktopSkipEvery){
+            // In the air the refresh waits (2026-10-20; user 10-19: "falling from a height, buildings still vanish now and
+            // then"): after the 0.9.1 lending, the one picture left with holes was the right eye's on the frame after a
+            // refresh, and only while falling (10-19 06:50, Mock runs -060816 759 and -061432 730). While the local actor is
+            // not grounded (its Grounded bit, as the air strokes read it) a due refresh is owed and done on the first frame
+            // on the ground - at most 300 frames late, so that a long glide still refreshes the GI. EVR_FALL_REFRESH_HOLD=0: off.
+            static const bool fallRefreshHold=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FALL_REFRESH_HOLD",v,sizeof v);return !(n==1&&v[0]=='0');}();
+            static bool refreshOwed=false;static unsigned refreshPostponed=0,postponeLogs=0;
+            bool refreshNow=desktopSkipEvery&&(!(desktopSkipCandidates%desktopSkipEvery)||refreshOwed);
+            if(refreshNow&&fallRefreshHold){
+                bool airborne=false;{std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;const auto now=GetTickCount64();
+                    airborne=s.actorKnown&&s.milliseconds&&now>=s.milliseconds&&now-s.milliseconds<=500&&!(s.actorState&1ull);}
+                if(airborne&&refreshPostponed<300){
+                    if(!refreshOwed&&postponeLogs++<100)logFile->event("desktop_refresh_postponed","\"frame\":"+std::to_string(liveFrame.frame)+",\"serial\":"+std::to_string(serial)+",\"airborne\":true");
+                    refreshOwed=true;++refreshPostponed;refreshNow=false;}
+            }
+            if(refreshNow){if(refreshOwed&&postponeLogs++<100)logFile->event("desktop_refresh_done_late","\"frame\":"+std::to_string(liveFrame.frame)+",\"frames_late\":"+std::to_string(refreshPostponed));refreshOwed=false;refreshPostponed=0;}
+            if(!refreshNow){
                 try{
                     if(!begunEarly){pair->xrAttemptSerial=serial;earlyPrepared=beginLiveFrame(pair->originalView,alternateEyesWanted(*pair));if(earlyPrepared)alternateEyesLog(serial);}
                     skipDesktop=earlyPrepared;
@@ -3311,6 +3328,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         optional("vfx_cpu_draw_probe",[&]{vfxCpuDrawProbe::install();},[&]{});   // only with EVR_VFX_CPU_SKIP in the environment
         if(sharedPointLights::decalsRequested)optional("vfx_decals",[&]{vfxDecals::install();},[&]{sharedPointLights::decalsRequested=false;});   // after both: it uses the transparent writeback's allocation hook
         optional("grass_movement",[&]{grassMovementBridge::install();},[&]{});
+        optional("snow_displacement",[&]{snowDisplacementBridge::install();},[&]{});
         optional("water_displacement",[&]{waterDisplacementBridge::install();},[&]{});
         optional("shadow_history",[&]{shadowHistoryProbe::install();},[&]{});
         {void* const modelStubs[8]{reinterpret_cast<void*>(&evr_vfx_model_stub0),reinterpret_cast<void*>(&evr_vfx_model_stub1),reinterpret_cast<void*>(&evr_vfx_model_stub2),reinterpret_cast<void*>(&evr_vfx_model_stub3),
@@ -3418,6 +3436,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             std::ifstream qf(calibrationDirectory/"world-quick-slot-motion.txt");std::string magic;qf>>magic>>std::ws;
             if(!qf||!qf.eof()||magic!="EVR_QUICK_SLOT_MOTION_1"||!controllerUiFixture::liveRequested)throw std::runtime_error("quick slot by hand motion requires the live controller input");
             controllerUiFixture::quickSlotRequested=true;controllerUiFixture::liveMapper.motionQuickSlot(true);
+            // A fallen player within 3 m: B holds the interaction (the revive) instead (2026-10-20, live_melee_targets.hpp).
+            controllerUiFixture::fallenPlayerNear=[](uint64_t now){uint32_t who=0;double away=-1;return liveTargets::downedNear(3.,now,who,away);};
             logFile->event("quick_slot_motion_enabled","\"button\":\"right_secondary\",\"hold_ms\":250,\"select_m\":0.07,\"native_wheel\":true,\"right_grip_free\":true");
         }
         if(std::filesystem::exists(calibrationDirectory/"world-live-guard.txt")){
@@ -3794,7 +3814,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         objectWatch::uninstall();
         statusVignette::uninstall();
         if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
-        vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();waterDisplacementBridge::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
+        vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
         shadowProjection::disable();
         detailBinding::disable();
         cullingHistory::disable();
@@ -3842,7 +3862,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             objectWatch::uninstall();
             statusVignette::uninstall();
             if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
-            vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();waterDisplacementBridge::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
+            vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
             try{equipmentObserver::disable();}catch(...){}
             try{inputDirection::disable();}catch(...){}
             try{contactQuiescenceObserver::disable();}catch(...){}

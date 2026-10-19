@@ -42,7 +42,7 @@ constexpr UINT WM_APP_UPDATE_DONE=WM_APP+4;  // wParam: the updater's exit code
 constexpr int kLeft=20,kRight=330,kWidth=700,kRowHeight=74;
 struct Choice {const wchar_t* label;const char* value;};
 const Choice kSizes[]{{L"Low 0.7  (faster)","0.7"},{L"Normal 0.8","0.8"},{L"High 1.0  (sharper, slower)","1.0"}};
-const Choice kDlss[]{{L"Quality","Quality"},{L"Balanced","Balanced"},{L"Performance","Performance"},{L"DLAA  (sharpest, slower)","Dlaa"}};
+const Choice kDlss[]{{L"Quality","Quality"},{L"Balanced","Balanced"},{L"Performance","Performance"},{L"DLAA / FSR3 Native  (sharpest, slower)","Dlaa"}};
 const Choice kSharp[]{{L"Off","0"},{L"Soft 0.2","0.2"},{L"Strong 0.5","0.5"}};
 const Choice kEyes[]{{L"Both eyes every frame","0"},{L"One eye a frame  (last picture, test)","1"},{L"One eye a frame, the other made from it  (PureDark's way, test)","2"}};
 
@@ -637,7 +637,7 @@ void build(){
     g_rbFlat=control(part(L"BUTTON",L"Normal (no VR)",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+130,g_y+8,170,22,ID_FLAT));
     g_y+=kRowHeight;
     row(L"Picture size (VR)",L"Bigger is sharper, but gives lower FPS.");g_coSize=combo(ID_SIZE,kSizes,std::size(kSizes));g_y+=kRowHeight-16;
-    row(L"DLSS (VR)",L"How the picture is made from a smaller one.");g_coDlss=combo(ID_DLSS,kDlss,std::size(kDlss));g_y+=kRowHeight-16;
+    row(L"DLSS / FSR3 (VR)",L"How the picture is made from a smaller one.\nCards without DLSS (AMD) use FSR 3 the same way.");g_coDlss=combo(ID_DLSS,kDlss,std::size(kDlss));g_y+=kRowHeight-16;
     row(L"Sharpening (VR)",L"Makes edges crisper.");g_coSharp=combo(ID_SHARP,kSharp,std::size(kSharp));g_y+=kRowHeight-16;
     row(L"Frame mode (VR)",L"One eye a frame: the other shows its last picture, or is made from the drawn one.\n片目ずつ交互に描く（試験中・速い）。PureDark 方式は描いた目からもう片方を作る");g_coEyes=combo(ID_EYES,kEyes,std::size(kEyes));g_y+=kRowHeight-8;
     row(L"Problem report",L"The logs in one zip, next to this program.\nAlso finishes a VR bug report a crash cut.\n報告用zip。途切れたVRバグ報告も仕上げます");

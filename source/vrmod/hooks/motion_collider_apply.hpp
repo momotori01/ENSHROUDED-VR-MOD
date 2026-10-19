@@ -96,7 +96,9 @@ inline void install(){
  if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+lookupRva),reinterpret_cast<void*>(&lookup),reinterpret_cast<void**>(&originalLookup))!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+lookupRva))!=MH_OK)throw std::runtime_error("collider cancellation lookup hook failed");
  lookupEnabled=true;logFile->event("motion_collider_lookup_enabled","\"rva\":\"0x213930\",\"pattern\":"+jsonString(lookupPattern)+",\"caller\":\"0x3eff42\",\"cancel_after\":"+std::to_string(cancelAfter));
 }
-inline void begin(uintptr_t world,uint32_t entity,void* query,unsigned sample,const motion::ColliderPose& pose,bool ownedIntent=false){
+// remote: another player's weapon as their mod sent it (sequence_collider_observer.hpp remoteMelee) - no lead from the
+// local weapon's last poses and no sweep from the tip (its length is not sent).
+inline void begin(uintptr_t world,uint32_t entity,void* query,unsigned sample,const motion::ColliderPose& pose,bool ownedIntent=false,bool remote=false){
  if(!requested)return;std::lock_guard<std::mutex> lock(mutex);if(!accepting)return;
  if(activeScope||borrow.active())throw std::runtime_error("nested tracked collider scope");
  auto& q=*reinterpret_cast<game::ScopedQueryTransforms::Query*>(query);const auto id=read<uint64_t>(q[5]+8);
@@ -104,18 +106,18 @@ inline void begin(uintptr_t world,uint32_t entity,void* query,unsigned sample,co
  if(live){
   if(!pose.valid||!combatEpochGate::newAllowed(combatEpochGate::Stage::Collider,pose.clientWorld,world)){++ignored;return;}
   sourceCurrent=read<std::array<uint8_t,56>>(q[1]);sourcePrevious=q[3]?read<std::array<uint8_t,72>>(q[3]):std::array<uint8_t,72>{};
-  auto current=motion::colliderTransform(pose,sourceCurrent);leadPosition(pose,current);enlarge(current);
+  auto current=motion::colliderTransform(pose,sourceCurrent);if(!remote)leadPosition(pose,current);enlarge(current);
   const auto decision=liveLease.apply(key,true,GetTickCount64(),current);
   if(!decision.track){++ignored;return;}
   impactLifetime::tracked(world,entity,key.event);
   sourceQuery=q;scopeKey=key;cancelScope=false;lookupSeen=false;readySample=sample;
   // The game sweeps from the previous transform: the tracked weapon's own previous pose, or no sweep on the first update.
-  auto previous=sourcePrevious;if(q[3]){std::memcpy(previous.data(),decision.previous.data(),52);if(decision.continuous)sweepFromTip(pose,current,previous);}
+  auto previous=sourcePrevious;if(q[3]){std::memcpy(previous.data(),decision.previous.data(),52);if(decision.continuous&&!remote)sweepFromTip(pose,current,previous);}
   borrow.open(q,current,previous);activeScope=true;++outstanding;++opened;++applied;if(decision.continuous)++liveContinuous;
   if(liveLogged.fetch_add(1)<400||!(liveLogged.load()%20))logFile->event("motion_collider_apply_begin","\"ready_sample\":"+std::to_string(sample)+",\"entity\":"+std::to_string(entity)+",\"frame\":"+std::to_string(pose.frame)+",\"collider_before\":"+std::to_string(id)+
    ",\"original_current\":"+jsonString(nativeImpactComponents::asHex(sourceCurrent))+",\"applied_current\":"+jsonString(nativeImpactComponents::asHex(current))+
    ",\"original_previous\":"+jsonString(nativeImpactComponents::asHex(sourcePrevious))+",\"applied_previous\":"+jsonString(nativeImpactComponents::asHex(previous))+
-   ",\"previous_present\":"+(q[3]?"true":"false")+",\"live\":true,\"continuous\":"+(decision.continuous?"true":"false")+",\"item\":"+std::to_string(pose.item)+",\"hit_scale\":"+std::to_string(hitScale)+",\"tip_y\":"+std::to_string(pose.tipY)+",\"tip_sweep_metres\":"+std::to_string(lastTipSweepMetres)+",\"lead_ms\":"+std::to_string(colliderLeadMs)+",\"lead_metres\":"+std::to_string(lastLeadMetres)+",\"ecs_written_by_mod\":false");
+   ",\"previous_present\":"+(q[3]?"true":"false")+",\"live\":true,\"continuous\":"+(decision.continuous?"true":"false")+",\"item\":"+std::to_string(pose.item)+",\"hit_scale\":"+std::to_string(hitScale)+",\"tip_y\":"+std::to_string(pose.tipY)+",\"tip_sweep_metres\":"+std::to_string(lastTipSweepMetres)+",\"lead_ms\":"+std::to_string(colliderLeadMs)+",\"lead_metres\":"+std::to_string(remote?0.:lastLeadMetres)+",\"remote\":"+(remote?"true":"false")+",\"ecs_written_by_mod\":false");
   return;
  }
  const bool forced=cancelAfter&&applied.load()>=cancelAfter;

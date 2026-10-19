@@ -103,11 +103,19 @@ struct FishAttach {uint32_t entity=0,parent=0;uintptr_t world=0;std::array<uint8
 // Since 19:55 for every caught fish that is watched (the own one and other players' - remote_body.hpp): the game's pose
 // of its render object as the model pass found it, unless that is the pose the mod last wrote (then the game has not
 // placed it again since). Under followMutex.
-struct FishModel {uint32_t entity=0,handle=0;uintptr_t scene=0;uint64_t at=0;std::array<uint8_t,56> pose{},written{};bool gamePose=false;};
+// swim (2026-10-20, for the hold by the tail - motion_body_ik.hpp holdFish): while the fish fights it swims head first; its
+// moves, turned into the model's own axes and weighted by their length, are added up here (metres along each axis).
+struct FishModel {uint32_t entity=0,handle=0;uintptr_t scene=0;uint64_t at=0;std::array<uint8_t,56> pose{},written{};bool gamePose=false;
+ std::array<uint8_t,56> swimPose{};uint64_t swimAt=0;std::array<float,3> swim{};float swimMetres=0;};
+inline std::array<std::pair<uint32_t,uint64_t>,8> fishFighting{};
+// A fish of a fight in progress (own: live_equipment.hpp, other players': remote_body.hpp), for half a second.
+inline void markFishFighting(uint32_t entity,uint64_t now){if(!entity)return;std::lock_guard<std::mutex> lock(followMutex);size_t at=0;
+    for(size_t i=0;i<fishFighting.size();++i){if(fishFighting[i].first==entity){at=i;break;}if(fishFighting[i].second<fishFighting[at].second)at=i;}fishFighting[at]={entity,now+500};}
 inline std::array<FishModel,8> fishModels{};inline std::array<std::pair<uint32_t,uint64_t>,8> fishWatch{};
 inline void watchFish(uint32_t entity,uint64_t now){if(!entity)return;std::lock_guard<std::mutex> lock(followMutex);size_t at=0;
     for(size_t i=0;i<fishWatch.size();++i){if(fishWatch[i].first==entity){at=i;break;}if(fishWatch[i].second<fishWatch[at].second)at=i;}fishWatch[at]={entity,now+1000};}
-inline bool fishWatched(uint32_t entity,uint64_t now){if(!entity)return false;std::lock_guard<std::mutex> lock(followMutex);for(const auto& w:fishWatch)if(w.first==entity&&now<=w.second)return true;return false;}
+inline bool fishWatched(uint32_t entity,uint64_t now){if(!entity)return false;std::lock_guard<std::mutex> lock(followMutex);for(const auto& w:fishWatch)if(w.first==entity&&now<=w.second)return true;
+    for(const auto& w:fishFighting)if(w.first==entity&&now<=w.second)return true;return false;}
 inline FishModel* fishModelOf(uint32_t entity,bool create){   // under followMutex
     FishModel* oldest=&fishModels[0];for(auto& m:fishModels){if(m.entity==entity)return &m;if(m.at<oldest->at)oldest=&m;}
     if(!create)return nullptr;*oldest={};oldest->entity=entity;return oldest;}
@@ -431,7 +439,16 @@ inline void capture(uintptr_t caller,uintptr_t sp,void* context,void* query,uint
                         if(objects&&gens&&bytes%0x1b0==0&&index<bytes/0x1b0&&index<count&&read<uint8_t>(gens+index)==(handle>>24)){pose=read<std::array<uint8_t,56>>(objects+uintptr_t(index)*0x1b0+0x38);posed=true;}}}
                 catch(...){}
                 if(handle&&scene){std::lock_guard<std::mutex> lock(followMutex);auto* m=fishModelOf(entity,true);m->handle=handle;m->scene=scene;m->at=now;
-                    if(posed&&pose!=m->written){m->pose=pose;m->gamePose=true;}}
+                    if(posed&&pose!=m->written){m->pose=pose;m->gamePose=true;
+                        // the swim: a move of 2 cm or more since the last one counted, within half a second, at up to 8 m/s
+                        bool fighting=false;for(const auto& w:fishFighting)if(w.first==entity&&now<=w.second)fighting=true;
+                        if(fighting){WorldPositionQ32 a,b;Quat q;std::memcpy(&a,m->swimPose.data(),24);std::memcpy(&b,pose.data(),24);std::memcpy(&q,pose.data()+24,16);
+                            const Vec3 d{float(relativeQ32(b.x,a.x)),float(relativeQ32(b.y,a.y)),float(relativeQ32(b.z,a.z))};const float metres=length(d);
+                            const float qn=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
+                            if(!m->swimAt||now<m->swimAt||now-m->swimAt>500||!finite(d)||metres>4.f||!(qn>.9f&&qn<1.1f)){m->swimPose=pose;m->swimAt=now;}
+                            else if(metres>=.02f){if(metres<=.008f*float(now-m->swimAt+1)*1.f+.05f){const auto l=rotate(inverse(normalized(q)),d);
+                                m->swim[0]+=l.x;m->swim[1]+=l.y;m->swim[2]+=l.z;m->swimMetres+=metres;}
+                                m->swimPose=pose;m->swimAt=now;}}}}
                 if(toldModel!=entity){toldModel=entity;logFile->event("fishing_fish_model_pass","\"entity\":"+std::to_string(entity)+",\"own\":"+(entity==fish?"true":"false")+",\"state\":"+std::to_string(controllerUiFixture::fishingState.load())+
                     ",\"handle\":"+std::to_string(handle)+",\"scene\":"+hex(scene)+",\"world_scene\":"+(scene&&scene==provenWorldScene?"true":"false"));}}
             std::lock_guard<std::mutex> lock(mutex);auto c=child(entity,now,false);

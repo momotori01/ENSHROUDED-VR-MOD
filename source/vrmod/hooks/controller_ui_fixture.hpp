@@ -175,6 +175,9 @@ inline bool fishingFloatOut(uint64_t now){const auto at=fishingFloatMs.load();re
 inline bool holsterRequested=false;inline bool (*holsterAct)(unsigned,uint64_t)=nullptr;inline void (*holsterTick)(uint64_t)=nullptr;
 // In the water no holster press is looked for (VHVR Pose.cs:42-49: swimming skips the gesture detection; 2026-10-18).
 inline bool (*actorSwimming)(uint64_t)=nullptr;
+// A fallen player within reach of a revive (live_melee_targets.hpp downedNear): the right B then holds the game's
+// interaction for as long as it is held instead of tapping it or opening the quick wheel (include/evr/quick_slot.hpp).
+inline bool (*fallenPlayerNear)(uint64_t)=nullptr;
 // While a holster acts the block is let go: the game does not change the action bar's selection while the player
 // blocks, and takes the request as done (headset run 20261014-162900: the sword could not be put away at the right
 // shoulder six times in a row while the shield was held up; holster_act frames 6603..6869).
@@ -768,7 +771,8 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     // Gameplay, or the wheel overlay this gesture is holding open; menus and the head gesture own their input.
                     const bool allowed=fresh&&mapped.valid&&!value.active&&(quickHead.flags&15)==15&&(screenKind==evr::motion::LiveScreen::Gameplay||
                         (quickSlot.busy()&&screenKind==evr::motion::LiveScreen::Overlay));
-                    const auto slot=quickSlot.update(hands,quickHead.pose,allowed,now);
+                    const bool revive=fallenPlayerNear&&fallenPlayerNear(now);
+                    const auto slot=quickSlot.update(hands,quickHead.pose,allowed,now,revive);
                     pad.buttons|=slot.buttons;
                     // Only while the game's wheel is up (auxiliary 1): fishing does not open it, and the hand's way went to the
                     // camera's turn instead (headset run 20261019-160912, user: "pressing to pull up while fishing turns me round" -
@@ -782,8 +786,8 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         static unsigned dialLogs=0;if(sector>=0&&dialLogs++<300)logFile->event("quick_slot_dial","\"frame\":"+std::to_string(hands.frame)+",\"sector\":"+std::to_string(sector)+
                             ",\"twist_deg\":"+std::to_string(int(std::lround(quickSlot.twist()*57.29578f))));
                         lastSector=sector;}}
-                    if(slot.opened||slot.chosen||slot.cancelled||slot.tapped){
-                        std::ostringstream s;s<<std::setprecision(6)<<"\"frame\":"<<hands.frame<<",\"kind\":\""<<(slot.opened?"opened":slot.chosen?"chosen":slot.tapped?"tapped":"cancelled")
+                    if(slot.opened||slot.chosen||slot.cancelled||slot.tapped||slot.held){
+                        std::ostringstream s;s<<std::setprecision(6)<<"\"frame\":"<<hands.frame<<",\"kind\":\""<<(slot.opened?"opened":slot.chosen?"chosen":slot.tapped?"tapped":slot.held?"interaction_held_for_a_fallen_player":"cancelled")
                          <<"\",\"stick\":["<<slot.x<<','<<slot.y<<"],\"buttons\":"<<slot.buttons<<",\"screen\":"<<unsigned(screenKind)<<",\"by_roll\":"<<(quickSlot.settings().roll?"true":"false")<<",\"twist_deg\":"<<quickSlot.twist()*57.29578f;
                         logFile->event("quick_slot_state",s.str());}
                 }
@@ -1014,7 +1018,13 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                       static bool castArmed=false;static uint64_t castTapUntil=0;static unsigned tapLogs=0;
                       static bool heldFromReeling=false;
                       if(held.category==5&&rod.binding&&gameplay){
-                         if(floatOut){castArmed=false;heldFromReeling=usePressed;}
+                         if(floatOut){castArmed=false;heldFromReeling=usePressed;
+                            // While the line is reeled in (31 StartReelIn .. 34 FloatReturned) a trigger held from before is not
+                            // the game's button already (2026-10-20, a guest's report: the host's server saw it still down when
+                            // the float came back, began the next AimAndCharge, and the release threw the float 3 m - AbortPreHooked,
+                            // reeled in again - seven times; the mask on the float's return came a round trip too late there).
+                            const int reelState=fishingState.load();const auto reelMs=fishingStateMs.load();
+                            if(usePressed&&reelMs&&now>=reelMs&&now-reelMs<=300&&reelState>=31&&reelState<=34)pad.buttons&=uint16_t(~evr::motion::LivePadMapper::X);}
                          else{
                             if(!usePressed)heldFromReeling=false;
                             if(heldFromReeling)pad.buttons&=uint16_t(~evr::motion::LivePadMapper::X);
@@ -1094,7 +1104,14 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                      // is now the tip's rise over the last 60 ms or more, timed by the steady clock.)
                      {static const bool flickOn=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_FLICK",v,sizeof v);return !(n==1&&v[0]=='0');}();
                       struct TipAt {int64_t us=0;evr::Vec3 p{};};
-                      static uint64_t flickUntil=0,flickNext=0;static std::array<TipAt,64> tips{};static size_t tipAt=0;static unsigned flickLogs=0;
+                      static uint64_t flickUntil=0,flickNext=0,flickGapUntil=0;static std::array<TipAt,64> tips{};static size_t tipAt=0;static unsigned flickLogs=0;
+                      // A click needs the button to go down (2026-10-20, a guest's report "the fish's endurance goes down, but at
+                      // zero it cannot be landed": the trigger pressed at the bite (21) and held through the whole fight, so at
+                      // FinalHook 30 the button was already down - the flick's press went into it and the release at 30 was no
+                      // click; three fights ended 30 -> ReelIn 32, frames 40435, 41361, 47315 of 20261020-002320). With the
+                      // button held, a click lets it go for 80 ms and presses it again; FinalHook entered with the trigger held is
+                      // such a click by itself - holding the trigger reels the tired fish in.
+                      static int lastFishState=-1;static unsigned finalLogs=0;
                       const int64_t us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
                       const int fstate=fishingState.load();const auto fstateMs=fishingStateMs.load();
                       // From the wait for a fish on (16 WaitForFish .. 21), not while the float flies and lands (10..15: the cast's
@@ -1113,12 +1130,19 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                             const float rise=tip.y-low.p.y,sideways=rn>.3f?std::abs(((tip.x-low.p.x)*r.x+(tip.z-low.p.z)*r.z)/rn):0.f;
                             if(waits&&now>=flickNext&&rise>=.07f&&speed>=1.6f&&sideways<=rise*.4663f){   // 7 cm, 1.6 m/s since 19:25 ("the flick needs too long a way")
                                   // .4663: tan 25 degrees
-                               flickUntil=now+150;flickNext=now+800;requestBowHaptic({0,.4f},{0,60});
+                               const bool down=(pad.buttons&evr::motion::LivePadMapper::X)!=0;
+                               flickGapUntil=down?now+80:0;flickUntil=(down?now+80:now)+150;flickNext=now+800;requestBowHaptic({0,.4f},{0,60});
                                if(flickLogs++<100)logFile->event("live_fishing_flick","\"frame\":"+std::to_string(hands.frame)+",\"state\":"+std::to_string(fstate)+",\"rise_m\":"+std::to_string(rise)+
                                   ",\"sideways_m\":"+std::to_string(sideways)+",\"speed_mps\":"+std::to_string(speed)+",\"native_button\":16384");}
                          }
                       }else tipAt=0,tips={};
-                      if(now<flickUntil&&gameplay&&held.category==5)pad.buttons|=evr::motion::LivePadMapper::X;}}
+                      {const bool fresh=fstateMs&&now>=fstateMs&&now-fstateMs<=300;
+                       if(fresh&&fstate==30&&lastFishState!=30&&lastFishState>=22&&gameplay&&held.category==5&&usePressed&&now>=flickUntil){
+                          flickGapUntil=now+80;flickUntil=now+230;
+                          if(finalLogs++<100)logFile->event("live_fishing_final_hook_click","\"frame\":"+std::to_string(hands.frame)+",\"from_state\":"+std::to_string(lastFishState)+",\"trigger_held\":true,\"gap_ms\":80,\"press_ms\":150");}
+                       if(fresh)lastFishState=fstate;}
+                      if(now<flickGapUntil&&gameplay&&held.category==5)pad.buttons&=uint16_t(~evr::motion::LivePadMapper::X);
+                      else if(now<flickUntil&&gameplay&&held.category==5)pad.buttons|=evr::motion::LivePadMapper::X;}}
                     if(usePressed!=before)logFile->event("live_use_trigger","\"frame\":"+std::to_string(hands.frame)+",\"pressed\":"+(usePressed?"true":"false")+",\"item\":"+std::to_string(useItem)+
                         ",\"category\":"+std::to_string(held.category)+",\"item_slot\":"+std::to_string(held.itemSlot)+",\"native_button\":16384");
                     // A throwable: wind up with the trigger, let go while the hand moves.

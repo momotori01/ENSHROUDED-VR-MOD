@@ -14,6 +14,15 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  // A short press is the game's Y button: nothing while down, one tap of about 100 ms after release.
  reset();step(false);auto r=step(true);ck(!r.buttons&&!r.steer);r=step(true,{},100);ck(!r.buttons);
  r=step(false);ck(r.tapped&&r.buttons==QuickSlot::tap&&!r.steer);ck(step(false,{},90).buttons==QuickSlot::tap);ck(!step(false,{},20).buttons);ck(!t.busy());
+ // With a fallen player close by (holdInteract) B is the game's Y from going down to coming up, however long; no wheel.
+ {reset();step(false);QuickSlotResult h=t.update(f,seen,allowed,now,true);ck(!h.buttons);
+  ++f.frame;f.predictedTime+=11000000;now+=11;f.hands[1].secondaryPressed=true;h=t.update(f,seen,allowed,now,true);ck(h.held&&h.buttons==QuickSlot::tap&&t.holding());
+  for(unsigned i=0;i<150;i++){++f.frame;f.predictedTime+=20000000;now+=20;h=t.update(f,seen,allowed,now,true);ck(h.buttons==QuickSlot::tap&&!h.opened&&!h.held);}
+  ++f.frame;f.predictedTime+=20000000;now+=20;f.hands[1].secondaryPressed=false;h=t.update(f,seen,allowed,now,true);ck(!h.buttons&&!t.busy());
+  // Pressed before the fallen player was seen: the press turns into the hold on the next frame.
+  reset();step(false);step(true);++f.frame;f.predictedTime+=20000000;now+=20;h=t.update(f,seen,allowed,now,true);ck(h.held&&h.buttons==QuickSlot::tap);
+  // Without it, the same press still opens the wheel.
+  reset();open();}
  // Held 250 ms: the wheel opens at the hand; near the centre the stick is neutral.
  reset();step(false);step(true);r=step(true,{},240);ck(!r.buttons&&t.busy()&&!t.open());
  r=step(true,{},11);ck(r.opened&&r.buttons==QuickSlot::wheel&&r.steer&&r.x==0&&r.y==0&&t.open());

@@ -53,7 +53,7 @@ public:
  }
 private:
  struct Latch {bool held=false,mustRelease=true;uint16_t target=0;};
- bool motionQuickSlot_=false;
+ bool motionQuickSlot_=false,leftInteract_=false;
  std::array<Latch,SourceCount> latch_{};
  uint64_t session_=0,origin_=0;XrPath leftProfile_=0,rightProfile_=0;
  static bool pressed(const HandFrame& h,unsigned s){
@@ -68,7 +68,7 @@ private:
   }
   return false;
  }
- void interrupt(){for(auto& l:latch_){l.held=false;l.target=0;l.mustRelease=true;}}
+ void interrupt(){for(auto& l:latch_){l.held=false;l.target=0;l.mustRelease=true;}leftInteract_=false;}
  static int16_t axis(float v){return int16_t(std::lround(std::clamp(v,-1.f,1.f)*32767));}
  static uint8_t trigger(float v){return uint8_t(std::lround(std::clamp(v,0.f,1.f)*255));}
 public:
@@ -86,6 +86,13 @@ public:
   // weapon of Q, over and over"): LT is the game's aim, which takes out the ranged weapon; a finger resting on the
   // trigger crossed its threshold again and again. The bow's aim is pressed by the mod itself (bow_draw.hpp); menus keep LT.
   if(screen==LiveScreen::Gameplay)out.leftTrigger=0;
+  // The left trigger interacts (2026-10-20, VHVR equipment_tools 6.2: "the left trigger - an interaction when pressed, the
+  // long one while it is held"; a guest pressed every other button to take a caught fish off the ground, and a revive is
+  // the interaction held): the game's Y while it is pulled past 85 % (a finger resting on it stays below - the 10-19 01:30
+  // complaint) until it comes back under 50 %; not while the left grip holds a bow, a shield or a two-handed weapon.
+  if(screen==LiveScreen::Gameplay){const float t=mapped.pad.leftTrigger;const auto& lh=hands.hands[0];
+   leftInteract_=!(lh.grabActive&&lh.grab)&&(leftInteract_?t>=.5f:t>=.85f);if(leftInteract_)out.buttons|=Y;}
+  else leftInteract_=false;
   for(unsigned s=0;s<SourceCount;s++){
    auto& l=latch_[s];const bool down=pressed(hands,s);
    if(!down){l.held=false;l.target=0;l.mustRelease=false;continue;}

@@ -121,6 +121,26 @@ inline std::optional<Received> decode(const uint8_t* data,size_t size){
 }
 inline std::optional<Received> decode(const std::vector<uint8_t>& bytes){return decode(bytes.data(),bytes.size());}
 
+// Actions (2026-10-20, the first online session with a VR guest): what a player's mod decided that the host's mod needs,
+// because the host's server simulates the guest's character. Another magic, so that a mod of 0.9.3 refuses them as any
+// datagram it does not know. magic 0xe6, version 1, kind, id (16 bit: the same action is sent a few times; the receiver
+// takes it once), then the kind's bytes:
+//   kind 1, a fishing cast: the strength of the swing at the trigger's release, 0..1 in 16 bits (0: no swing - the
+//   shortest cast). The host gives the guest's cast that charge as its own casts get theirs (hooks/fishing_charge.hpp).
+inline constexpr uint8_t actionMagic=0xe6,actionVersion=1,castAction=1;
+inline constexpr size_t castActionBytes=7;
+struct Action {uint8_t kind=0;uint16_t id=0;float strength=0;};
+inline std::vector<uint8_t> encodeCast(uint16_t id,float strength){
+    std::vector<uint8_t> out{actionMagic,actionVersion,castAction};detail::put16(out,int(id));
+    const auto s=uint16_t(std::lround(std::clamp(std::isfinite(strength)?strength:0.f,0.f,1.f)*65535));out.push_back(uint8_t(s&255));out.push_back(uint8_t(s>>8));return out;
+}
+inline std::optional<Action> decodeAction(const uint8_t* data,size_t size){
+    if(!data||size<3||data[0]!=actionMagic||data[1]!=actionVersion)return std::nullopt;
+    Action a;a.kind=data[2];
+    if(a.kind==castAction){if(size!=castActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;a.strength=float(uint16_t(data[5])|uint16_t(data[6])<<8)/65535.f;return a;}
+    return std::nullopt;
+}
+
 // The model's space <-> what is sent. The body's IK works in the character model's space (origin at the feet); what
 // is sent lies along the world's axes about the character's position, so that the receiver's copy of the character
 // may face another way than the owner's and the body still stands right in the world (VHVR 1.2).
@@ -213,6 +233,7 @@ public:
         shownBody_=out;shown_=true;return out;
     }
     bool known()const{return have_;}
+    const Body& newest()const{return newest_;}   // as it came, without the stepping (the hit of a stroke: online_sync.hpp)
     uint16_t sequence()const{return sequence_;}
 };
 

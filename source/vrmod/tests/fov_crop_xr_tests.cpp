@@ -128,9 +128,12 @@ int main(int argc,char** argv)
         _putenv_s("EVR_SYMMETRIC_FOV","1");_putenv_s("EVR_CANTED_FOV","0");
         const auto symmetric=run("symmetric.jsonl");
         _putenv_s("EVR_SYMMETRIC_FOV","");_putenv_s("EVR_CANTED_FOV","");
+        // One field for both eyes (2026-10-20, EVR_EQUAL_EYE_FOV): the larger tangent of each direction of the two envelopes.
+        const auto e0=symmetricEnvelope(mockFov(0)),e1=symmetricEnvelope(mockFov(1));
+        const float side=std::max(e0.angleRight,e1.angleRight),up=std::max(e0.angleUp,e1.angleUp);
         for(unsigned eye=0;eye<2;++eye){
-            const auto expected=symmetricEnvelope(mockFov(eye));
-            require(std::memcmp(&symmetric.fov[eye],&expected,sizeof(XrFovf))==0,"engine and submitted layer receive the symmetric runtime envelope");
+            XrFovf expected{};expected.angleLeft=-side;expected.angleRight=side;expected.angleUp=up;expected.angleDown=-up;
+            require(std::memcmp(&symmetric.fov[eye],&expected,sizeof(XrFovf))==0,"engine and submitted layer receive the symmetric runtime envelope, the same for both eyes");
             require(symmetric.width[eye]==symmetric.fullWidth[eye]&&symmetric.height[eye]==symmetric.fullHeight[eye],"symmetric compatibility retains allocated eye extent");
         }
         // Turned toward the middle (2026-10-19, the default with EVR_SYMMETRIC_FOV): with a lens mask touching the fov's

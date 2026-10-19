@@ -1054,7 +1054,9 @@ class OpenXrClient : private OpenXrDispatch
             }
             if (crop.active)
                 for (uint32_t eye = 0; eye < 2; ++eye) views[eye].fov = fovcrop::apply(views[eye].fov, crop.rect[eye]);
-            if (symmetricFov) for(uint32_t eye=0;eye<2;++eye) {
+            if (symmetricFov) {
+             std::array<XrFovf,2> runtimes{views[0].fov,views[1].fov},renders{};
+             for(uint32_t eye=0;eye<2;++eye) {
                 const auto runtime=views[eye].fov;
                 XrFovf render{};
                 if(cantedFov){   // turned toward the middle of the runtime's field (cantedEnvelope); pose and fov together
@@ -1065,6 +1067,22 @@ class OpenXrClient : private OpenXrDispatch
                     views[eye].pose.orientation=normalized(multiply(views[eye].pose.orientation,turned.turn));
                     render=turned.fov;
                 }else render=symmetricEnvelope(runtime);
+                renders[eye]=render;
+             }
+             // One field for both eyes (2026-10-20, the user's 10-19 report "the trees change their detail a step apart in the
+             // two eyes"): each eye's symmetric field differs a little (the user's headset: 0.8920 / 0.9037 and 0.8955 / 0.8992 rad
+             // across / up, the Mock 0.9585 / 0.9251 and 0.9503 / 0.9332), and what the game sizes by the picture - the detail of
+             // a model by its size on the screen (guess) - then changes at another distance in each eye. Both eyes take the
+             // larger angle of each direction: the lenses' areas stay inside, a little under 1 % more field in one direction.
+             // EVR_EQUAL_EYE_FOV=0: each eye its own as before.
+             static const bool equalFov=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_EQUAL_EYE_FOV",v,sizeof v);return !(n==1&&v[0]=='0');}();
+             if(equalFov){
+                const float side=std::max({std::abs(renders[0].angleLeft),renders[0].angleRight,std::abs(renders[1].angleLeft),renders[1].angleRight});
+                const float up=std::max({renders[0].angleUp,std::abs(renders[0].angleDown),renders[1].angleUp,std::abs(renders[1].angleDown)});
+                for(auto& r:renders){r.angleLeft=-side;r.angleRight=side;r.angleUp=up;r.angleDown=-up;}
+             }
+             for(uint32_t eye=0;eye<2;++eye) {
+                const auto runtime=runtimes[eye];const auto render=renders[eye];
                 views[eye].fov=render; // same snapshot reaches game cameras and xrEndFrame
                 if(frames<=3||frames%300==0){
                     const auto a=fovcrop::fromFov(runtime),b=fovcrop::fromFov(render);
@@ -1073,8 +1091,9 @@ class OpenXrClient : private OpenXrDispatch
                      <<",\"render_fov\":["<<render.angleLeft<<','<<render.angleRight<<','<<render.angleUp<<','<<render.angleDown<<']'
                      <<",\"pixel_density_ratio\":["<<a.width()/b.width()<<','<<a.height()/b.height()
                      <<"],\"pose_unchanged\":"<<(cantedFov?"false":"true")<<",\"extent\":["<<targets[eye].width<<','<<targets[eye].height<<']';
-                    log.event("symmetric_render_fov",f.str());
+                    log.event("symmetric_render_fov",f.str()+",\"equal_fov\":"+(equalFov?"true":"false"));
                 }
+             }
             }
             if (prepare)
                 prepare(views, vs, headLocation, fs.predictedDisplayTime, frames);

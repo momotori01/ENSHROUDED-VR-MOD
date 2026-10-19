@@ -162,5 +162,11 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   f.sequence=300;ck(flood.heard(5,f,101.0)&&flood.find(5)->ignored==50);
   ReceiverSettings few;few.mostPerSecond=2;Peers tight;tight.list({6},0);Received g{b,1,false,{0,0,0}};
   ck(tight.heard(6,g,0,few));g.sequence=2;ck(tight.heard(6,g,.1,few));g.sequence=3;ck(!tight.heard(6,g,.2,few)&&tight.find(6)->heard==.1);g.sequence=4;ck(tight.heard(6,g,1.0,few));}
+ // Actions (2026-10-20): a cast's strength, 7 bytes; not a body datagram, and a body datagram is no action.
+ {const auto c=encodeCast(513,.75f);ck(c.size()==castActionBytes&&c[0]==actionMagic);const auto a=decodeAction(c.data(),c.size());
+  ck(a&&a->kind==castAction&&a->id==513&&std::abs(a->strength-.75f)<1e-4f);ck(!decode(c.data(),c.size()));
+  ck(!decodeAction(c.data(),c.size()-1));auto bad=c;bad[1]=2;ck(!decodeAction(bad.data(),bad.size()));bad=c;bad[2]=9;ck(!decodeAction(bad.data(),bad.size()));
+  const auto low=decodeAction(encodeCast(1,-3.f).data(),castActionBytes);ck(low&&low->strength==0);
+  const auto body=encodeHello(4);ck(!decodeAction(body.data(),body.size()));}
  std::cout<<"player_sync "<<n<<" PASS\n";return 0;}
  catch(const std::exception& e){std::cerr<<"player_sync FAIL "<<e.what()<<"\n";return 1;}}

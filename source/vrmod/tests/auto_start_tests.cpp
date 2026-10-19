@@ -15,9 +15,11 @@ int main(int argc,char** argv){try{unsigned n=0;
  // A VR start: antiAliasing Dlss and the chosen mode; everything else stays byte for byte; the record holds what stood there.
  {std::string out,reason;RenderRecord r;ck(applyVr(json,"Quality",nullptr,out,r,reason));
   ck(out.size()==json.size()-1&&out.find("\"antiAliasing\": \"Dlss\"")!=std::string::npos&&out.find("\"dlss\": \"Quality\"")!=std::string::npos&&out.find("\"fsr3\": \"Quality\"")!=std::string::npos);
-  ck(r.changes.size()==2&&r.changes[0].name=="antiAliasing"&&r.changes[0].original=="Fsr3"&&r.changes[0].applied=="Dlss"&&r.changes[1].original=="Balanced"&&r.changes[1].applied=="Quality");
+  ck(r.changes.size()==3&&r.changes[0].name=="antiAliasing"&&r.changes[0].original=="Fsr3"&&r.changes[0].applied=="Dlss"&&r.changes[1].original=="Balanced"&&r.changes[1].applied=="Quality");
+  // FSR 3 (a graphics card without DLSS) at the same scale.
+  ck(r.changes[2].name=="fsr3"&&r.changes[2].original=="Quality"&&r.changes[2].applied=="Quality");
   // The record as a file and back.
-  RenderRecord parsed;ck(parseRecord(recordText(r),parsed)&&parsed.changes.size()==2&&parsed.changes[1].name=="dlss"&&parsed.changes[1].original=="Balanced");
+  RenderRecord parsed;ck(parseRecord(recordText(r),parsed)&&parsed.changes.size()==3&&parsed.changes[1].name=="dlss"&&parsed.changes[1].original=="Balanced");
   ck(!parseRecord("",parsed)&&!parseRecord("EVR_RENDER_SETTINGS_2\r\n",parsed)&&!parseRecord("EVR_RENDER_SETTINGS_1\r\ndlss only\r\n",parsed)&&!parseRecord("EVR_RENDER_SETTINGS_1\r\nd\"x a b\r\n",parsed));
   // Put back: the file is the one from before, byte for byte.
   std::vector<std::string> names;ck(restore(out,r,&names)==json&&names.size()==2);
@@ -25,18 +27,23 @@ int main(int argc,char** argv){try{unsigned n=0;
   auto changed=out;const auto at=changed.find("\"dlss\": \"Quality\"");changed.replace(at,17,"\"dlss\": \"Performance\"");names.clear();
   const auto back=restore(changed,r,&names);ck(names==std::vector<std::string>{"antiAliasing"}&&back.find("\"antiAliasing\": \"Fsr3\"")!=std::string::npos&&back.find("\"dlss\": \"Performance\"")!=std::string::npos);
   // A second VR start before anything was put back keeps the first start's originals; another mode is written.
-  std::string again;RenderRecord second;ck(applyVr(out,"Performance",&r,again,second,reason)&&second.changes[0].original=="Fsr3"&&second.changes[0].applied=="Dlss"&&second.changes[1].original=="Balanced"&&second.changes[1].applied=="Performance");
+  std::string again;RenderRecord second;ck(applyVr(out,"Performance",&r,again,second,reason)&&second.changes[0].original=="Fsr3"&&second.changes[0].applied=="Dlss"&&second.changes[1].original=="Balanced"&&second.changes[1].applied=="Performance"&&
+   second.changes[2].original=="Quality"&&second.changes[2].applied=="Performance"&&again.find("\"fsr3\": \"Performance\"")!=std::string::npos);
   ck(restore(again,second)==json);
   // The same start again changes nothing.
   std::string same;RenderRecord third;ck(applyVr(out,"Quality",&r,same,third,reason)&&same==out&&third.changes[1].original=="Balanced");}
  // DLAA is an antiAliasing value; the player's upscaling mode is left.
- {std::string out,reason;RenderRecord r;ck(applyVr(json,"Dlaa",nullptr,out,r,reason)&&out.find("\"antiAliasing\": \"Dlaa\"")!=std::string::npos&&out.find("\"dlss\": \"Balanced\"")!=std::string::npos&&restore(out,r)==json);
+ {std::string out,reason;RenderRecord r;ck(applyVr(json,"Dlaa",nullptr,out,r,reason)&&out.find("\"antiAliasing\": \"Dlaa\"")!=std::string::npos&&out.find("\"dlss\": \"Balanced\"")!=std::string::npos&&out.find("\"fsr3\": \"Native\"")!=std::string::npos&&restore(out,r)==json);
+  // DLSS Balanced is FSR 3 Balance; a settings file without fsr3 is changed as before.
+  {std::string o,why;RenderRecord rec;ck(applyVr(json,"Balanced",nullptr,o,rec,why)&&o.find("\"fsr3\": \"Balance\"")!=std::string::npos&&restore(o,rec)==json);
+   const std::string noFsr=json.substr(0,json.find("      \"fsr3\""))+json.substr(json.find("      \"shadows\""));
+   ck(applyVr(noFsr,"Performance",nullptr,o,rec,why)&&rec.changes.size()==2&&restore(o,rec)==noFsr);}
   ck(!applyVr("{}","Quality",nullptr,out,r,reason)&&!reason.empty()&&out=="{}");
   // The GI quality of a VR start (2026-10-15): put with the others, recorded, Keep leaves it, a missing field refuses.
   const std::string gi=json.substr(0,json.find("\"shadows\""))+"\"dynamicGi\": \"Performance\",\r\n      "+json.substr(json.find("\"shadows\""));
-  {std::string o,why;RenderRecord rec;ck(applyVr(gi,"Quality",nullptr,o,rec,why,"High")&&o.find("\"dynamicGi\": \"High\"")!=std::string::npos&&rec.changes.size()==3&&rec.changes[2].name=="dynamicGi"&&rec.changes[2].original=="Performance");
+  {std::string o,why;RenderRecord rec;ck(applyVr(gi,"Quality",nullptr,o,rec,why,"High")&&o.find("\"dynamicGi\": \"High\"")!=std::string::npos&&rec.changes.size()==4&&rec.changes[3].name=="dynamicGi"&&rec.changes[3].original=="Performance");
    const auto back=restore(o,rec);ck(back==gi);
-   std::string k,whyK;RenderRecord keep;ck(applyVr(gi,"Quality",nullptr,k,keep,whyK,"Keep")&&keep.changes.size()==2&&k.find("\"dynamicGi\": \"Performance\"")!=std::string::npos);
+   std::string k,whyK;RenderRecord keep;ck(applyVr(gi,"Quality",nullptr,k,keep,whyK,"Keep")&&keep.changes.size()==3&&k.find("\"dynamicGi\": \"Performance\"")!=std::string::npos);
    std::string m,whyM;RenderRecord missing;ck(!applyVr(json,"Quality",nullptr,m,missing,whyM,"High")&&!whyM.empty());}
   ck(!applyVr("{\"antiAliasing\": \"a b\",\"dlss\": \"Quality\"}","Quality",nullptr,out,r,reason));}
  // The environment of a VR start: the layer and the loader come from the package, the logs go to this start's folder.

@@ -42,7 +42,7 @@ The program next to enshrouded.exe holds the settings that cannot be changed in 
 | Update | Shows the installed and the newest version. **Update now** installs the newest release. |
 | Play mode | **VR**: play with the headset. **Normal**: play on your monitor without VR. Other VR players' movements show in both. |
 | Picture size (VR) | Low 0.7 (faster) / Normal 0.8 / High 1.0 (sharper, slower) |
-| DLSS (VR) | Quality / Balanced / Performance / DLAA (sharpest, slower) |
+| DLSS / FSR3 (VR) | Quality / Balanced / Performance / DLAA (sharpest, slower). Cards without DLSS (AMD) use FSR 3 at the same scale (DLAA: FSR 3 Native). |
 | Sharpening (VR) | Off / Soft 0.2 / Strong 0.5 |
 | Frame mode (VR) | Both eyes every frame (normal), or one eye a frame (a test for more FPS) |
 | Problem report | **Make zip**: the mod's logs, its settings and the game's log in one zip next to the program, to send with a description. It also finishes a VR bug report that a crash cut short. |
@@ -95,6 +95,7 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 - **Reel in:** hold the trigger.
 - **Hook, reel in, land:** instead of the trigger you can **flick the rod upward** (nearly straight up). The flick is ignored while you fight the fish.
 - **Fight:** when the fish pulls to one side, lean the rod tip to the other side (the same as A / D on keyboard). The controller pulses while you are tiring the fish.
+- **Landing:** when the fish is tired, click (the trigger or a flick). If you are still holding the trigger then, the mod clicks for you - keep holding to land it.
 - **The catch:** when the fish is landed, you hold it in your left hand the way the game holds it. Other players with the mod see it in your hand too - show it off.
 
 ## Other controls
@@ -105,6 +106,8 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 - Right stick down: dodge
 - Right A: jump
 - Right B: short press to interact (pick up, open, examine)
+- Left trigger: interact, for as long as you hold it (pick up, open, revive) - pull it all the way; a resting finger does nothing
+- **Revive a fallen player:** go to them and hold the left trigger (or hold right B within 3 m of them).
 - **Sneak:** crouch in real life. Switch it on or off and set how deep you must crouch in the in-game "VR settings".
 
 ### HUD
@@ -134,7 +137,7 @@ For details, see EnshroudedVR\README.txt in the package.
 
 ## Requirements
 - The game version the package is made for (EnshroudedVR\version.txt). When the game is updated, the mod switches itself off and the game runs without it until a new package is out.
-- An NVIDIA graphics card that supports DLSS
+- A graphics card that runs the game well in VR: NVIDIA cards use DLSS; AMD cards use FSR 3 at the same scale
 - An OpenXR runtime (tested with SteamVR)
 
 ## Known issues

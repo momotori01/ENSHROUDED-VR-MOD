@@ -44,10 +44,11 @@ inline void fishing(uintptr_t world,uint32_t local,uint64_t now){
   const auto state=read<uint8_t>(fishing);const auto floatId=read<uint32_t>(fishing+48);if(floatId)controllerUiFixture::fishingFloatMs=now;
   controllerUiFixture::fishingState=int(state);controllerUiFixture::fishingStateMs=now;
   {const auto fish=read<uint32_t>(fishing+0x34);static uint32_t toldFish=0;controllerUiFixture::fishingFishId=fish;
+   if(fish&&state>=22&&state<=30)attachmentObserver::markFishFighting(fish,now);   // its swim tells its head (motion_body_ik.hpp holdFish)
    if(fish!=toldFish){toldFish=fish;logFile->event("fishing_fish_entity","\"frame\":"+std::to_string(liveFrame.frame)+",\"state\":"+std::to_string(unsigned(state))+",\"fish\":"+std::to_string(fish));}}
   static int lastState=-1;static uint32_t lastFloat=0;static unsigned fishingEvents=0;
   if((int(state)!=lastState||floatId!=lastFloat)&&fishingEvents<300){lastState=int(state);lastFloat=floatId;++fishingEvents;
-   logFile->event("fishing_state","\"frame\":"+std::to_string(liveFrame.frame)+",\"state\":"+std::to_string(unsigned(state))+",\"float\":"+std::to_string(floatId)+",\"charge\":"+std::to_string(read<float>(fishing+20))+",\"read_only\":true");}
+   logFile->event("fishing_state","\"frame\":"+std::to_string(liveFrame.frame)+",\"state\":"+std::to_string(unsigned(state))+",\"float\":"+std::to_string(floatId)+",\"charge\":"+std::to_string(read<float>(fishing+20))+",\"last_error\":"+std::to_string(unsigned(read<uint8_t>(fishing+1)))+",\"read_only\":true");}
   // The fight (2026-10-19, user after the headset run of 17:52: "cannot catch one - was the input toward the fish not
   // given? I cannot tell a mistake of mine from a bug"; every fight there went Outbreak 29 -> ReelIn 32, never FinalHook
   // 30). The game's own view of it (1.0 reflection, tools/reflection_struct_diff.py): +0x1 lastError

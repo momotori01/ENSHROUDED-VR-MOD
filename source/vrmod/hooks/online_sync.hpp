@@ -16,7 +16,7 @@ namespace onlineSync {
 inline bool requested=false,selfTest=false;
 inline sync::Peers peers;inline uint16_t sequence=0;
 inline double listedAt=-1e18,lastBodyAt=-1e18,statsAt=0;inline sync::Place lastPlace{};inline bool placed=false;
-inline uint64_t refused=0,notCounted=0,drivenFrames=0,ownDrivenFrames=0,bodiesSent=0,hellosSent=0;inline unsigned logs=0;inline size_t listedCount=SIZE_MAX;
+inline uint64_t refused=0,notCounted=0,drivenFrames=0,ownDrivenFrames=0,bodiesSent=0,hellosSent=0;inline unsigned logs=0;inline unsigned unboundLogs=0;inline size_t listedCount=SIZE_MAX;
 // The mod without VR (view_resource_probe.cpp onlineFlat): there is no body to send, but where the own character
 // stands goes out once a second, so that VR players near know a player with the mod is there and send theirs.
 inline bool flat=false,flatPlaced=false;inline sync::Place flatPlace{};
@@ -40,7 +40,7 @@ struct Character {uint32_t entity=0;std::array<uint32_t,24> handles{};std::array
 // The sent items about the driven character: hand socket (world-oriented, about the character) and the item in it
 // -> the item's world transform (position Q32 from the character's root, orientation), one per attachment slot.
 inline unsigned itemsPublished=0;
-inline void publishItems(uint32_t entity,const sync::Body& body){
+inline void publishItems(uint32_t entity,const sync::Body& body,const sync::Body* newest=nullptr){
     const auto found=remoteBody::bodies.find(entity);if(found==remoteBody::bodies.end())return;const auto& root=found->second.root;
     const auto now=GetTickCount64();
     const auto put=[&](unsigned hand,const Pose& inHand,std::initializer_list<uint8_t> slots){
@@ -49,7 +49,16 @@ inline void publishItems(uint32_t entity,const sync::Body& body){
         WorldPositionQ32 q{root.x+int64_t(double(world.position.x)*4294967296.),root.y+int64_t(double(world.position.y)*4294967296.),root.z+int64_t(double(world.position.z)*4294967296.)};
         const auto o=normalized(world.orientation);std::memcpy(r.transform.data(),&q,24);std::memcpy(r.transform.data()+24,&o,16);
         for(const auto slot:slots){r.slot=slot;attachmentObserver::publishRemoteItem(r);}++itemsPublished;};
-    if(body.item)put(1,body.itemInHand,{8});
+    if(body.item){put(1,body.itemInHand,{8});
+        // The same weapon for the server's sweep of this player's strokes (sequence_collider_observer.hpp remoteMelee).
+        // As it came (2026-10-20): the stepping toward the newest (a fifth each 20 ms) leaves a fast stroke some 80 ms behind
+        // the real blade; what is drawn keeps the stepping, the sweep takes the newest datagram's hand and weapon.
+        const auto& hit=newest&&newest->ik&&newest->item?*newest:body;
+        const auto world=sync::fromHand(hit.hand[1],hit.itemInHand);
+        if(finite(world.position)&&length(world.position)<=4.f){
+            const WorldPositionQ32 q{root.x+int64_t(double(world.position.x)*4294967296.),root.y+int64_t(double(world.position.y)*4294967296.),root.z+int64_t(double(world.position.z)*4294967296.)};
+            const auto o=normalized(world.orientation);std::array<uint8_t,40> t{};std::memcpy(t.data(),&q,24);std::memcpy(t.data()+24,&o,16);
+            remoteMelee::publishWeapon(entity,root,t,now);}}
     if(body.offhandItem)put(0,body.offhandInHand,{9,12});
 }
 inline bool placeOf(const std::array<uint32_t,24>& handles,std::array<double,3>& at){
@@ -71,6 +80,28 @@ inline std::vector<Character> characters(uint32_t local){
     out.erase(std::remove_if(out.begin(),out.end(),[](Character& c){return !placeOf(c.handles,c.at);}),out.end());
     return out;
 }
+// Actions of the other players' mods (include/evr/player_sync.hpp sync::Action): each id once per sender.
+inline std::map<uint64_t,std::array<uint16_t,8>> actionsSeen;inline uint64_t actionsHeard=0,actionsRefused=0,actionsSent=0;
+inline void action(uint64_t from,const uint8_t* data,size_t size){
+    const auto a=sync::decodeAction(data,size);if(!a){++actionsRefused;return;}
+    auto& seen=actionsSeen[from];const uint16_t key=uint16_t(a->id^(uint16_t(a->kind)<<12));
+    if(std::find(seen.begin(),seen.end(),key)!=seen.end())return;
+    std::rotate(seen.rbegin(),seen.rbegin()+1,seen.rend());seen[0]=key;++actionsHeard;
+    if(a->kind==sync::castAction){fishingCharge::peerCast(from,a->strength);
+        if(logs++<200)logFile->event("online_sync_cast_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"strength\":"+std::to_string(a->strength));}
+}
+// This player's casts out to every listed player: the strength of the swing at the trigger's release (0 without a
+// swing), three frames in a row (a datagram may be lost; the receiver takes the id once).
+inline uint64_t castSeen=0;inline uint16_t castId=0;inline unsigned castRepeats=0;inline float castStrength=0;
+inline void sendCasts(){
+    const auto tap=controllerUiFixture::castTapAt.load();
+    if(tap&&tap!=castSeen){castSeen=tap;++castId;castRepeats=3;
+        controllerUiFixture::FishingSwing swing;{std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);swing=controllerUiFixture::fishingSwing;}
+        const auto now=GetTickCount64();castStrength=swing.serial&&swing.until>now?swing.strength:0.f;}
+    if(!castRepeats)return;--castRepeats;
+    const auto bytes=sync::encodeCast(castId,castStrength);
+    for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,bytes))++actionsSent;
+}
 inline void frame(uint64_t renderSerial) noexcept {
     if(!requested)return;
     try{
@@ -83,9 +114,11 @@ inline void frame(uint64_t renderSerial) noexcept {
             if(ids.size()!=listedCount){listedCount=ids.size();std::string tails;for(const auto id:ids)tails+=std::string(tails.empty()?"":",")+"\""+steamLink::tail(id)+"\"";
                 if(logs++<200)logFile->event("online_sync_players","\"listed\":"+std::to_string(ids.size())+",\"players\":["+tails+"],\"friends_in_this_game_and_lobby_members_only\":true");}}
         steamLink::receive([&](uint64_t from,const uint8_t* data,size_t size){
+            if(size&&data&&data[0]==sync::actionMagic){action(from,data,size);return;}
             const auto r=sync::decode(data,size);if(!r){++refused;return;}
             if(!peers.heard(from,*r,now))++notCounted;
             else if(!r->roster.empty()){++rostersHeard;for(const auto id:r->roster)if(id!=steamLink::self){if(!learned.count(id)){++learnedTotal;if(logs++<200)logFile->event("online_sync_learned","\"player\":\""+steamLink::tail(id)+"\",\"from\":\""+steamLink::tail(from)+"\"");}learned[id]=now;}}});
+        sendCasts();
         // Out: the body of this frame; for a second after it stopped (the view left first person, the hands are gone)
         // "the IK is paused", so that the others let go of the body at once; a hello otherwise.
         const auto& mine=motionBodyIk::published;const bool have=mine.have&&mine.serial==renderSerial;
@@ -122,19 +155,27 @@ inline void frame(uint64_t renderSerial) noexcept {
             const auto local=rootCamera::snapshot().entity;const auto list=characters(local);
             std::vector<std::array<double,3>> at;for(const auto& c:list)at.push_back(c.at);
             std::vector<char> taken(list.size(),0);
+            // Why a player's character was let go (2026-10-20: in the first session with a VR guest both players' bodies were
+            // let go and bound again once a second for twenty seconds, 1.1 to 2.0 m from the sent place; the logs did not say why).
+            const auto unbound=[&](const sync::Peers::Peer& p,const char* why,double metres){
+                if(p.character<0||unboundLogs>=300)return;++unboundLogs;
+                logFile->event("online_sync_unbound","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(p.character)+",\"reason\":\""+why+"\",\"metres_from_the_sent_place\":"+std::to_string(metres)+
+                    ",\"characters_seen\":"+std::to_string(list.size())+",\"since_heard_s\":"+std::to_string(now-p.heard));};
             for(auto& p:peers.all()){
                 const auto body=p.receiver.update(now);
-                if(!body||!body->ik||!p.placed){p.character=-1;continue;}
+                if(!body||!body->ik||!p.placed){unbound(p,!body?"no_body":!body->ik?"ik_paused":"no_place",-1);p.character=-1;continue;}
                 int previous=-1;for(size_t i=0;i<list.size();i++)if(int64_t(list[i].entity)==p.character)previous=int(i);
                 const int index=sync::boundCharacter(previous,sync::metres(p.place),at);
-                if(index<0||taken[size_t(index)]){p.character=-1;continue;}
+                if(index<0||taken[size_t(index)]){unbound(p,index<0?(previous<0?"character_not_seen":"farther_than_6m"):"taken",previous>=0?sync::distance(sync::metres(p.place),at[size_t(previous)]):-1);p.character=-1;continue;}
                 const auto& c=list[size_t(index)];taken[size_t(index)]=1;
                 if(p.character!=int64_t(c.entity)&&logs++<200)logFile->event("online_sync_character","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(c.entity)+",\"own_character\":"+(c.own?"true":"false")+
                     ",\"metres_from_the_sent_place\":"+std::to_string(sync::distance(sync::metres(p.place),c.at))+",\"characters_seen\":"+std::to_string(list.size()));
                 p.character=c.entity;
-                if(remoteBody::drive(c.entity,c.handles,c.own,*body,renderSerial)){++drivenFrames;
+                const bool drove=remoteBody::drive(c.entity,c.handles,c.own,*body,renderSerial);
+                if(!drove&&unboundLogs<300){++unboundLogs;logFile->event("online_sync_unbound","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(c.entity)+",\"reason\":\"drive_failed\",\"metres_from_the_sent_place\":"+std::to_string(sync::distance(sync::metres(p.place),c.at)));}
+                if(drove){++drivenFrames;
                     if(c.own){++ownDrivenFrames;motionBodyIk::ready=true;motionBodyIk::serial=renderSerial;}
-                    publishItems(c.entity,*body);}
+                    publishItems(c.entity,*body,&p.receiver.newest());}
             }
             remoteBody::releaseOthers(renderSerial,"no body for the character");
         }
@@ -142,7 +183,7 @@ inline void frame(uint64_t renderSerial) noexcept {
             if(logs++<2000)logFile->event("online_sync_stats","\"frame\":"+std::to_string(liveFrame.frame)+",\"listed\":"+std::to_string(peers.all().size())+",\"heard_from\":"+std::to_string(heard)+",\"with_a_character\":"+std::to_string(bound)+
                 ",\"bodies_sent\":"+std::to_string(bodiesSent)+",\"hellos_sent\":"+std::to_string(hellosSent)+",\"sent_bytes\":"+std::to_string(steamLink::sentBytes.load())+",\"send_failures\":"+std::to_string(steamLink::sendFailures.load())+
                 ",\"last_send_result\":"+std::to_string(steamLink::lastSendResult)+",\"received\":"+std::to_string(steamLink::received.load())+",\"received_bytes\":"+std::to_string(steamLink::receivedBytes.load())+
-                ",\"refused\":"+std::to_string(refused)+",\"not_counted\":"+std::to_string(notCounted)+",\"driven_frames\":"+std::to_string(drivenFrames)+",\"own_driven_frames\":"+std::to_string(ownDrivenFrames)+
+                ",\"refused\":"+std::to_string(refused)+",\"actions_heard\":"+std::to_string(actionsHeard)+",\"actions_refused\":"+std::to_string(actionsRefused)+",\"actions_sent\":"+std::to_string(actionsSent)+",\"not_counted\":"+std::to_string(notCounted)+",\"driven_frames\":"+std::to_string(drivenFrames)+",\"own_driven_frames\":"+std::to_string(ownDrivenFrames)+
                 ",\"rosters_sent\":"+std::to_string(rostersSent)+",\"rosters_heard\":"+std::to_string(rostersHeard)+",\"learned\":"+std::to_string(learned.size())+",\"game_peers\":"+std::to_string(steamLink::gamePeersWithin(10000).size())+",\"game_messages_seen\":"+std::to_string(steamLink::peerMessages.load())+
                 ",\"items_published\":"+std::to_string(itemsPublished)+",\"item_writes\":"+std::to_string(attachmentObserver::remoteItemWrites.load())+",\"item_rejected\":"+std::to_string(attachmentObserver::remoteItemRejected.load())+",\"item_stale\":"+std::to_string(attachmentObserver::remoteItemStale.load()));}
     }catch(const std::exception& e){if(logs++<2000)try{logFile->event("online_sync_failure","\"reason\":"+jsonString(e.what()));}catch(...){}}
