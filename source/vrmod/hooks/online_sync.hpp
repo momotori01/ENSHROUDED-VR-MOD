@@ -165,8 +165,14 @@ inline void frame(uint64_t renderSerial) noexcept {
                 const auto body=p.receiver.update(now);
                 if(!body||!body->ik||!p.placed){unbound(p,!body?"no_body":!body->ik?"ik_paused":"no_place",-1);p.character=-1;continue;}
                 int previous=-1;for(size_t i=0;i<list.size();i++)if(int64_t(list[i].entity)==p.character)previous=int(i);
-                const int index=sync::boundCharacter(previous,sync::metres(p.place),at);
-                if(index<0||taken[size_t(index)]){unbound(p,index<0?(previous<0?"character_not_seen":"farther_than_6m"):"taken",previous>=0?sync::distance(sync::metres(p.place),at[size_t(previous)]):-1);p.character=-1;continue;}
+                // A bound character stays bound farther from the sent place the older that place is (2026-10-20: in the first
+                // session with a VR guest both players sent each other a datagram a second for twenty seconds - out of each
+                // other's sight - and each body was let go about 0.5 s after every datagram and bound again with the next,
+                // 1.6..2.0 m from the fresh place: the character ran on more than 6 m from a place a second old, guess).
+                // 6 m, and 15 m for each second since that player was last heard from.
+                const double keep=6+15*std::clamp(now-p.heard,0.,4.);
+                const int index=sync::boundCharacter(previous,sync::metres(p.place),at,3,1,keep);
+                if(index<0||taken[size_t(index)]){unbound(p,index<0?(previous<0?"character_not_seen":"farther_than_the_kept_distance"):"taken",previous>=0?sync::distance(sync::metres(p.place),at[size_t(previous)]):-1);p.character=-1;continue;}
                 const auto& c=list[size_t(index)];taken[size_t(index)]=1;
                 if(p.character!=int64_t(c.entity)&&logs++<200)logFile->event("online_sync_character","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(c.entity)+",\"own_character\":"+(c.own?"true":"false")+
                     ",\"metres_from_the_sent_place\":"+std::to_string(sync::distance(sync::metres(p.place),c.at))+",\"characters_seen\":"+std::to_string(list.size()));
