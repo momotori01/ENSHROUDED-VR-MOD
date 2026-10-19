@@ -157,7 +157,7 @@ inline void fogPrepare(Device& d){
     // behindSearch (constant 1, 2026-10-18 18:40): how many cells beside a cell the first eye cannot see are searched for
     // its fog at the same depth (the clear sword-shaped patch in the right eye's sky); EVR_FOG_BEHIND_SEARCH=<0..64>, 0 = 15:40.
     static const std::array<uint32_t,4> fogSpec=[]{const char* v=std::getenv("EVR_FOG_KEEP_OWN");const char* b=std::getenv("EVR_FOG_BEHIND_SEARCH");const char* m=std::getenv("EVR_FOG_MARK");const char* r=std::getenv("EVR_FOG_STRICT");
-        const int n=b?std::atoi(b):16;return std::array<uint32_t,4>{uint32_t(v&&!std::strcmp(v,"1")?1:0),uint32_t(n<0?0:n>64?64:n),uint32_t(m&&!std::strcmp(m,"1")?1:0),uint32_t(r&&!std::strcmp(r,"0")?0:1)};}();
+        const int n=b?std::atoi(b):16;return std::array<uint32_t,4>{uint32_t(v&&!std::strcmp(v,"1")?1:0),uint32_t(n<0?0:n>64?64:n),uint32_t(m&&!std::strcmp(m,"1")?1:0),uint32_t(r&&(r[0]=='0'||r[0]=='1')&&!r[1]?r[0]-'0':2)};}();
     const uint32_t keepOwn=fogSpec[0];
     const VkSpecializationMapEntry fogEntries[4]{{0,0,sizeof(uint32_t)},{1,sizeof(uint32_t),sizeof(uint32_t)},{2,2*sizeof(uint32_t),sizeof(uint32_t)},{3,3*sizeof(uint32_t),sizeof(uint32_t)}};
     VkSpecializationInfo spec{4,fogEntries,sizeof fogSpec,fogSpec.data()};

@@ -502,7 +502,7 @@ int main(int argc,char** argv) {
                 // tagged. Never present them as tightly packed float components.
                 const bool packed=t.format.type==ResourceFormatType::R10G10B10A2||t.format.type==ResourceFormatType::R9G9B9E5;
                 const uint64_t expected=uint64_t(t.width)*t.height*t.depth*(packed?4:t.format.compCount*t.format.compByteWidth);
-                if((t.format.type!=ResourceFormatType::Regular&&!packed)||!expected||expected>64*1024*1024||t.depth>512||t.msSamp>1)
+                if((t.format.type!=ResourceFormatType::Regular&&!packed)||!expected||expected>128*1024*1024||t.depth>512||t.msSamp>1)
                     throw std::runtime_error("unsupported texture format or diagnostic byte budget");
                 controller.p->SetFrameEvent(event,true);
                 const auto data=controller.p->GetTextureData(t.resourceId,{0,slice,0});

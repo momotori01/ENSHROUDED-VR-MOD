@@ -99,9 +99,13 @@ struct Context {
     // the particles' draws - one for each of the six [1,1,1] dispatches that make their arguments (RenderDoc
     // game-20261016-191223, 6517..6633 / 9882..9998). The bridge lends only +0xb60; the flame of the staff counts in
     // another one. The other five are lent here from the bindings to the end of the eye's frame.
-    std::array<uint32_t,6> ownVfxCounters{};unsigned lentVfxCounters=0;uintptr_t vfxCounterView=0;
+    // 2026-10-19: a seventh, View+0xb68, the count of the effects' fog volumes (116-byte boxes, the VFX renderer's list): the
+    // fog volume pass (8360 / 12598 in RenderDoc game-20261019-115549, its constant +0x1a0 = this counter's byte offset)
+    // read the eye's own, 0, against the owner's 5 - the haze of a cave lamp in the owner's eye only (Mock -122531 with the
+    // fog reprojection off; the user: "the fog's parallax is back"). EVR_FOG_VOLUME_COUNTER=0: not lent.
+    std::array<uint32_t,7> ownVfxCounters{};unsigned lentVfxCounters=0;uintptr_t vfxCounterView=0;
 };
-namespace vfxCounters {constexpr std::array<uintptr_t,6> at{0xb50,0xb54,0xb58,0xb5c,0xb60,0xb64};constexpr size_t bridged=4;}
+namespace vfxCounters {constexpr std::array<uintptr_t,7> at{0xb50,0xb54,0xb58,0xb5c,0xb60,0xb64,0xb68};constexpr size_t bridged=4,fogVolumes=6;}
 inline thread_local Context* current=nullptr;
 inline void fail(Context& c,const char* reason) noexcept {
     c.failed=true;
@@ -280,16 +284,17 @@ uint64_t __fastcall shadingBindings(void* a,void* view,void* b,void* c4,void* e,
              }
              // The other five counters of the block (Context::ownVfxCounters; EVR_VFX_COUNTERS_ALL=0: only +0xb60, as before).
              static const bool allCounters=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_VFX_COUNTERS_ALL",v,sizeof v);return !(n==1&&v[0]=='0');}();
+             static const bool fogVolumeCounter=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FOG_VOLUME_COUNTER",v,sizeof v);return !(n==1&&v[0]=='0');}();
              if(early&&allCounters&&!c.vfxCounterView){std::string values;
                  for(size_t i=0;i<vfxCounters::at.size();++i){
                      const auto own=read<uint32_t>(eyeView+vfxCounters::at[i]),owner=read<uint32_t>(sourceView+vfxCounters::at[i]);
                      values+=std::string(i?",":"")+"["+std::to_string(own)+","+std::to_string(owner)+"]";
-                     if(i==vfxCounters::bridged||!own||!owner||own==owner)continue;
+                     if(i==vfxCounters::bridged||(i==vfxCounters::fogVolumes&&!fogVolumeCounter)||!own||!owner||own==owner)continue;
                      c.ownVfxCounters[i]=own;c.lentVfxCounters|=1u<<i;std::memcpy(reinterpret_cast<void*>(eyeView+vfxCounters::at[i]),&owner,4);}
                  if(c.lentVfxCounters)c.vfxCounterView=eyeView;
                  static std::atomic<unsigned> told{0};
                  if(told.fetch_add(1)<4)logFile->event("shared_vfx_counters","\"serial\":"+std::to_string(pair.serial)+",\"eye\":"+std::to_string(c.eye)+
-                     ",\"own_owner_b50_to_b64\":["+values+"],\"lent_mask\":"+std::to_string(c.lentVfxCounters)+",\"b60_by_the_bridge\":true");}
+                     ",\"own_owner_b50_to_b68\":["+values+"],\"lent_mask\":"+std::to_string(c.lentVfxCounters)+",\"b60_by_the_bridge\":true");}
              if(early)vfxTransparent::observeEye(nullptr,pair,unsigned(c.eye));}
             // Diagnostic (2026-10-16): where else in the eye's View its own light and decal buffers are kept - the deferred
             // lighting bound the eye's own list although View+0x570 held the owner's until the next frame (EVR_LIGHT_LEND_LATE).
