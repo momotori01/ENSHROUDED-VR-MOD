@@ -156,11 +156,11 @@ inline void fogPrepare(Device& d){
     // surfaces and outside its view (until 2026-10-18 15:30); by default the first eye's fog is taken everywhere.
     // behindSearch (constant 1, 2026-10-18 18:40): how many cells beside a cell the first eye cannot see are searched for
     // its fog at the same depth (the clear sword-shaped patch in the right eye's sky); EVR_FOG_BEHIND_SEARCH=<0..64>, 0 = 15:40.
-    static const std::array<uint32_t,2> fogSpec=[]{const char* v=std::getenv("EVR_FOG_KEEP_OWN");const char* b=std::getenv("EVR_FOG_BEHIND_SEARCH");
-        const int n=b?std::atoi(b):16;return std::array<uint32_t,2>{uint32_t(v&&!std::strcmp(v,"1")?1:0),uint32_t(n<0?0:n>64?64:n)};}();
+    static const std::array<uint32_t,4> fogSpec=[]{const char* v=std::getenv("EVR_FOG_KEEP_OWN");const char* b=std::getenv("EVR_FOG_BEHIND_SEARCH");const char* m=std::getenv("EVR_FOG_MARK");const char* r=std::getenv("EVR_FOG_STRICT");
+        const int n=b?std::atoi(b):16;return std::array<uint32_t,4>{uint32_t(v&&!std::strcmp(v,"1")?1:0),uint32_t(n<0?0:n>64?64:n),uint32_t(m&&!std::strcmp(m,"1")?1:0),uint32_t(r&&!std::strcmp(r,"0")?0:1)};}();
     const uint32_t keepOwn=fogSpec[0];
-    const VkSpecializationMapEntry fogEntries[2]{{0,0,sizeof(uint32_t)},{1,sizeof(uint32_t),sizeof(uint32_t)}};
-    VkSpecializationInfo spec{2,fogEntries,sizeof fogSpec,fogSpec.data()};
+    const VkSpecializationMapEntry fogEntries[4]{{0,0,sizeof(uint32_t)},{1,sizeof(uint32_t),sizeof(uint32_t)},{2,2*sizeof(uint32_t),sizeof(uint32_t)},{3,3*sizeof(uint32_t),sizeof(uint32_t)}};
+    VkSpecializationInfo spec{4,fogEntries,sizeof fogSpec,fogSpec.data()};
     ci.stage.pSpecializationInfo=&spec;
     const auto r=d.vkCreateComputePipelines(d.handle,VK_NULL_HANDLE,1,&ci,nullptr,&d.fogPipeline);d.vkDestroyShaderModule(d.handle,module,nullptr);check(r,"fog pipeline");
     const VkDescriptorPoolSize sizes[5]{{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,ring*2},{VK_DESCRIPTOR_TYPE_SAMPLER,ring},{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,ring*3},
@@ -174,7 +174,7 @@ inline void fogPrepare(Device& d){
     sc.addressModeU=sc.addressModeV=sc.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;sc.maxLod=0.f;
     check(d.vkCreateSampler(d.handle,&sc,nullptr,&d.fogSampler),"fog sampler");
     d.fogReady=true;
-    say("fog_reproject_mode",std::string("\"keep_own\":")+(keepOwn?"true":"false")+",\"behind_search\":"+std::to_string(fogSpec[1]));
+    say("fog_reproject_mode",std::string("\"keep_own\":")+(keepOwn?"true":"false")+",\"behind_search\":"+std::to_string(fogSpec[1])+",\"mark_difference\":"+std::to_string(fogSpec[2])+",\"strict_reach\":"+std::to_string(fogSpec[3]));
 }
 // The layer's views of the game's fog volumes: R9G9B9E5 to sample the first eye's, R32_UINT to write the second eye's.
 inline VkImageView fogView(Device& d,std::unordered_map<VkImage,VkImageView>& cache,VkImage image,VkFormat format){

@@ -37,6 +37,15 @@ layout(constant_id = 0) const uint keepOwn = 0u;
 // the second eye sees past an object's right side), over which the first eye sees beyond the cell. None: as before, at its
 // farthest surface. 0: no search (15:40). EVR_FOG_BEHIND_SEARCH (layer/gi_reproject.hpp).
 layout(constant_id = 1) const uint behindSearch = 16u;
+// Diagnostic (2026-10-19, EVR_FOG_MARK=1): a cell both eyes see gets the first eye's fog plus 8 times its difference from this
+// eye's own - where the reprojection makes the second eye's fog differ, it glows.
+layout(constant_id = 2) const uint markDifference = 0u;
+// Strict (2026-10-19 morning; the default, EVR_FOG_STRICT=0 for the 05:05 form): a cell takes the first eye's fog only where
+// the first eye sees past what its linear read reaches - over two cells' width (6 x 6 samples) and beyond the next depth
+// slice. The read at the cell's centre blends neighbouring cells, and some were behind a surface the first eye sees (cells
+// it does not update, guess): the white puff left of a brazier in the right eye only (Mock sword-static: -094048 with it;
+// with EVR_FOG_MARK=1 the difference glowed there and nowhere else, -100323; strict, -100700 / -100918: gone).
+layout(constant_id = 3) const uint strictReach = 0u;
 
 // The farthest surface the first eye sees over a cell's footprint at uv (n x n samples; reversed depth, the smallest).
 float farthestSeen(vec2 uv, vec2 footprint, int n) {
@@ -119,13 +128,19 @@ void main() {
     // EVR_FOG_BEHIND_SEARCH (behindSearch) is no longer read here.
     vec2 footprint = kept.scale.zw / vec2(size.xy);   // the cell's size in the first eye's depth pixels
     float limit = ndc.z * 1.05 + 1e-7;               // reversed depth: the first eye sees beyond the cell where its depth <= limit
+    int samples = 4;float spread = 1.0;
+    if (strictReach != 0u) {
+        float far = (exp2(((float(p.z) + 1.5) / float(size.z)) / m10.z) - m10.y) / m10.x;   // the next slice's view depth
+        limit = ndc.z * viewDepth / max(far, viewDepth);   // reversed depth goes as 1 / distance
+        samples = 6;spread = 2.0;
+    }
     float beyond = 0.0;
-    for (int j = 0; j < 4; ++j) for (int i = 0; i < 4; ++i) {
-        vec2 o = (vec2(i, j) + 0.5) / 4.0 - 0.5;
+    for (int j = 0; j < samples; ++j) for (int i = 0; i < samples; ++i) {
+        vec2 o = ((vec2(i, j) + 0.5) / float(samples) - 0.5) * spread;
         ivec2 q = clamp(ivec2(uv * kept.scale.zw + o * footprint), ivec2(0), ivec2(kept.scale.zw) - 1);
         if (imageLoad(keptDepth, q).x <= limit) beyond += 1.0;
     }
-    beyond /= 16.0;
+    beyond /= float(samples * samples);
     if (keepOwn != 0u) { if (beyond < 1.0) return; } else take *= beyond;
     if (take <= 0.0) return;
     float sampleDepth = ndc.z;
@@ -140,6 +155,10 @@ void main() {
     }
     vec3 firstS = textureLod(sampler3D(firstScatter, linearClamp), at, 0.0).rgb;
     vec3 firstP = textureLod(sampler3D(firstPass, linearClamp), at, 0.0).rgb;
+    if (markDifference != 0u && take >= 1.0) {
+        firstS = max(firstS + 8.0 * (firstS - unpackE5(imageLoad(scatter, p).x)), vec3(0.0));
+        firstP = clamp(firstP + 8.0 * (firstP - unpackE5(imageLoad(through, p).x)), vec3(0.0), vec3(1.0));
+    }
     if (take < 1.0) {
         firstS = mix(unpackE5(imageLoad(scatter, p).x), firstS, take);
         firstP = mix(unpackE5(imageLoad(through, p).x), firstP, take);
