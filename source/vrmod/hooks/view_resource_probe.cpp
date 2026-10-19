@@ -2307,6 +2307,13 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
            read<uint64_t>(read<uintptr_t>(reinterpret_cast<uintptr_t>(context)+8)+0x18)!=pair->serial)finishPair();
         if(captureLiveFinal&&(!capturedLiveFinal||(captureOnRequest&&requestedCaptures<maxRequestedCaptures))&&pair&&!done.load()&&!captureOpen){
             bool trigger=!captureOnRequest&&pair->pairedFrames==configuredLiveFrames-1;
+            // Diagnostic (2026-10-20, the right eye's light square on a puddle, gone without the desktop refreshes):
+            // EVR_CAPTURE_ON_REFRESH=1 waits from that pair for the next frame that refreshes the original View (the same
+            // count as the desktop skip below; a fall-held refresh is not foreseen).
+            // =2: the frame after that refresh.
+            {static const char onRefresh=[]{char v[4]{};return GetEnvironmentVariableA("EVR_CAPTURE_ON_REFRESH",v,sizeof v)==1&&(v[0]=='1'||v[0]=='2')?v[0]:'0';}();
+                if(onRefresh!='0'&&!captureOnRequest)trigger=pair->pairedFrames+1>=configuredLiveFrames&&desktopSkipEvery&&desktopSkipCandidates&&
+                    !((desktopSkipCandidates+(onRefresh=='1'?1:0))%desktopSkipEvery);}
             if(captureOnRequest&&reinterpret_cast<uintptr_t>(view)==pair->originalView&&pair->pairedFrames>30&&pair->pairedFrames%15==0){
                 std::error_code ec;const auto request=calibrationDirectory/"world-capture.request";
                 trigger=std::filesystem::exists(request,ec)&&std::filesystem::remove(request,ec);
