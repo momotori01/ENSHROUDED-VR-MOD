@@ -49,6 +49,11 @@ inline std::atomic<uint64_t> provisionalAnchors{0};inline std::atomic<bool> requ
 // session is taken at once, so the first pair of eyes waits for the Views' warm-up only. The measuring goes on beside
 // it as before; what settles is written to the file for the next session, and does not change the running one.
 inline float knownHeight=0;inline bool knownHeightUsed=false,heightMeasured=false;inline std::wstring knownHeightFile;
+// No earlier height and no idle camera (2026-10-19, headset run 20261019-104950: a flame altar in hand at the world's
+// start keeps the altar's placing camera, 34, and the idle camera never comes - the eyes never started): after
+// defaultHeightAfterMs of first-person anchors outside the idle camera the usual 1.65 m is taken, as an earlier
+// session's height would be; the measuring goes on beside it and writes the file when it settles.
+constexpr float defaultHeight=1.65f;constexpr uint64_t defaultHeightAfterMs=15000;inline uint64_t firstProvisionalMs=0;
 inline void readKnownHeight(){
     wchar_t name[1024]{};const auto n=GetEnvironmentVariableW(L"EVR_KNOWN_HEIGHT_FILE",name,DWORD(std::size(name)));
     if(!n||n>=std::size(name))return;
@@ -237,6 +242,15 @@ inline game::StableAnchor anchor(const Sample& s){
         std::ostringstream out;out<<std::setprecision(9)<<"\"entity\":"<<s.entity<<",\"height\":"<<knownHeight<<",\"native_height_now\":"<<s.height<<",\"sample\":"<<s.number<<",\"camera_id\":"<<unsigned(s.cameraId)
             <<",\"from\":\"an earlier session's settled height\"";
         logFile->event("root_camera_known_height",out.str());
+    }
+    if(!calibratedEntity&&s.height>0&&!requireCalibrated.load()&&(!settlingEntity||settlingEntity==s.entity)){
+        if(!firstProvisionalMs)firstProvisionalMs=s.milliseconds?s.milliseconds:1;
+        else if(s.cameraId!=calibrationCameraId&&s.milliseconds>=firstProvisionalMs+defaultHeightAfterMs){
+            calibratedEntity=s.entity;calibratedHeight=defaultHeight;heightReady=true;knownHeightUsed=true;
+            std::ostringstream out;out<<std::setprecision(9)<<"\"entity\":"<<s.entity<<",\"height\":"<<defaultHeight<<",\"native_height_now\":"<<s.height<<",\"sample\":"<<s.number
+                <<",\"camera_id\":"<<unsigned(s.cameraId)<<",\"waited_ms\":"<<(s.milliseconds-firstProvisionalMs)<<",\"from\":\"the usual height (no idle camera)\"";
+            logFile->event("root_camera_default_height",out.str());
+        }
     }
     float height=calibratedHeight;
     if(knownHeightUsed&&!heightMeasured&&calibratedEntity==s.entity){

@@ -21,7 +21,7 @@ int main(){
  using P=game::CameraPresentation;
  check(game::cameraPresentation(25)==P::FirstPerson&&game::cameraPresentation(43)==P::FirstPerson&&game::cameraPresentation(44)==P::FirstPerson,"glider jump and falling remain first person");
  check(game::cameraPresentation(0)==P::NativeEvent&&game::cameraPresentation(30)==P::NativeEvent&&game::cameraPresentation(31)==P::NativeEvent,"entity camera dialogue and altar preserve native event camera");
- check(game::cameraPresentation(34)==P::NativeSpecial&&game::cameraPresentation(35)==P::NativeSpecial,"the altar's building cameras preserve special camera behavior");
+ check(game::cameraPresentation(34)==P::FirstPerson&&game::cameraPresentation(35)==P::FirstPerson,"placing a flame altar or an area prop is first-person play (2026-10-19: the headset jumped to the game's camera)");
  check(game::cameraPresentation(39)==P::FirstPerson&&game::cameraPresentation(40)==P::FirstPerson&&game::cameraPresentation(41)==P::FirstPerson&&
        game::cameraPresentation(42)==P::NativeEvent,"fishing is first-person play, its victory camera stays native");
  check(game::cameraPresentation(38)==P::FirstPerson&&game::cameraPresentation(36)==P::FirstPerson&&game::cameraPresentation(37)==P::FirstPerson,"the cameras of a building tool in hand, third and first person, are ordinary first-person play");
@@ -87,7 +87,7 @@ int main(){
    const bool own=id==5||id==8||id==10||id==12||id==14||id==17||id==23||id==24||id==25||id==28||id==29;
    cameras=cameras&&game::headingRealignCamera(uint8_t(id))==(game::cameraPresentation(uint8_t(id))==P::FirstPerson&&!own);}
   check(cameras&&game::headingRealignCamera(4)&&game::headingRealignCamera(19)&&game::headingRealignCamera(26)&&game::headingRealignCamera(27)&&game::headingRealignCamera(38)&&
-        !game::headingRealignCamera(5)&&!game::headingRealignCamera(24)&&!game::headingRealignCamera(25)&&!game::headingRealignCamera(30)&&!game::headingRealignCamera(34),
+        !game::headingRealignCamera(5)&&!game::headingRealignCamera(24)&&!game::headingRealignCamera(25)&&!game::headingRealignCamera(30)&&game::headingRealignCamera(34),
         "ordinary play and swimming cameras are realigned; target lock, hook shot, glider, climbing, head dive and the game's event cameras are left alone");
   try{game::headingError(0,std::numeric_limits<double>::infinity(),0);check(false,"invalid heading input rejected");}catch(const std::invalid_argument&){check(true,"invalid heading input rejected");}}
  // The correction's keeper.

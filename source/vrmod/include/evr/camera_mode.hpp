@@ -39,7 +39,12 @@ inline CameraPresentation cameraPresentation(uint8_t id){
     // area; the HUD names it). Headset run game145015: that toggle, hit by accident, left the player with the game's
     // camera, without hands, tool or pointer aim until it was toggled back ("after summoning I cannot move, the
     // camera is odd, the staff is not in my hand"). Both are the same play as 38 and are first person here.
-    if(id==34||id==35)return CameraPresentation::NativeSpecial;
+    // 34 / 35 (PlayerCameraBuildingAltar, ...BuildingAreaDepositProp) are the cameras of a flame altar or an area prop in
+    // the hand, ready to be placed - kept the game's own (third person, about 6 m behind) until 2026-10-19. Headset run
+    // 20261019-104950 (the user: "placing an altar the camera went mad; back at the menu and in again, VR did not start
+    // - the altar is in my hand"): the headset jumped to that camera, and with the altar still in hand at the next world
+    // the first-person anchor was never asked for, so the height never became ready (world_pair_waiting_height). They
+    // are placing like the building tool's 36..38: first person, the placement following the pointer (building_cursor_ray).
     return CameraPresentation::FirstPerson;
 }
 // Body heading (VHVR: the body follows the headset's yaw). The game picks the local actor's look direction in
