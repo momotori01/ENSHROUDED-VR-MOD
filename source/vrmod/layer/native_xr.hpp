@@ -999,6 +999,13 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                 std::ostringstream o;o<<std::setprecision(6)<<"\"frame\":"<<frame<<",\"state\":\""<<names[std::clamp(hudState,0,5)]<<"\",\"anchor_pixel\":["<<hudX<<','<<hudY<<"],\"cluster\":"<<(cluster?"true":"false");
                 if(hudKnown)o<<",\"slopes\":["<<hud[3]<<','<<hud[4]<<"],\"anchor\":["<<hud[0]<<','<<hud[1]<<','<<hud[2]<<']';
                 state.log->event("target_hud_state",o.str());}
+            // Diagnostic (2026-10-20, the enemy health bar left in the HUD while the enemy is out of view; where the game draws it
+            // then is not known): EVR_TARGET_HUD_OFF_CAPTURE=<n> captures the HUD and the eyes 3 and 20 frames into each time the
+            // anchor is off the game's picture, n captures at the most.
+            {static const unsigned offCaptures=[]{const char* v=std::getenv("EVR_TARGET_HUD_OFF_CAPTURE");return v?unsigned(std::strtoul(v,nullptr,10)):0u;}();
+                static unsigned offFrames=0,offTaken=0;offFrames=hudState==2?offFrames+1:0;
+                if(offCaptures&&offTaken<offCaptures&&(offFrames==3||offFrames==20)){uint32_t empty=0;if(nativeFixtureCapture.compare_exchange_strong(empty,9u)){++offTaken;
+                    state.log->event("target_hud_off_capture","\"frame\":"+std::to_string(frame)+",\"off_frames\":"+std::to_string(offFrames));}}}
             if((placement.partCount!=0)!=state.aimClusterLogged&&state.aimClusterLogs<200){
                 ++state.aimClusterLogs;state.aimClusterLogged=placement.partCount!=0;std::ostringstream o;o<<std::setprecision(7)<<"\"frame\":"<<frame<<",\"on\":"<<(placement.partCount?"true":"false")<<",\"parts\":"<<placement.partCount;
                 if(placement.partCount){const auto& c=placement.parts[placement.partCount-1];
