@@ -83,7 +83,8 @@ int main(int argc,char** argv){
      auto k=source;k[clientInputMode]=0;check(patchVrLocomotionCamera(k,out,gate,head,0).status==IdleHeadStatus::SpecialMode&&out==k,"keyboard play keeps the native camera");
      auto g=gate;g.player.normalUiBound=false;check(patchVrLocomotionCamera(source,out,g,head,0).status==IdleHeadStatus::Ui&&out==source,"UI keeps native input in VR locomotion");
      g=gate;g.gravityDirection={0,1,0};check(patchVrLocomotionCamera(source,out,g,head,0).status==IdleHeadStatus::SpecialMode&&out==source,"unusual gravity keeps native input");
-     g=gate;g.player.playerFlags|=1u<<12;check(patchVrLocomotionCamera(source,out,g,head,0).status==IdleHeadStatus::PlayerState&&out==source,"target lock keeps native input");
+     g=gate;g.player.playerFlags|=targetLockFlag;check(patchVrLocomotionCamera(source,out,g,head,0).status==IdleHeadStatus::Applied,"a lock keeps the headset (lock-on movement removed)");
+     g=gate;g.player.playerFlags|=1u<<12;check(patchVrLocomotionCamera(source,out,g,head,0).status==IdleHeadStatus::Applied,"1.0 WantsToWalk (bit 12) keeps the headset");
      auto f=source;f[clientMask]=1;check(patchVrLocomotionCamera(f,out,gate,head,0).status==IdleHeadStatus::SpecialMode&&out==f,"special camera keeps native input");
      // Swimming (2026-10-13): the game turns gravity off in the water; the head camera steers there too.
      bool swim=true;for(uint64_t water:{1ull<<43,1ull<<44,(1ull<<43)|(1ull<<44)|(1ull<<18)|(1ull<<50)}){g=gate;g.gravityActive=false;g.actorState=water;

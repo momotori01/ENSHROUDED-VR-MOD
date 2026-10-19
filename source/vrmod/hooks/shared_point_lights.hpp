@@ -74,6 +74,9 @@ struct Context {
     Handle ownedFog{},sourceFog{};uint32_t ownedFogCounter=0,sourceFogCounter=0,fogCapacity=0;bool fogBorrowed=false;   // the fog's VFX instances
     // 1.0: the second list of 112-byte records (View+0x590), borrowed like the lights (EVR_SHARE_SECOND_LIST=0: not).
     Handle ownedSecond{},sourceSecond{};uint32_t ownedSecondCounter=0,sourceSecondCounter=0;bool secondBorrowed=false;
+    // 2026-10-19: the eye's own copy of the second list, moved into the eye's space (vfx_decal_rebase.hpp writeEyeSecond):
+    // the eye keeps its own buffer everywhere and takes the owner's counter only.
+    bool secondOwnBuffer=false,secondRebased=false;
     Handle bindingDecals{};unsigned decalDescriptors=0;   // the owner's buffer as handed to the shading passes, and how often
     Handle bindingLights{};unsigned lightDescriptors=0;   // the same for the point lights (shadingBindings below)
     // The eye's own list (vfx_decal_rebase.hpp): the shading passes were left with the eye's own buffer, which the
@@ -325,7 +328,8 @@ uint64_t __fastcall shadingBindings(void* a,void* view,void* b,void* c4,void* e,
                 // The second list's copy (Context::anchorSecond): the place in the View where the eye keeps its own buffer
                 // and the owner its own, found once by the values (EVR_ANCHOR_SECOND=0: left alone, for comparisons).
                 static const bool anchorSecondSwap=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_ANCHOR_SECOND",v,sizeof v);return !(n==1&&v[0]=='0');}();
-                if(anchorSwap&&anchorSecondSwap&&shareSecond&&!c.anchorSecond&&read<uint64_t>(eyeView+viewList::second)&&read<uint64_t>(sourceView+viewList::second)){
+                if(shareSecond&&vfxDecals::secondSourceFor(pair))c.secondOwnBuffer=true;
+                if(anchorSwap&&anchorSecondSwap&&shareSecond&&!c.secondOwnBuffer&&!c.anchorSecond&&read<uint64_t>(eyeView+viewList::second)&&read<uint64_t>(sourceView+viewList::second)){
                     const auto ownSecond=read<Handle>(eyeView+viewList::second),sourceSecond=read<Handle>(sourceView+viewList::second);
                     static std::atomic<uintptr_t> secondAt{0};static std::atomic<unsigned> searches{0};
                     if(ownSecond!=sourceSecond&&!secondAt.load()&&searches.load()<64){
@@ -371,7 +375,7 @@ uint64_t __fastcall shadingBindings(void* a,void* view,void* b,void* c4,void* e,
                     ",\"owner_eye\":"+std::to_string(worldSharedStages::vfxOwnerEye));}
                 std::memcpy(reinterpret_cast<void*>(eyeView+viewList::lights),source.data(),16);c.bindingLights=source;++c.lightDescriptors;
                 // 1.0: the second list's buffer too, as for the lights.
-                if(read<uint64_t>(eyeView+viewList::second)&&read<uint64_t>(sourceView+viewList::second)){
+                if(!c.secondOwnBuffer&&read<uint64_t>(eyeView+viewList::second)&&read<uint64_t>(sourceView+viewList::second)){
                     const auto ownSecond=read<Handle>(eyeView+viewList::second),sourceSecond=read<Handle>(sourceView+viewList::second);
                     if(ownSecond!=sourceSecond){validateHandle(pair,ownSecond);validateHandle(pair,sourceSecond);
                         put.secondView=eyeView;put.ownSecond=ownSecond;std::memcpy(reinterpret_cast<void*>(eyeView+viewList::second),sourceSecond.data(),16);}}
@@ -551,10 +555,17 @@ void __fastcall invoke(void* graphContext,void* parameters){
            read<uint32_t>(p+cullArgument::second+0x20)==112&&read<uint32_t>(p+cullArgument::secondCounter)==ownCounter&&read<uint32_t>(p+cullArgument::secondCapacity)==capacity){
             validateHandle(pair,own);validateHandle(pair,source);
             c.ownedSecond=own;c.sourceSecond=source;c.ownedSecondCounter=ownCounter;c.sourceSecondCounter=sourceCounter;c.secondBorrowed=true;
-            std::memcpy(reinterpret_cast<void*>(c.view+viewList::second),source.data(),16);
+            // The eye's own copy, written now before the culling (a failed write leaves the eye's buffer as it was for this
+            // frame and the borrowing from the next one on).
+            if(c.secondOwnBuffer)c.secondRebased=vfxDecals::writeEyeSecond(graphContext,pair,unsigned(c.eye),c.view,c.sourceView);
+            if(!c.secondRebased){
+                std::memcpy(reinterpret_cast<void*>(c.view+viewList::second),source.data(),16);
+                std::memcpy(reinterpret_cast<void*>(p+cullArgument::second+8),source.data(),16);
+            }
             std::memcpy(reinterpret_cast<void*>(c.view+viewList::secondCounter),&sourceCounter,4);
-            std::memcpy(reinterpret_cast<void*>(p+cullArgument::second+8),source.data(),16);
             std::memcpy(reinterpret_cast<void*>(p+cullArgument::secondCounter),&sourceCounter,4);
+            {static std::atomic<unsigned> told{0};if(told.fetch_add(1)<4)logFile->event("shared_second_list_state","\"serial\":"+std::to_string(pair.serial)+",\"eye\":"+std::to_string(c.eye)+
+                ",\"own_buffer\":"+(c.secondOwnBuffer?"true":"false")+",\"rebased\":"+(c.secondRebased?"true":"false")+",\"source_counter\":"+std::to_string(sourceCounter));}
         }else{static std::atomic<unsigned> told{0};if(told.fetch_add(1)<3)logFile->event("shared_second_list_skipped","\"serial\":"+std::to_string(pair.serial)+",\"eye\":"+std::to_string(c.eye)+
             ",\"own_counter\":"+std::to_string(ownCounter)+",\"source_counter\":"+std::to_string(sourceCounter)+",\"capacity\":"+std::to_string(capacity));}
      }catch(const std::exception& e){static std::atomic<unsigned> told{0};if(told.fetch_add(1)<3)try{logFile->event("shared_second_list_failure","\"reason\":"+jsonString(e.what()));}catch(...){}}}

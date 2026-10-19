@@ -100,6 +100,7 @@
 #include <evr/item_catalog.hpp>
 #include <evr/menu_pointer.hpp>
 #include <evr/bug_report.hpp>
+#include <evr/mod_update.hpp>
 #include <evr/vr_settings_panel.hpp>
 #include <evr/aim_mark.hpp>
 #include <evr/pause_clock.hpp>
@@ -586,6 +587,7 @@ bool finishEyeCpuTasks(uintptr_t scene,unsigned milliseconds=100);
 #include "native_attribute_registry.hpp"
 #include "motion_target_observer.hpp"
 #include "live_melee_targets.hpp"
+#include "target_mark.hpp"
 #include "live_actionbar_pages.hpp"
 #include "live_equipment.hpp"
 #include "holster_actions.hpp"
@@ -1484,6 +1486,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         anchor=sceneryAnchor(anchor);
         runtimeCameras=game::stereoCameras(anchor,liveXr?liveTrackingToAnchor:recordedXr.trackingToAnchor,frame.views,3,frame.time,frame.frame,
                                          anchor.root,read<float>(input+0x70),read<float>(input+0x74));
+        if(liveXr)targetMark::noteAnchor(anchor,liveTrackingToAnchor,read<WorldPositionQ32>(input+0x38),baseRotation,read<float>(input+0x78));   // the locked target's mark (target_mark.hpp)
         alternateEyes::stale={};
         if(liveXr&&liveFrame.eyeMask!=3){
             // stereoCameras: world = anchor * trackingPose(trackingToAnchor * eye). The eye left out was drawn with the
@@ -2491,6 +2494,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
             motionShieldVisual::prepare(anchor,sharedStage.serial);
             motionArrowVisual::prepare(anchor,sharedStage.serial);
             motionOffhandVisual::prepare(anchor,sharedStage.serial);
+            motionOffhandVisual::fishInHand(anchor);
             liveThrowAim::prepare(anchor);
             motionFist::prepare(anchor);
             motionBodyIk::prepare(anchor,sharedStage.serial);
@@ -2517,6 +2521,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
                 {const bool held=motionVisual::poseReady&&motionHandVisual::ready;
                  aimMark::frame(liveFrame.hands,held&&motionVisual::bowDrawHeld,held?motionVisual::bowGeometry:motion::BowPhysicalGeometry{},held?motionVisual::rangedItem:0,
                     held?motionVisual::rangedGeometry:motion::BowPhysicalGeometry{},held&&motionVisual::rangedTwoHanded,menuPointer::screen.load(),GetTickCount64());}
+                targetMark::frame(liveFrame.frame,GetTickCount64());
                 keyScript::frame(liveFrame.frame,keyScript::installed?menuPointer::gameWindow():nullptr);
                 if(controllerUiFixture::liveGuardRequested){
                     // A shield on the left hand, else a melee weapon currently held with both hands.
@@ -3393,7 +3398,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             // "targets": VHVR's rule that a stroke attacks only at a target (live_melee_targets.hpp). The list of targets is
             // kept on the ticks of the event selection hook, which the early Impact (world-live-melee-contact.txt) installs.
             aimMark::reachOf=&liveTargets::aimReach;   // the ground of the feet always; creatures when their list is kept
-            if(targetGate){controllerUiFixture::liveMeleeTargetGate=true;liveTargets::requested=true;
+            if(targetGate){controllerUiFixture::liveMeleeTargetGate=true;liveTargets::requested=true;targetMark::install();
                 controllerUiFixture::targetNear=[](const evr::motion::LiveMeleeWeapon& weapon,uint64_t now){const auto n=liveTargets::contact(weapon,now);return controllerUiFixture::TargetNear{n.reached,n.gated,n.entity,n.distance,n.cached,n.ahead,n.nearest};};
                 // The actor's Grounded bit (0) off within the last half second: a stroke in the air attacks without a target.
                 controllerUiFixture::actorAirborne=[](uint64_t now){std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;
@@ -3527,6 +3532,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                 // Real crouching can be switched on in the game's start menu (VR settings), so it is always there; the
                 // settings file's [Body] (EVR_ROOM_SNEAK=0 off, EVR_CROUCH_DROP percent) says how it begins.
                 controllerUiFixture::roomSneakRequested=true;controllerUiFixture::roomSneakOn=on("EVR_ROOM_SNEAK");controllerUiFixture::recenterPoseRequested=on("EVR_RECENTER_POSE");
+                controllerUiFixture::holdTurn=[](uint64_t until){cameraControl::turnHeldUntil=until;};   // the fish's pull from the rod's tip is no turn
                 {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_CROUCH_DROP",v,sizeof v);if(m&&m<sizeof v){const int d=std::atoi(v);if(d>=evr::vrpanel::dropLow&&d<=evr::vrpanel::dropHigh)controllerUiFixture::crouchDrop=d;}}
                 // keen::actor::StateFlag InSneakMode (21); no sneak by crouching while Dead 7, Sitting 9, Sleeping 11, Climbing 34,
                 // ClimbingTransition 35, Attached 36, HangGliding 37, AttachedToHook 38, FloatingOnWater 43, UnderWater 44.
@@ -3758,7 +3764,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         // the exact server Ended proof. This avoids racing all hook teardown
         // against process termination and leaves MOD ledger ownership intact.
         if(!contactQuiescenceObserver::terminalRequested)motionEventSelection::disable();
-        parryObserver::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();steamLink::disableGameHooks();motionHitObserver::disable();motionContactObserver::disable();uiStateObserver::disable();bodyUpload::disable();headVisibility::disable();equipmentObserver::disable();if(earlyInputStopped)inputActor::disable();else inputDirection::disable(contactQuiescenceObserver::ownerHandoffRequested);
+        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();steamLink::disableGameHooks();motionHitObserver::disable();motionContactObserver::disable();uiStateObserver::disable();bodyUpload::disable();headVisibility::disable();equipmentObserver::disable();if(earlyInputStopped)inputActor::disable();else inputDirection::disable(contactQuiescenceObserver::ownerHandoffRequested);
         if(!contactQuiescenceObserver::terminalRequested){contactQuiescenceObserver::disable();contactLifetimeObserver::disable();}
         bowSpawnObserver::disable();
         rootCamera::disable();
@@ -3823,7 +3829,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         if(cleanup==MH_OK&&quiesceDependentHooks()){
             try{motionEventSelection::disable();}catch(...){}
         try{motionHitObserver::disable();}catch(...){}
-        parryObserver::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();steamLink::disableGameHooks();
+        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();steamLink::disableGameHooks();
         try{motionContactObserver::disable();}catch(...){}
             try{uiStateObserver::disable();}catch(...){}
             try{bodyUpload::disable();}catch(...){}
@@ -4044,7 +4050,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ObserveGameplayInput(void* dir
         try{motionTargets::disable();}catch(...){}
         try{motionEventSelection::disable();}catch(...){}
         try{motionHitObserver::disable();}catch(...){}
-        parryObserver::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();steamLink::disableGameHooks();
+        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();steamLink::disableGameHooks();
         try{motionContactObserver::disable();}catch(...){}
         try{inputDirection::disable();}catch(...){}
             try{contactQuiescenceObserver::disable();}catch(...){}

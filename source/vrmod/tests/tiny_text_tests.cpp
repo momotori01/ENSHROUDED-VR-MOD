@@ -17,4 +17,6 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  ck(render("",2,1,ink,paper).rgba.empty()&&render("V",0,1,ink,paper).rgba.empty());
  // Every letter of the line is in the font.
  for(char c:std::string("VR Now Loading..."))ck(glyph(c)!=nullptr);
+ for(char c:std::string("MOD Update"))ck(glyph(c)!=nullptr);   // the main menu's notice (2026-10-19)
+ {const auto m=render("MOD Update",1,0,ink,paper);ck(m.width==10*6-1&&px(m,0,0)==ink&&px(m,1,0)==paper&&px(m,1,1)==ink);}   // M: its second row has the two inner pixels
  std::cout<<"tiny_text "<<n<<" PASS\n";return 0;}catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

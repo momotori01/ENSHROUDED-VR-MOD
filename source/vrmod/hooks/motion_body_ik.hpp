@@ -18,6 +18,46 @@ inline bool shown(uint64_t renderSerial){return requested&&ready&&serial==render
 // skeleton for gloves and hands, as in the game. EVR_BODY_IK_PRIVATE_HANDS=1 in the game's environment keeps the
 // copy on its own pose (for a comparison; no launch flag).
 inline bool handsOnBody=true;inline unsigned handLends=0;
+// The caught fish held as the game's animation holds it (2026-10-19 19:55, user: "the fish is held on the line of the
+// wrist - hold its tail fin in the palm; the fish models cannot all be caught: check them all from the game data and put
+// the part really held on the left palm"; then "in multiplayer I want to raise it: share it with the IK"). The game
+// places the caught fish itself (it is attached to nothing, headset runs 20261019-191819 / -193001) where the victory
+// animation's left hand holds it; that hold - the fish relative to the animated left hand socket (joint 64) - is put on
+// the solved left socket, for every fish and every character whose body the mod solves (the own one here,
+// other players' in remote_body.hpp from their datagrams' hands). A fish farther than 1 m from the animated socket is
+// not in that hand yet (it flies out of the water first) and stays the game's. EVR_FISH_IN_HAND=0: off.
+inline bool fishHoldWanted(){static const bool on=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_IN_HAND",v,sizeof v);return !(n==1&&v[0]=='0');}();return on;}
+inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& animated,const std::vector<hand::Joint>& solved,const std::vector<uint16_t>& parents,
+                     const WorldPositionQ32& modelPosition,Quat modelQ,Vec3 modelScale,uint32_t character){
+    if(!fishHoldWanted()||!fish||!s)return false;
+    const auto now=GetTickCount64();attachmentObserver::watchFish(fish,now);
+    attachmentObserver::FishModel m;{std::lock_guard<std::mutex> lock(attachmentObserver::followMutex);if(const auto* f=attachmentObserver::fishModelOf(fish,false))m=*f;}
+    if(m.entity!=fish||!m.handle||m.scene!=s||!m.gamePose||!m.at||now<m.at||now-m.at>500)return false;
+    const auto object=motionVisual::currentObject(m.handle);if(!object)return false;
+    WorldPositionQ32 fp;Quat fq;std::memcpy(&fp,m.pose.data(),24);std::memcpy(&fq,m.pose.data()+24,16);
+    const float n=fq.x*fq.x+fq.y*fq.y+fq.z*fq.z+fq.w*fq.w;if(!std::isfinite(n)||std::abs(n-1)>.05f)return false;
+    const Vec3 delta{float(relativeQ32(fp.x,modelPosition.x)),float(relativeQ32(fp.y,modelPosition.y)),float(relativeQ32(fp.z,modelPosition.z))};
+    if(!finite(delta)||length(delta)>8.f)return false;
+    const auto local=rotate(inverse(modelQ),delta);
+    const Pose inModel{normalized(multiply(inverse(modelQ),normalized(fq))),{local.x/modelScale.x,local.y/modelScale.y,local.z/modelScale.z}};
+    constexpr unsigned socket=64;   // the left hand socket (include/evr/body_ik.hpp)
+    const auto ga=bodyik::globals(animated,parents),gs=bodyik::globals(solved,parents);
+    if(ga.size()<=socket||gs.size()<=socket)return false;
+    const auto inHand=compose(inverse(ga[socket]),inModel);
+    if(!finite(inHand.position)||length(inHand.position)>1.f)return false;
+    const auto held=compose(gs[socket],inHand);
+    const auto worldOffset=rotate(modelQ,Vec3{held.position.x*modelScale.x,held.position.y*modelScale.y,held.position.z*modelScale.z});
+    if(!finite(worldOffset))return false;
+    WorldPositionQ32 q{modelPosition.x+int64_t(double(worldOffset.x)*4294967296.),modelPosition.y+int64_t(double(worldOffset.y)*4294967296.),modelPosition.z+int64_t(double(worldOffset.z)*4294967296.)};
+    const auto o=normalized(multiply(modelQ,held.orientation));
+    auto pose=m.pose;std::memcpy(pose.data(),&q,24);std::memcpy(pose.data()+24,&o,16);
+    auto handle=m.handle;std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&handle),1},poses{reinterpret_cast<uintptr_t>(pose.data()),1};
+    motionVisual::change(reinterpret_cast<void*>(s),ids.data(),poses.data());
+    {std::lock_guard<std::mutex> lock(attachmentObserver::followMutex);if(auto* f=attachmentObserver::fishModelOf(fish,false))f->written=pose;}
+    static unsigned logs=0;if(logs++<8||logs%600==0)logFile->event("fishing_fish_held","\"fish\":"+std::to_string(fish)+",\"character\":"+std::to_string(character)+",\"handle\":"+std::to_string(handle)+
+        ",\"in_animated_hand_m\":"+std::to_string(length(inHand.position))+",\"moved_m\":"+std::to_string(length(delta-worldOffset))+",\"holds\":"+std::to_string(logs));
+    return true;
+}
 // In the water (set by the policy: the local actor's FloatingOnWater / UnderWater state, a fresh sample only).
 // EVR_BODY_IK_SWIM=0 in the game's environment: solve as on land (for a comparison).
 inline bool (*swimming)(uint64_t)=nullptr;
@@ -162,6 +202,10 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
     published.serial=renderSerial;published.have=true;
     if(remoteDrivesOwn)return;
     if(leaning)bodyik::lean(joints,parents,inverse(leanQ));
+    // The own caught fish, from the catch (35) until it is taken or let go (36..38).
+    if(!leaning){const auto st=controllerUiFixture::fishingState.load();const auto at=controllerUiFixture::fishingStateMs.load();const auto t=GetTickCount64();
+        if(st>=35&&st<=38&&at&&t>=at&&t-at<=500)try{holdFish(s,controllerUiFixture::fishingFishId.load(),animated,joints,parents,modelPosition,modelQ,modelScale,rootCamera::snapshot().entity);}
+        catch(const std::exception& e){static unsigned told=0;if(told++<3)logFile->event("fishing_fish_hold_failure","\"reason\":"+jsonString(e.what()));}}
     // Fingers as the private hands show them (curl from the controls), so gloves on this pose match.
     if(motionHandVisual::lastOutput.size()==joints.size())for(unsigned h=0;h<2;h++){const auto wrist=rig.branches()[h].wrist;
         for(size_t j=wrist+1u;j<joints.size();j++){bool under=false;for(auto p=parents[j];p!=UINT16_MAX;p=parents[p])if(p==wrist){under=true;break;}

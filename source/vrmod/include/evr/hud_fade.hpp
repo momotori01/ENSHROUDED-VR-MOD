@@ -31,8 +31,14 @@ struct HudLayout {
  // under the quest, and run down into the band's height (user after the headset run of 2026-10-13: "the lower part
  // of the pinned crafting materials and craftable counts at the top right does not disappear"). So the band ends at
  // x 1480; a prompt held at the right edge (its object is outside the view) now fades with the HUD.
- UiRect pins{420,84,1300,972};
- UiRect pinsWide{0,280,1480,900};
+ // Both end at y 880 since 2026-10-19 19:10 (user: "the fishing rod's text at the bottom does not go away"): the held
+ // item's name and its hints ("Simple fishing rod", "X charge and cast", "LT aim") stand at y 895..975, above the action
+ // bar - they were inside the column and stayed shown always. Below 880 is heldItem: it fades with the HUD.
+ UiRect pins{420,84,1300,880};
+ UiRect pinsWide{0,280,1480,880};
+ // The held item's name and hints: fade with the HUD; what changes there (the hints of each fishing step) is no reason
+ // to show it. A prompt held at the bottom edge for a thing at the feet (y 941..968) fades with it now.
+ UiRect heldItem{420,880,1500,974};
  UiRect compass{660,0,1260,84};   // direction strip and the distance to the destination: never a change
  // The rest of the band's height at the right edge. It fades with the HUD (the pinned recipes), but what moves in it
  // is no reason to show the HUD: a prompt whose object is to the right of the view is held there and slides as the
@@ -93,7 +99,7 @@ public:
    w_=w;h_=h;zone_.assign(count,0);ticks_.assign(count,{});
    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x){
     const int px=int((x*2+1)*1920/(w*2)),py=int((y*2+1)*1080/(h*2));
-    zone_[size_t(y)*w+x]=layout_.pins.contains(px,py)||layout_.pinsWide.contains(px,py)||layout_.compass.contains(px,py)||layout_.edgeRight.contains(px,py)||layout_.buffs.contains(px,py)?2:layout_.vitals.contains(px,py)?1:0;}
+    zone_[size_t(y)*w+x]=layout_.pins.contains(px,py)||layout_.pinsWide.contains(px,py)||layout_.compass.contains(px,py)||layout_.edgeRight.contains(px,py)||layout_.buffs.contains(px,py)||layout_.heldItem.contains(px,py)?2:layout_.vitals.contains(px,py)?1:0;}
    previous_.assign(cells,cells+count*4);return out;
   }
   for(size_t i=0;i<count;++i){

@@ -128,6 +128,14 @@ inline std::atomic<uint64_t> liveAttackBegan{0};
 // For the render thread, which sends the vibration: until when (GetTickCount64) and which hands (bit 0 left, bit 1 right).
 inline std::atomic<uint64_t> cooldownHapticUntil{0};inline std::atomic<unsigned> cooldownHapticHands{0};
 constexpr float cooldownHapticAmplitude=.2f;
+// The fish tiring (2026-10-19, user: "while I am bringing the fish's endurance gauge down well, let the controller
+// vibrate"): live_equipment.hpp sees the fish's endurance (NetworkFishing +0x1c) fall between two reads and keeps the rod's
+// hand (the right) vibrating until then. EVR_FISH_GAIN_HAPTIC=0: off.
+inline std::atomic<uint64_t> fishGainHapticUntil{0};
+// As a pull on the line (user, 18:50: "a pulse as if being pulled - bzz-bzz, bzz-bzz"): two 60 ms buzzes 40 ms apart,
+// then 240 ms quiet - every 0.4 s.
+constexpr float fishGainHapticAmplitude=.5f;
+inline uint64_t fishPulseLeft(uint64_t now){const auto p=now%400;return p<60?60-p:(p>=100&&p<160)?160-p:0;}   // ms of the buzz left now
 // VHVR's secondary attack by motion (live_secondary.hpp) is judged for every stroke and written to the record. A stroke
 // judged so holds the attack button: the game starts a weapon's heavy attack when the main-hand button is held (Mock
 // run game121730: the one-hand sword's sequence 2522099871, the "Heavy" entry of its item data, began 291 ms after
@@ -147,6 +155,19 @@ inline HandItem (*handItem)(uint64_t)=nullptr;
 // When the player's keen::ecs::NetworkFishing last named a float (live_equipment.hpp reads it about thirty times a
 // second): the float is out for as long as this is fresh.
 inline std::atomic<uint64_t> fishingFloatMs{0};
+// keen::fishing::State of the player's NetworkFishing (live_equipment.hpp, read about 30 times a second) and when it was read:
+// 22 AdvancedMinigame .. 30 FinalHook are the fight with a hooked fish (28 DecideOutbreak, 29 Outbreak: the fish pulls aside).
+inline std::atomic<int> fishingState{-1};inline std::atomic<uint64_t> fishingStateMs{0};
+// The same component's outbreakDirection (0 none, 1 left, 2 right) and minigameInputState (0 none, 1 the steering is the
+// right way, 2 the wrong way) - the game's own judgment of the steering (live_equipment.hpp, 2026-10-19).
+inline std::atomic<int> fishingDirection{0},fishingInputState{0};
+inline std::atomic<uint32_t> fishingFishId{0};
+// keen::ecs::NetworkFishing's component id and its World (live_equipment.hpp): other players' fishing is read by it (remote_body.hpp).
+inline std::atomic<int> fishingComponentType{-1};inline std::atomic<uintptr_t> fishingComponentWorld{0};   // NetworkFishing +0x34: the hooked / caught fish's entity (live_equipment.hpp)
+inline std::atomic<uint64_t> castTapAt{0};   // when the trigger's release last tapped the cast (the rod's flick waits a second after it)
+// Set at install (view_resource_probe.cpp): until then the game's orbit input is no turn of the view (camera_control_observer.hpp).
+inline void (*holdTurn)(uint64_t until)=nullptr;
+inline bool fishFight(uint64_t now){const auto at=fishingStateMs.load();const int s=fishingState.load();return at&&now>=at&&now-at<=300&&s>=22&&s<=30;}
 inline bool fishingFloatOut(uint64_t now){const auto at=fishingFloatMs.load();return at&&now>=at&&now-at<=150;}
 // The holsters (include/evr/holster.hpp, hooks/holster_actions.hpp): a grip pressed at its own shoulder or at the left
 // hip. holsterAct: true when the game was asked for something - only then the hand vibrates (VHVR Pose.cs:823-832:
@@ -242,6 +263,12 @@ inline void applyBowHaptic(evr::motion::GestureFeedbackResult& command,const evr
   if(!((which>>h)&1)||!hands.focused||!hands.hands[h].tracked())continue;
   if(!command.amplitude[h])command.duration[h]=XrDuration(std::min<uint64_t>(cooling-now,100))*1000000;
   command.amplitude[h]=std::max(command.amplitude[h],cooldownHapticAmplitude);
+ }
+ const auto tiring=fishGainHapticUntil.load();
+ if(tiring>now&&hands.focused&&hands.hands[1].tracked()){
+  if(const auto left=fishPulseLeft(now)){
+   if(!command.amplitude[1])command.duration[1]=XrDuration(std::min<uint64_t>(left,tiring-now))*1000000;
+   command.amplitude[1]=std::max(command.amplitude[1],fishGainHapticAmplitude);}
  }
 }
 inline evr::motion::BowPhysicalGeometry gestureBowGeometry;
@@ -367,7 +394,9 @@ inline void skillBegan(uint64_t now){if(skillFacing&&airAttackStickMs&&airAttack
 // The local player's BaseActor (input_actor_observer.hpp) and the time of the last swing parry of the live guard
 // (live_guard.hpp swingParry), for the game's parry (parry_observer.hpp).
 inline std::atomic<uintptr_t> playerBaseActor{0};inline std::atomic<uint64_t> swingParryAt{0},guardRepressAt{0};
-inline std::atomic<uint64_t> playerActorState{0},playerActorStateMs{0};   // the block button is held by the live guard (input_actor_observer.hpp records the actor's look then)
+// wandNextShotMs: no swing of the wand shoots before it (motion_event_selection_observer.hpp sets it when a swing's action starts).
+inline std::atomic<uint64_t> wandNextShotMs{0};
+inline std::atomic<uint64_t> playerActorState{0},playerActorStateMs{0},blockOpportunityMs{0};   // blockOpportunityMs: the last tick the player's BlockOpportunity (5) was up (parry_observer.hpp relaxed parry)   // the block button is held by the live guard (input_actor_observer.hpp records the actor's look then)
 inline evr::game::ControllerMotionFixture motion;
 inline evr::game::MotionObservation(*observeMotion)()=nullptr;
 inline bool attackRequested=false,attackCompleted=false;
@@ -741,7 +770,10 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         (quickSlot.busy()&&screenKind==evr::motion::LiveScreen::Overlay));
                     const auto slot=quickSlot.update(hands,quickHead.pose,allowed,now);
                     pad.buttons|=slot.buttons;
-                    if(slot.steer){pad.rightX=int16_t(std::lround(std::clamp(slot.x,-1.f,1.f)*32767));pad.rightY=int16_t(std::lround(std::clamp(slot.y,-1.f,1.f)*32767));}
+                    // Only while the game's wheel is up (auxiliary 1): fishing does not open it, and the hand's way went to the
+                    // camera's turn instead (headset run 20261019-160912, user: "pressing to pull up while fishing turns me round" -
+                    // the right B held, RB with the right stick at 0.92 / -0.40 sent for seconds, the view turning).
+                    if(slot.steer&&auxiliary==1){pad.rightX=int16_t(std::lround(std::clamp(slot.x,-1.f,1.f)*32767));pad.rightY=int16_t(std::lround(std::clamp(slot.y,-1.f,1.f)*32767));}
                     // The dial's click (2026-10-18, roll selection): a short light pulse each time the stick enters another
                     // eighth of the wheel (its slots), and once when it leaves the centre.
                     {static int lastSector=-1;int sector=-1;
@@ -971,6 +1003,28 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                      evr::motion::LiveSwingRod rod;{std::lock_guard<std::mutex> lock(gestureMutex);if(gestureRod.binding&&gestureRodMs&&now>=gestureRodMs&&now-gestureRodMs<=200&&uint32_t(gestureRod.binding>>32)==held.item)rod=gestureRod;}
                      const auto cast=swingCast.update(hands,rod,use&&held.category==5&&rod.binding&&!floatOut);
                      if(cast.letGo&&usePressed)pad.buttons&=uint16_t(~evr::motion::LivePadMapper::X);
+                     // The cast's distance from the swing alone (2026-10-19 18:45, user: "not from how long the trigger is held,
+                     // only from the swing's speed"): fishing_charge.hpp gives the game's cast the swing's strength as its charge,
+                     // whatever the hold charged (none: the shortest cast). The trigger holds the game's button as before and the
+                     // float flies on its release (18:55 to 19:05 the hold gave nothing and the release tapped the button for
+                     // 150 ms - user: "the float does not fly the moment I let go, the old way was better": EVR_FISH_CAST_TAP=1).
+                     // A trigger still held from reeling in when the float comes back gives nothing until it is let go - no
+                     // cast on that release.
+                     {static const bool castTap=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_CAST_TAP",v,sizeof v);return n==1&&v[0]=='1';}();
+                      static bool castArmed=false;static uint64_t castTapUntil=0;static unsigned tapLogs=0;
+                      static bool heldFromReeling=false;
+                      if(held.category==5&&rod.binding&&gameplay){
+                         if(floatOut){castArmed=false;heldFromReeling=usePressed;}
+                         else{
+                            if(!usePressed)heldFromReeling=false;
+                            if(heldFromReeling)pad.buttons&=uint16_t(~evr::motion::LivePadMapper::X);
+                            if(usePressed&&!before&&!heldFromReeling)castArmed=true;
+                            if(castTap&&castArmed&&usePressed)pad.buttons&=uint16_t(~evr::motion::LivePadMapper::X);
+                            if(castArmed&&before&&!usePressed){castArmed=false;castTapAt=now;if(castTap)castTapUntil=now+150;
+                               if(tapLogs++<200)logFile->event("live_fishing_cast_release","\"frame\":"+std::to_string(hands.frame)+",\"swing_cast\":"+(cast.cast?"true":"false")+",\"strength\":"+std::to_string(cast.strength)+",\"tap\":"+(castTap?"true":"false"));}
+                         }
+                      }else castArmed=heldFromReeling=false;
+                      if(now<castTapUntil&&gameplay&&held.category==5)pad.buttons|=evr::motion::LivePadMapper::X;}
                      if(cast.cast){requestBowHaptic({0,.5f},{0,200});
                         // 800 ms: the release reaches the game on its next frame, the cast starts on the next tick and spawns the float 167 ms into it.
                         // The swing tells the direction when it has a level part and does not point behind the player (more
@@ -992,7 +1046,79 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                          <<",\"direction_from_the_swing\":"<<(aimed?"true":"false")<<",\"ahead_of_the_head\":"<<ahead
                          <<",\"tip_m\":"<<rod.tip<<",\"direction\":["<<cast.direction.x<<','<<cast.direction.y<<','<<cast.direction.z<<"],\"casts\":"<<swingCast.casts()<<",\"camera_id\":"<<fishingCamera<<",\"on_trigger_release\":"<<(cast.released?"true":"false")<<",\"native_button_released\":16384";
                         logFile->event("live_fishing_cast",s.str());}
-                     if(cast.letGo!=letGo){letGo=cast.letGo;if(!letGo)logFile->event("live_fishing_cast_rearmed","\"frame\":"+std::to_string(hands.frame));}}
+                     if(cast.letGo!=letGo){letGo=cast.letGo;if(!letGo)logFile->event("live_fishing_cast_rearmed","\"frame\":"+std::to_string(hands.frame));}
+                     // The fish's pull (2026-10-19, user: "the fish's left / right action - the right stick's left and right - by
+                     // leaning the rod left and right"; then "the rod tip's left and right is what counts"): while a hooked fish
+                     // fights (fishFight), where the rod's tip stands left or right of the head's level forward is the left
+                     // stick's x - the tip at the right hand's grip plus the rod's axis times its length, 6 degrees free, all the
+                     // way at 26. The player's own stick, pushed further, goes first. EVR_FISH_ROD_TILT=0: off.
+                     // The left stick, not the right (2026-10-19 18:40, the user fishing with keyboard and mouse: "pressing A / D
+                     // against the fish's movement brings its endurance down, and at zero a click catches it - A while it
+                     // tries to go right, D while it tries to go left"): A / D are MovementLeft / Right, the pad's left stick.
+                     // Until then the lean went to the right stick - the camera (headset run 20261019-175224: every fight
+                     // ended Outbreak 29 -> ReelIn 32). The tip leaned against the fish (left while it runs right) is A.
+                     // EVR_FISH_STEER_STICK=right: the right stick as before (that stick then is no turn of the view,
+                     // cameraControl::turnHeldUntil).
+                     {static const bool rodTilt=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_ROD_TILT",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                      static float lastLean=0;static unsigned tiltLogs=0;
+                      static const bool steerLeft=[]{char v[16]{};GetEnvironmentVariableA("EVR_FISH_STEER_STICK",v,sizeof v);return v[0]!='r';}();
+                      if(rodTilt&&gameplay&&held.category==5&&rod.binding&&fishFight(now)){
+                         evr::motion::GestureHead head;{std::lock_guard<std::mutex> lock(gestureMutex);head=gestureHead;}
+                         const auto r=evr::rotate(head.pose.orientation,{1,0,0}),f=evr::rotate(head.pose.orientation,{0,0,-1});
+                         const float n=std::sqrt(r.x*r.x+r.z*r.z),m=std::sqrt(f.x*f.x+f.z*f.z);
+                         const auto& g=hands.hands[1].grip.position;const auto& e=head.pose.position;
+                         const evr::Vec3 to{g.x+rod.forward.x*rod.tip-e.x,g.y+rod.forward.y*rod.tip-e.y,g.z+rod.forward.z*rod.tip-e.z};
+                         if((head.flags&15)==15&&n>.3f&&m>.3f&&rod.tip>.3f&&evr::finite(to)){
+                            const float side=(to.x*r.x+to.z*r.z)/n,ahead=(to.x*f.x+to.z*f.z)/m;
+                            const float lean=std::atan2(side,std::max(ahead,.1f));   // the tip's angle from the head's forward, + to the right
+                            const float a=std::abs(lean),x=std::copysign(std::clamp((a-.10f)/(.45f-.10f),0.f,1.f),lean);
+                            if(steerLeft){if(std::abs(x)>std::abs(pad.leftX/32767.f))pad.leftX=int16_t(std::lround(x*32767));}
+                            else{if(std::abs(x)>std::abs(pad.rightX/32767.f)){pad.rightX=int16_t(std::lround(x*32767));pad.rightY=0;}
+                               if(holdTurn)holdTurn(now+150);}
+                            if((std::abs(lean-lastLean)>.1f||tiltLogs<4)&&tiltLogs<600){++tiltLogs;lastLean=lean;
+                               logFile->event("live_fishing_rod_tilt","\"frame\":"+std::to_string(hands.frame)+",\"state\":"+std::to_string(fishingState.load())+",\"lean\":"+std::to_string(lean)+",\"stick\":\""+(steerLeft?"left":"right")+"\",\"stick_x\":"+std::to_string((steerLeft?pad.leftX:pad.rightX)/32767.f)+
+                                  ",\"direction\":"+std::to_string(fishingDirection.load())+",\"input_state\":"+std::to_string(fishingInputState.load()));}
+                         }
+                      }}
+                     // The click by a flick of the rod (2026-10-19 18:35, user: "let the click (the trigger) also be done by pulling
+                     // the rod up with a jerk - a flick as if lifting the fish out"; then "a flick may reel in", "a sensitivity that
+                     // does not go off by mistake in the fight"): while a float is out - waiting (the click reels in), the bite
+                     // (21 WaitHookInput), the tired fish (30 FinalHook) - but not in the fight itself (22..29, where the rod is
+                     // leaned left and right), the rod's tip rising 7 cm within 0.25 s, at 1.6 m/s or more (12 cm / 2.2 m/s until 19:25:
+                     // user "the flick needs too long a way, a little shorter is fine"), nearly straight up -
+                     // within 25 degrees of up to the head's left or right (the user: "only nearly straight up, 30 degrees left and
+                     // right" -> "25 degrees"; towards and away from the player is free, a lift of the rod swings the tip back) -
+                     // presses the game's button (X, the trigger's) for 0.15 s with a short pulse of the hand. EVR_FISH_FLICK=0: off.
+                     // (Headset run 20261019-183558: no press at all - the press, the 0.8 s pause and the pulse had gone into a
+                     // comment of the line before; and the speed from GetTickCount64, 16 ms steps, jumped to 20..55 m/s. The speed
+                     // is now the tip's rise over the last 60 ms or more, timed by the steady clock.)
+                     {static const bool flickOn=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_FLICK",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                      struct TipAt {int64_t us=0;evr::Vec3 p{};};
+                      static uint64_t flickUntil=0,flickNext=0;static std::array<TipAt,64> tips{};static size_t tipAt=0;static unsigned flickLogs=0;
+                      const int64_t us=std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                      const int fstate=fishingState.load();const auto fstateMs=fishingStateMs.load();
+                      // From the wait for a fish on (16 WaitForFish .. 21), not while the float flies and lands (10..15: the cast's
+                      // follow-through lifts the rod - headset run 20261019-183558 took one at 10, 3 frames after the cast), and
+                      // not within a second of the cast's tap (castTapAt).
+                      const bool waits=fstateMs&&now>=fstateMs&&now-fstateMs<=300&&((fstate>=16&&fstate<=21)||fstate==30)&&now>=castTapAt.load()+1000;
+                      if(flickOn&&gameplay&&held.category==5&&rod.binding&&rod.tip>.3f){
+                         const auto& g=hands.hands[1].grip.position;const evr::Vec3 tip{g.x+rod.forward.x*rod.tip,g.y+rod.forward.y*rod.tip,g.z+rod.forward.z*rod.tip};
+                         if(evr::finite(tip)){
+                            tips[tipAt%tips.size()]={us,tip};++tipAt;
+                            // the lowest point of the last 0.25 s, and the newest sample at least 60 ms old (for the speed)
+                            TipAt low{us,tip},back{};for(const auto& t:tips){if(!t.us||t.us>us||us-t.us>250000)continue;if(t.p.y<low.p.y)low=t;if(us-t.us>=60000&&(!back.us||t.us>back.us))back=t;}
+                            const float speed=back.us&&us>back.us?(tip.y-back.p.y)*1e6f/float(us-back.us):0.f;
+                            evr::motion::GestureHead head;{std::lock_guard<std::mutex> lock(gestureMutex);head=gestureHead;}
+                            const auto r=evr::rotate(head.pose.orientation,{1,0,0});const float rn=std::sqrt(r.x*r.x+r.z*r.z);
+                            const float rise=tip.y-low.p.y,sideways=rn>.3f?std::abs(((tip.x-low.p.x)*r.x+(tip.z-low.p.z)*r.z)/rn):0.f;
+                            if(waits&&now>=flickNext&&rise>=.07f&&speed>=1.6f&&sideways<=rise*.4663f){   // 7 cm, 1.6 m/s since 19:25 ("the flick needs too long a way")
+                                  // .4663: tan 25 degrees
+                               flickUntil=now+150;flickNext=now+800;requestBowHaptic({0,.4f},{0,60});
+                               if(flickLogs++<100)logFile->event("live_fishing_flick","\"frame\":"+std::to_string(hands.frame)+",\"state\":"+std::to_string(fstate)+",\"rise_m\":"+std::to_string(rise)+
+                                  ",\"sideways_m\":"+std::to_string(sideways)+",\"speed_mps\":"+std::to_string(speed)+",\"native_button\":16384");}
+                         }
+                      }else tipAt=0,tips={};
+                      if(now<flickUntil&&gameplay&&held.category==5)pad.buttons|=evr::motion::LivePadMapper::X;}}
                     if(usePressed!=before)logFile->event("live_use_trigger","\"frame\":"+std::to_string(hands.frame)+",\"pressed\":"+(usePressed?"true":"false")+",\"item\":"+std::to_string(useItem)+
                         ",\"category\":"+std::to_string(held.category)+",\"item_slot\":"+std::to_string(held.itemSlot)+",\"native_button\":16384");
                     // A throwable: wind up with the trigger, let go while the hand moves.
@@ -1108,13 +1234,50 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 }
                 if(rangedAimRequested){
                     // Wand in hand: the right trigger is the native attack press. Staff keeps native RT (hold to cast).
-                    uint32_t rangedItem=0;uint64_t rangedMs=0;{std::lock_guard<std::mutex> lock(gestureMutex);rangedItem=gestureRangedItem;rangedMs=gestureRangedMs;}
+                    uint32_t rangedItem=0;uint64_t rangedMs=0;evr::motion::BowPhysicalGeometry rangedGeometry;
+                    {std::lock_guard<std::mutex> lock(gestureMutex);rangedItem=gestureRangedItem;rangedMs=gestureRangedMs;rangedGeometry=gestureRangedGeometry;}
                     static bool wandPressed=false;
-                    const bool wand=evr::motion::rangedAimWand(rangedItem)&&rangedMs&&now>=rangedMs&&now-rangedMs<=200&&fresh&&mapped.valid&&
-                        evr::motion::bowTrialHud(valid,normalHud,screen,auxiliary,nativeBlocked)&&!value.active&&hands.hands[1].triggerActive;
+                    const bool wandHeld=evr::motion::rangedAimWand(rangedItem)&&rangedMs&&now>=rangedMs&&now-rangedMs<=200&&fresh&&mapped.valid&&
+                        evr::motion::bowTrialHud(valid,normalHud,screen,auxiliary,nativeBlocked)&&!value.active;
+                    const bool wand=wandHeld&&hands.hands[1].triggerActive;
                     if(!wand)wandPressed=false;
                     else{const float t=hands.hands[1].trigger;if(t>=.8f)wandPressed=true;else if(t<=.2f)wandPressed=false;
                         pad.rightTrigger=0;if(wandPressed)pad.buttons|=evr::motion::LivePadMapper::X;}
+                    // The wand's attack by a swing as well (user 2026-10-19: "the wand's normal attack also by a swing - the
+                    // trigger or a swing; locked on, it flies to the target anyway"): the melee rule for one hand (VHVR's
+                    // 3 m/s, the wand's turn counted 12.5 cm ahead of the hand, one tap of the attack button a stroke, the
+                    // stroke slowing to half before the next one), with no target gate - the shot goes where the game aims it.
+                    // EVR_WAND_SWING=0: the trigger only.
+                    {static const bool wandSwing=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_WAND_SWING",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                     // Less eager than a weapon (user after the headset run of 2026-10-19 14:50: "the magic comes out too easily -
+                     // make it need a bigger swing; unlike a weapon it fires without hitting anything, so it should come when I
+                     // mean to swing"): 4.5 m/s at the lever point instead of 3, held over 15 cm of the hand's way
+                     // (EVR_WAND_SWING_SPEED, EVR_WAND_SWING_TRAVEL in metres). The device log before it: 27 swing shots at
+                     // 3.0..5.3 m/s, most of them 3.2..3.4.
+                     // Then (headset run 20261019-152240, user: "far too dull now - I kept swinging; shots should come for
+                     // swings like those"): bug report 152647's hand script, 30 s of swinging about once a second, run through
+                     // this rule offline (lever point 12.5 cm, the logged shot 4.71 m/s reproduced as 4.68): 4.5 / 0.15 m gave
+                     // 1 shot (the log: 1), 3.0 / 0 gave 31, 3.2 / 0.10 gave 22, 3.4 / 0.10 gave 19. The idle wiggles peak at
+                     // 3.0..3.3 m/s over 0.09 m: 3.3 m/s over 0.10 m.
+                     static evr::motion::LiveMelee wandStrokes([]{evr::motion::LiveMeleeSettings w;w.swingSpeed=3.3f;w.strokeTravel=.10f;
+                        char v[16]{};auto n=GetEnvironmentVariableA("EVR_WAND_SWING_SPEED",v,sizeof v);if(n&&n<sizeof v){const float x=std::strtof(v,nullptr);if(std::isfinite(x)&&x>=2&&x<=12)w.swingSpeed=x;}
+                        n=GetEnvironmentVariableA("EVR_WAND_SWING_TRAVEL",v,sizeof v);if(n&&n<sizeof v){const float x=std::strtof(v,nullptr);if(std::isfinite(x)&&x>=0&&x<=1)w.strokeTravel=x;}
+                        return w;}());
+                     evr::motion::LiveMeleeWeapon stroke;
+                     // The shot itself comes on the action's first tick (LiveAttackPress::spawnsOnly, motion_event_selection_observer.hpp),
+                     // and the game's cooldown stays: no swing shoots before the last swing's action lets the next attack begin.
+                     const bool cooled=now>=wandNextShotMs.load();
+                     const bool swingAllowed=wandSwing&&wandHeld&&cooled&&screenKind==evr::motion::LiveScreen::Gameplay&&!(pad.buttons&evr::motion::LivePadMapper::RB)&&rangedGeometry.binding;
+                     if(swingAllowed){stroke.binding=rangedGeometry.binding;stroke.needsTarget=false;stroke.hand=1;
+                        stroke.forward=evr::rotate(rangedGeometry.model.orientation,{0,1,0});stroke.reach=.5228f;}
+                     const auto swing=wandStrokes.update(hands,stroke,swingAllowed,now);
+                     if(swing.press)pad.buttons|=evr::motion::LivePadMapper::X;
+                     if(swing.fired){
+                        wandNextShotMs=now+600;   // until the action tells its own time (the normal attack's is 600 ms)
+                        if(observeMeleeNative){const auto running=observeMeleeNative();std::lock_guard<std::mutex> lock(livePressMutex);
+                            liveAttackPress={running.valid?running.entity:0u,rangedItem,running.triggerTime,now,liveAttackPress.serial+1,true};}}
+                     if(swing.fired)logFile->event("wand_swing_attack","\"frame\":"+std::to_string(hands.frame)+",\"speed\":"+std::to_string(swing.speed)+
+                        ",\"required\":"+std::to_string(swing.required)+",\"presses\":"+std::to_string(wandStrokes.presses())+",\"item\":"+std::to_string(rangedItem)+",\"trigger_held\":"+(wandPressed?"true":"false"));}
                 }
                 if(bowInputTrialRequested){
                     const auto before=bowInputTrial.phase();

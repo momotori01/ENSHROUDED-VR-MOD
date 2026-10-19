@@ -14,6 +14,9 @@ struct ColliderPose {
     uint32_t root=0,item=0,child=0;
     std::array<uint8_t,56> transform{};
     std::array<uint8_t,48> attachment{};CombatWorlds worlds{};
+    // The weapon's tip along the model's +Y, metres (the target gate's blade end; 0: not known). motion_collider_apply.hpp
+    // starts the hit volume's sweep where the tip was, not where the grip was.
+    float tipY=0;
 };
 struct ColliderEvidence {
     uint64_t now=0,frame=0,session=0,origin=0,handMs=0,actorMs=0,visualMs=0;

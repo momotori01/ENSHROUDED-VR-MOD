@@ -63,8 +63,9 @@ struct UiQuadPlacement {
     Pose origin = identityPose();
     // The image is the game's whole picture (layer/screen_xr.hpp): shown as it is, whatever its alpha holds.
     bool opaque = false;
-    // When partCount is not 0 the UI image is submitted as these quads instead of the one plate.
-    std::array<UiQuadPart, 5> parts{};
+    // When partCount is not 0 the UI image is submitted as these quads instead of the one plate (twelve: the plate around
+    // two parts taken out - the aim cluster and the locked enemy's health bar - and those two, aim_mark.hpp plateWithout).
+    std::array<UiQuadPart, 12> parts{};
     uint32_t partCount = 0;
 };
 class OpenXrClient : private OpenXrDispatch
@@ -1182,8 +1183,8 @@ class OpenXrClient : private OpenXrDispatch
             layer.viewCount = 2;
             layer.views = pv.data();
             XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-            std::array<XrCompositionLayerQuad,5> partQuads{};
-            std::array<const XrCompositionLayerBaseHeader*,7> layers{reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer)};
+            std::array<XrCompositionLayerQuad,12> partQuads{};
+            std::array<const XrCompositionLayerBaseHeader*,14> layers{reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer)};
             end.layerCount=snapshot.screenOnly?0:1;end.layers=layers.data();
             if (pending.uiAttempted && uiPending.placement.partCount) {
                 // The UI image as several quads (the plate around the aim cluster, and the cluster at the aimed point).

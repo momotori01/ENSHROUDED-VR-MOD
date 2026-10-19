@@ -1,5 +1,6 @@
 #pragma once
 #include <evr/game_stereo.hpp>
+#include <atomic>
 
 namespace evr::game {
 // Value-only input proposal. This does not mutate a game component or implement
@@ -51,6 +52,15 @@ struct InputProposal {
     float yaw=0;
     bool active() const {return fallback==InputFallback::None;}
 };
+// keen::ecs::PlayerFlags InTargetLockCombatMode: bit 14 in 1.0 (the executable's reflection, 2026-10-19). The June build had
+// the lock at 12, which 1.0 gives to WantsToWalk - so from the 1.0 update on, the lock no longer handed the walk to the game's
+// lock camera, and the walk toggle did instead (headset run 20261019-152240: player flags 16897 = bits 0, 9, 14 while locked,
+// the head camera applied throughout).
+inline constexpr uint32_t targetLockFlag=1u<<14;
+// A lock on a target does not hand the walk to the game's lock camera: the headset steers as without one. (Lock-on
+// movement - the lock camera, the target ahead - was an option from 15:30 to 18:10 on 2026-10-19; the user after trying
+// it: "the lock-on based camera is awkward to use, remove it".) The UI's full-screen states still keep the game's camera.
+inline constexpr uint32_t nativeCameraFlags(){return (1u<<1)|(1u<<2);}
 inline InputFallback inputGate(const NativeInputState& s,const HeadInputSnapshot& h) {
     if(!s.enabled)return InputFallback::Disabled;
     if(!s.known)return InputFallback::UnknownState;
@@ -61,7 +71,6 @@ inline InputFallback inputGate(const NativeInputState& s,const HeadInputSnapshot
     // All currently known ClientPlayerState bits represent special modes.
     // Unknown future bits also fall back; zero isn't proof of absence of UI.
     if(s.clientMask||s.buildingCamera||s.specialCursor)return InputFallback::BuildingOrCursor;
-    if(s.playerFlags&(1u<<12))return InputFallback::TargetLock;
     constexpr auto tracking=XR_SPACE_LOCATION_POSITION_VALID_BIT|XR_SPACE_LOCATION_ORIENTATION_VALID_BIT|
                             XR_SPACE_LOCATION_POSITION_TRACKED_BIT|XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
     if(!h.current||!h.xrFrame||!h.originEpoch||h.predictedDisplayTime<=0||(h.flags&tracking)!=tracking)

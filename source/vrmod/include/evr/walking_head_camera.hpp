@@ -77,7 +77,7 @@ inline IdleHeadResult patchVrLocomotionCamera(const ClientInputBytes& source,Cli
     output=source;IdleHeadResult result;
     const auto& player=gate.player;
     if(!player.normalUiBound){result.status=IdleHeadStatus::Ui;return result;}
-    if(!player.playerStateCurrent||!(player.playerFlags&1u)||player.playerFlags&((1u<<1)|(1u<<2)|(1u<<12))){
+    if(!player.playerStateCurrent||!(player.playerFlags&1u)||(player.playerFlags&nativeCameraFlags())){
         result.status=IdleHeadStatus::PlayerState;return result;}
     const bool swimming=gate.swimHead&&gate.actorStateCurrent&&(gate.actorState&swimmingStates);
     if(player.freeCamera||source[clientMask]||source[clientBuildingCamera]||source[clientInputMode]!=1||!gate.actorStateCurrent||!gate.gravityPresent||(!gate.gravityActive&&!swimming)||

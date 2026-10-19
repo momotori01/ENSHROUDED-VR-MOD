@@ -51,7 +51,8 @@ int main(int argc,char** argv){
     for(unsigned bit=0;bit<8;++bit){s=state;s.clientMask=uint8_t(1u<<bit);reject(s,h,game::InputFallback::BuildingOrCursor);}
     s=state;s.buildingCamera=true;reject(s,h,game::InputFallback::BuildingOrCursor);
     s=state;s.specialCursor=true;reject(s,h,game::InputFallback::BuildingOrCursor);
-    s=state;s.playerFlags|=1u<<12;reject(s,h,game::InputFallback::TargetLock);
+    s=state;s.playerFlags|=game::targetLockFlag;check(game::inputGate(s,h)==game::InputFallback::None,"a lock keeps the headset (lock-on movement removed)");
+    s=state;s.playerFlags|=1u<<12;check(game::inputGate(s,h)==game::InputFallback::None,"1.0 WantsToWalk (bit 12) is no lock");
     for(unsigned flags=0;flags<15;++flags){auto t=h;t.flags=flags;reject(state,t,game::InputFallback::TrackingUnavailable);}
     auto t=h;t.current=false;reject(state,t,game::InputFallback::TrackingUnavailable);
     t=h;t.xrFrame=0;reject(state,t,game::InputFallback::TrackingUnavailable);

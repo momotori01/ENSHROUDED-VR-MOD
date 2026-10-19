@@ -74,7 +74,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   auto none=input;none[clientMask]=0;ck(patchBuildingHeadCamera(none,sent,gate,head,0).status==IdleHeadStatus::Applied&&sent[clientMask]==0);}
  // What keeps the game's own bytes: keyboard play, target lock, the first-person building camera, unusual gravity, a lost head.
  {auto k=input;k[clientInputMode]=0;ck(patchBuildingHeadCamera(k,sent,gate,head,0).status==IdleHeadStatus::SpecialMode&&sent==k);
-  auto g=gate;g.walking.player.playerFlags|=1u<<12;ck(patchBuildingHeadCamera(input,sent,g,head,0).status==IdleHeadStatus::PlayerState&&sent==input);
+  auto g=gate;g.walking.player.playerFlags|=1u<<1;ck(patchBuildingHeadCamera(input,sent,g,head,0).status==IdleHeadStatus::PlayerState&&sent==input);
   auto f=input;f[clientBuildingCamera]=1;ck(patchBuildingHeadCamera(f,sent,gate,head,0).status==IdleHeadStatus::SpecialMode&&sent==f);
   g=gate;g.walking.gravityDirection={0,1,0};ck(patchBuildingHeadCamera(input,sent,g,head,0).status==IdleHeadStatus::SpecialMode&&sent==input);
   auto h=head;h.flags=0;ck(patchBuildingHeadCamera(input,sent,gate,h,0).status==IdleHeadStatus::Tracking&&sent==input);

@@ -31,16 +31,44 @@ inline bool stackAt(uintptr_t world,uint32_t entity,uint8_t index,Stack& out){
   const auto raw=read<std::array<uint8_t,12>>(inventory+12*index);std::memcpy(&out.item,raw.data(),4);std::memcpy(out.data.data(),raw.data()+4,8);return true;
  }catch(const std::exception&){return false;}
 }
+// 1.0 (2026-10-19): 96 bytes, the fields unmoved (tools/reflection_struct_diff.py) - the read asked for 88 until then and found
+// nothing, so the float stayed on the copied rod after a cast (headset run 20261019-160912, user: "the float stays on after
+// the cast"; one fishing_rod_shown record, no fishing_state at all).
 // keen::ecs::NetworkFishing: +0 keen::fishing::State, +48 the float's entity while one is out. Read about thirty times
 // a second (the rod shown changes with it, motion_visual_bridge.hpp).
 inline void fishing(uintptr_t world,uint32_t local,uint64_t now){
  static uint64_t last=0;if(fishingType<0||world!=knownWorld||now-last<30)return;last=now;
+ controllerUiFixture::fishingComponentType=fishingType;controllerUiFixture::fishingComponentWorld=world;
  try{
-  const auto player=nativeImpactComponents::entityAtWorld(world,local);const auto fishing=nativeImpactComponents::component(player,unsigned(fishingType),88);if(!fishing)return;
+  const auto player=nativeImpactComponents::entityAtWorld(world,local);const auto fishing=nativeImpactComponents::component(player,unsigned(fishingType),96);if(!fishing)return;
   const auto state=read<uint8_t>(fishing);const auto floatId=read<uint32_t>(fishing+48);if(floatId)controllerUiFixture::fishingFloatMs=now;
+  controllerUiFixture::fishingState=int(state);controllerUiFixture::fishingStateMs=now;
+  {const auto fish=read<uint32_t>(fishing+0x34);static uint32_t toldFish=0;controllerUiFixture::fishingFishId=fish;
+   if(fish!=toldFish){toldFish=fish;logFile->event("fishing_fish_entity","\"frame\":"+std::to_string(liveFrame.frame)+",\"state\":"+std::to_string(unsigned(state))+",\"fish\":"+std::to_string(fish));}}
   static int lastState=-1;static uint32_t lastFloat=0;static unsigned fishingEvents=0;
   if((int(state)!=lastState||floatId!=lastFloat)&&fishingEvents<300){lastState=int(state);lastFloat=floatId;++fishingEvents;
    logFile->event("fishing_state","\"frame\":"+std::to_string(liveFrame.frame)+",\"state\":"+std::to_string(unsigned(state))+",\"float\":"+std::to_string(floatId)+",\"charge\":"+std::to_string(read<float>(fishing+20))+",\"read_only\":true");}
+  // The fight (2026-10-19, user after the headset run of 17:52: "cannot catch one - was the input toward the fish not
+  // given? I cannot tell a mistake of mine from a bug"; every fight there went Outbreak 29 -> ReelIn 32, never FinalHook
+  // 30). The game's own view of it (1.0 reflection, tools/reflection_struct_diff.py): +0x1 lastError
+  // (keen::fishing::MinigameError: 9 QuickTimeEventFailed, 13 NoEnduranceLeft, 14 FishEscaped, ...), +0x10
+  // outbreakDirection (keen::fishing::Direction 0 None, 1 Left, 2 Right), +0x18 / +0x1c the line's and the fish's
+  // endurance in percent, +0x45 minigameInputState (0 None, 1 ValidDirection, 2 InvalidDirection: whether the game takes
+  // the player's steering as the right way). On every change, and twice a second, while a fish is on.
+  {static int lastDirection=-1,lastInput=-1,lastError=-1;static uint64_t lastFight=0;static unsigned fightEvents=0;
+   const int direction=read<uint8_t>(fishing+0x10),input=read<uint8_t>(fishing+0x45),error=read<uint8_t>(fishing+1);
+   const bool fight=state>=19&&state<=33;controllerUiFixture::fishingDirection=direction;controllerUiFixture::fishingInputState=input;
+   {static const bool gainHaptic=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_GAIN_HAPTIC",v,sizeof v);return !(n==1&&v[0]=='0');}();
+    static float lastFish=-1;static unsigned gainLogs=0;const float fish=read<float>(fishing+0x1c);
+    if(fight&&std::isfinite(fish)&&lastFish>=0&&fish<lastFish-1e-4f){
+     if(gainHaptic)controllerUiFixture::fishGainHapticUntil=now+450;   // a whole pulse of the pull (0.4 s)
+     if(gainLogs<200&&(gainLogs<5||now-lastFight>=500)){++gainLogs;logFile->event("fishing_fish_tiring","\"frame\":"+std::to_string(liveFrame.frame)+",\"state\":"+std::to_string(unsigned(state))+",\"fish_endurance\":"+std::to_string(fish)+",\"was\":"+std::to_string(lastFish)+",\"haptic\":"+(gainHaptic?"true":"false"));}}
+    lastFish=fight&&std::isfinite(fish)?fish:-1;}
+   if((fight||error!=lastError)&&(direction!=lastDirection||input!=lastInput||error!=lastError||now-lastFight>=500)&&fightEvents<4000){
+    lastDirection=direction;lastInput=input;lastError=error;lastFight=now;++fightEvents;
+    logFile->event("fishing_fight","\"frame\":"+std::to_string(liveFrame.frame)+",\"state\":"+std::to_string(unsigned(state))+",\"direction\":"+std::to_string(direction)+
+     ",\"input_state\":"+std::to_string(input)+",\"last_error\":"+std::to_string(error)+",\"line_endurance\":"+std::to_string(read<float>(fishing+0x18))+
+     ",\"fish_endurance\":"+std::to_string(read<float>(fishing+0x1c))+",\"round\":"+std::to_string(unsigned(read<uint8_t>(fishing+0x21)))+",\"rounds\":"+std::to_string(unsigned(read<uint8_t>(fishing+0x20))));}}
  }catch(const std::exception&){}
 }
 // 1.0 (2026-10-16): keen::ecs::SlotSelection is 216 bytes (256): the equipment array holds 20 (27) InventorySlotId, the

@@ -23,7 +23,7 @@ int main(){
  check(game::cameraPresentation(0)==P::NativeEvent&&game::cameraPresentation(30)==P::NativeEvent&&game::cameraPresentation(31)==P::NativeEvent,"entity camera dialogue and altar preserve native event camera");
  check(game::cameraPresentation(34)==P::FirstPerson&&game::cameraPresentation(35)==P::FirstPerson,"placing a flame altar or an area prop is first-person play (2026-10-19: the headset jumped to the game's camera)");
  check(game::cameraPresentation(39)==P::FirstPerson&&game::cameraPresentation(40)==P::FirstPerson&&game::cameraPresentation(41)==P::FirstPerson&&
-       game::cameraPresentation(42)==P::NativeEvent,"fishing is first-person play, its victory camera stays native");
+       game::cameraPresentation(42)==P::FirstPerson,"fishing is first-person play, its victory camera too (2026-10-19)");
  check(game::cameraPresentation(38)==P::FirstPerson&&game::cameraPresentation(36)==P::FirstPerson&&game::cameraPresentation(37)==P::FirstPerson,"the cameras of a building tool in hand, third and first person, are ordinary first-person play");
  // 1.0 renumbering (its reflection table, 2026-10-16): read back to June's values.
  check(game::legacyCameraId(4)==4&&game::legacyCameraId(7)==6&&game::legacyCameraId(16)==19&&game::legacyCameraId(17)==20,"1.0 default, sprinting, idle and sneaking keep their June ids");

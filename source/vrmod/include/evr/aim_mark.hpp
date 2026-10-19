@@ -116,6 +116,32 @@ inline std::array<QuadPart,4> plateAround(PixelRect cut,uint32_t imageWidth,uint
     return {part(0,0,int32_t(imageWidth),cut.y0),part(0,cut.y1,int32_t(imageWidth),int32_t(imageHeight)),
             part(0,cut.y0,cut.x0,cut.y1),part(cut.x1,cut.y0,int32_t(imageWidth),cut.y1)};
 }
+// The plate without one or two parts taken out (the aim cluster and the locked enemy's health bar, 2026-10-19): the image in
+// rows cut at the parts' top and bottom edges, each row without the parts that cross it. The parts must not overlap (false);
+// out holds up to 10 pieces (two parts at different heights: at most 5 rows of at most 3 pieces).
+inline bool plateWithout(const PixelRect* cuts,size_t count,uint32_t imageWidth,uint32_t imageHeight,float plateWidth,std::array<QuadPart,10>& out,size_t& pieces) {
+    pieces=0;if(!cuts||count==0||count>2||!imageWidth||!imageHeight)return false;
+    const int32_t w=int32_t(imageWidth),h=int32_t(imageHeight);
+    for(size_t i=0;i<count;++i){const auto& c=cuts[i];if(c.x0<0||c.y0<0||c.x1>w||c.y1>h||c.x1<=c.x0||c.y1<=c.y0)return false;}
+    if(count==2){const auto& a=cuts[0];const auto& b=cuts[1];if(a.x0<b.x1&&b.x0<a.x1&&a.y0<b.y1&&b.y0<a.y1)return false;}
+    std::array<int32_t,6> ys{0,h,0,0,0,0};size_t n=2;
+    for(size_t i=0;i<count;++i){ys[n++]=cuts[i].y0;ys[n++]=cuts[i].y1;}
+    std::sort(ys.begin(),ys.begin()+n);n=size_t(std::unique(ys.begin(),ys.begin()+n)-ys.begin());
+    const float s=plateWidth/float(imageWidth);
+    for(size_t r=0;r+1<n;++r){
+        const int32_t y0=ys[r],y1=ys[r+1];if(y1<=y0)continue;
+        std::array<std::pair<int32_t,int32_t>,2> taken{};size_t t=0;
+        for(size_t i=0;i<count;++i)if(cuts[i].y0<=y0&&cuts[i].y1>=y1)taken[t++]={cuts[i].x0,cuts[i].x1};
+        if(t==2&&taken[1].first<taken[0].first)std::swap(taken[0],taken[1]);
+        int32_t x=0;
+        const auto piece=[&](int32_t x0,int32_t x1){
+            if(x1<=x0)return;auto& p=out[pieces++];p.rect={x0,y0,x1,y1};p.width=float(x1-x0)*s;p.height=float(y1-y0)*s;
+            p.pose=identityPose();p.pose.position={(float(x0+x1)*.5f-float(w)*.5f)*s,(float(h)*.5f-float(y0+y1)*.5f)*s,0};};
+        for(size_t i=0;i<t;++i){piece(x,taken[i].first);x=taken[i].second;}
+        piece(x,w);
+    }
+    return pieces>0;
+}
 // A rotation from its three axes (unit, perpendicular, right-handed).
 inline Quat fromAxes(Vec3 x,Vec3 y,Vec3 z) {
     const float trace=x.x+y.y+z.z;Quat q;
@@ -133,6 +159,23 @@ inline Quat fromAxes(Vec3 x,Vec3 y,Vec3 z) {
 // submitted in the headset run game-20261013-105615 and was not seen (SteamVR; "the ammunition count and the charge
 // gauge are not displayed any more"). At 20 m it is 0.2 degrees nearer to the eyes than the far mark.
 constexpr float clusterFarthest=20.f;
+// The same for any part of the image whose pixel (anchorX, anchorY) belongs on the line from the eye to the point: the game's
+// spatial HUD (FbUiHUDSpatial - the locked enemy's health bar and lock-on arrow) drawn into the HUD image where the game's own
+// third-person camera sees its anchor, taken out and set at the anchor's place in the world (2026-10-19, hooks/target_mark.hpp).
+inline QuadPart partAt(PixelRect cut,float anchorX,float anchorY,uint32_t imageWidth,uint32_t imageHeight,float plateWidth,float plateDistance,Vec3 eye,Vec3 point) {
+    QuadPart p;p.rect=cut;
+    if(!finite(eye)||!finite(point)||!std::isfinite(anchorX)||!std::isfinite(anchorY)||!imageWidth||!imageHeight||!(plateWidth>0)||!(plateDistance>0))return p;
+    const Vec3 back=eye-point;const float away=length(back);
+    if(!std::isfinite(away)||away<.5f)return p;
+    const Vec3 z=back*(1/away);Vec3 x=cross({0,1,0},z);
+    if(length(x)<.05f)x={1,0,0};
+    x=x*(1/length(x));const Vec3 y=cross(z,x);
+    const float distance=std::min(away,clusterFarthest);const Vec3 place=eye-z*distance;
+    const float s=plateWidth/float(imageWidth)*(distance/plateDistance);
+    const float dx=(float(cut.x0+cut.x1)*.5f-anchorX)*s,dy=(anchorY-float(cut.y0+cut.y1)*.5f)*s;
+    p.pose={fromAxes(x,y,z),place+x*dx+y*dy};p.width=float(cut.x1-cut.x0)*s;p.height=float(cut.y1-cut.y0)*s;
+    return p;
+}
 inline QuadPart clusterAt(PixelRect cut,uint32_t imageWidth,uint32_t imageHeight,float plateWidth,float plateDistance,Vec3 eye,Vec3 point) {
     QuadPart p;p.rect=cut;
     if(!finite(eye)||!finite(point)||!imageWidth||!imageHeight||!(plateWidth>0)||!(plateDistance>0))return p;

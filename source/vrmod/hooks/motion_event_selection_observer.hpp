@@ -196,6 +196,10 @@ inline std::atomic<unsigned> skillsStarted{0},skillsLogged{0};
 constexpr uint16_t specialAbilityTrigger=15;   // keen::actor::ActionSequenceTrigger::SpecialAbility (1.0 executable)
 inline const bool specialAbilityOwned=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_SPECIAL_ABILITY_OWNED",v,sizeof v);return !(n==1&&v[0]=='0');}();
 inline bool skillOwned(const evr::motion::EventActionKey& key,uint64_t now){return skillAction.until>=now&&skillAction.key==key;}
+// An action of the wand that a swing started (LiveAttackPress::spawnsOnly): its spawns came on the first tick, the rest stays the game's.
+inline SkillAction wandAction;   // guarded by retimeMutex
+inline bool wandOwned(const evr::motion::EventActionKey& key,uint64_t now){return wandAction.until>=now&&wandAction.key==key;}
+inline std::atomic<unsigned> wandShotsEarly{0};
 inline void movingNoted(uint32_t sequence,uint32_t item,int64_t trigger,uint32_t by,const char* where){
  if(movingSeen.fetch_add(1)<60)try{logFile->event("live_event_moving_action","\"sequence\":"+std::to_string(sequence)+",\"item\":"+std::to_string(item)+",\"trigger\":"+std::to_string(trigger)+",\"by\":"+hex(by)+",\"where\":\""+where+"\",\"left_to_the_game\":true");}catch(...){}
 }
@@ -331,7 +335,7 @@ inline std::atomic<unsigned> liveAppended{0},liveSuppressed{0},liveLookAheads{0}
 // weaponOnly (a skill attack): only the hits on a hand (SpawnEntityBaseEvent.attachmentSlot, payload +145: HandR 8, HandL 9,
 // HandPalmR 14, HandPalmL 15); a shock wave (no slot, 36) or a kick (FootR 5) keeps its authored time and place.
 inline bool weaponSlot(uint8_t slot){return slot==8||slot==9||slot==14||slot==15;}
-inline size_t earlyCandidates(const std::array<uint8_t,3104>& before,void* registry,int64_t length,std::array<evr::motion::EarlyEvent,evr::motion::maximumEarlyEvents>& early,uint32_t& type,size_t& impacts,size_t& lasting,bool weaponOnly=false){
+inline size_t earlyCandidates(const std::array<uint8_t,3104>& before,void* registry,int64_t length,std::array<evr::motion::EarlyEvent,evr::motion::maximumEarlyEvents>& early,uint32_t& type,size_t& impacts,size_t& lasting,bool weaponOnly=false,int64_t together=1000000){
  std::array<uintptr_t,16> storage{};
  auto look=[&](uint32_t hash)->size_t{
   auto copy=before;const int64_t zero=0;std::memcpy(copy.data()+0x1b8,&zero,8);std::memcpy(copy.data()+0x1c0,&length,8);copy[0xbf0]=0;const auto expected=copy;
@@ -350,7 +354,7 @@ inline size_t earlyCandidates(const std::array<uint8_t,3104>& before,void* regis
  if((stillKeep&2)&&lasting!=1)return 0;
  if(!impacts&&!(stillKeep&4)){type=spawnEntityEvent;const auto spawns=look(spawnEntityEvent);
   for(size_t i=0;i<spawns;++i){const auto p=sequenceAssetObserver::relative(storage[i]+4);found[count++]={storage[i],read<int64_t>(p),read<int64_t>(p+8)};}}
- return evr::motion::selectEarly(found.data(),count,early);
+ return evr::motion::selectEarly(found.data(),count,early,together);
 }
 inline void liveEvents(void* output,const void* actor,void* registry,const std::array<uint8_t,3104>& before,uintptr_t world,uint32_t entity){
  if(!liveRetime)return;std::lock_guard<std::mutex> lock(retimeMutex);
@@ -364,7 +368,7 @@ inline void liveEvents(void* output,const void* actor,void* registry,const std::
  bool skill=false;
  if(liveLedger.owns(key,now)){
   // A skill attack keeps its animation, turn, step, pushes, sounds and effects: only its authored weapon hits go.
-  skill=skillOwned(key,now);
+  skill=skillOwned(key,now)||wandOwned(key,now);   // the wand's swing: nothing of its motion withheld either
   dst.clear();for(auto p:src){const auto type=read<uint32_t>(p);
    if((type==spawnImpactEvent||type==spawnEntityEvent)&&liveLedger.consider(key,identity(p),false,false,src.size(),h[2],now)==Decision::Suppress){++impacts;continue;}
    if(liveStill&&!skill&&movesCharacter(type)){++stilled;continue;}
@@ -381,25 +385,34 @@ inline void liveEvents(void* output,const void* actor,void* registry,const std::
   const bool button=!stroke&&specialAbilityOwned&&actionTrigger==specialAbilityTrigger&&listed&&listed->skill&&listed->weaponHits;
   if(!(stroke||button)||root.entity!=entity||triggerEntity!=entity||!rootCamera::firstPerson(root)||length<=0||length>60000000000ll||!h[0])return;
   uint32_t by=0;const auto kind=actionKind(before,registry,length,key.sequence,by);skill=kind==ActionKind::Skill;
-  size_t lasting=0,found=0;earlyCount=kind==ActionKind::LeftToGame?0:earlyCandidates(before,registry,length,early,earlyType,found,lasting,skill);++liveLookAheads;
+  // The wand's swing: all of the first spawns within 100 ms (its normal attack spawns at 350 and 400 ms) come at once.
+  const bool wandSwing=stroke&&press.spawnsOnly;
+  size_t lasting=0,found=0;earlyCount=kind==ActionKind::LeftToGame?0:earlyCandidates(before,registry,length,early,earlyType,found,lasting,skill&&!wandSwing,wandSwing?100000000:1000000);++liveLookAheads;
+  if(wandSwing&&earlyType!=spawnEntityEvent)earlyCount=0;   // only what a wand spawns, never an Impact
   bool same=h==read<std::array<uintptr_t,4>>(address)&&before==read<std::array<uint8_t,3104>>(reinterpret_cast<uintptr_t>(actor));
   for(size_t i=0;i<src.size();++i)same=same&&src[i]==read<uintptr_t>(h[0]+i*8);
   if(!same)throw std::runtime_error("live look ahead changed its sources");
   if(kind==ActionKind::LeftToGame){movingNoted(key.sequence,key.item,int64_t(key.trigger),by,"main");return;}
   if(!earlyCount){if(liveNotSingle.fetch_add(1)<50)logFile->event("live_event_not_retimed","\"reason\":\"impact_count\",\"impacts\":"+std::to_string(found)+",\"lasting\":"+std::to_string(lasting)+",\"sequence\":"+std::to_string(key.sequence)+",\"item\":"+std::to_string(key.item)+",\"trigger\":"+std::to_string(key.trigger));return;}
   authored=early[0].time;
-  if(stroke&&controllerUiFixture::liveCooldownEnabled())controllerUiFixture::liveAttackBegan=press.serial;   // the press started an action with a stroke
+  if(stroke&&!wandSwing&&controllerUiFixture::liveCooldownEnabled())controllerUiFixture::liveAttackBegan=press.serial;   // the press started an action with a stroke
   const auto weapon=attachmentObserver::meleeAppearance(root.entity,now,true);const auto ui=inputUi::snapshot();
-  const bool qualified=((weapon.valid&&weapon.item==key.item)||(bareHands&&bareHands(key.item,now)))&&inputUi::boundNormal(ui,ui.senderContext,entity,now);
+  const bool qualified=(wandSwing||(weapon.valid&&weapon.item==key.item)||(bareHands&&bareHands(key.item,now)))&&inputUi::boundNormal(ui,ui.senderContext,entity,now);
   bool due=false,present=false;for(size_t i=0;i<earlyCount;++i){due=due||early[i].time<=sourceEnd;present=present||std::find(src.begin(),src.end(),early[i].variant)!=src.end();}
   if(due||present||liveLedger.consider(key,identity(early[0].variant),true,qualified,src.size()+earlyCount-1,h[2],now)!=Decision::Append){
    if(liveUnqualified.fetch_add(1)<50)logFile->event("live_event_not_retimed","\"reason\":"+std::string(!qualified?"\"not_the_shown_weapon_or_ui\"":due||present?"\"already_due\"":"\"ledger\"")+",\"sequence\":"+std::to_string(key.sequence)+",\"item\":"+std::to_string(key.item)+",\"trigger\":"+std::to_string(key.trigger));
    earlyCount=0;return;}
   const auto traits=stillTraits(before,registry,length);const bool cooldown=controllerUiFixture::liveCooldownEnabled();
   // The cooldown of the stroke that started this action is as long as the action takes to let the next attack begin.
-  if(stroke&&cooldown&&traits.attackAt>0)controllerUiFixture::measureLiveCooldown(press.serial,uint64_t(traits.attackAt/1000000),key.sequence);
+  if(stroke&&!wandSwing&&cooldown&&traits.attackAt>0)controllerUiFixture::measureLiveCooldown(press.serial,uint64_t(traits.attackAt/1000000),key.sequence);
   attackAt=traits.attackAt;
-  if(skill){
+  if(wandSwing){
+   // The wand keeps the game's cooldown: no swing shoots again before this action lets the next attack begin (its first
+   // EnableAbilityEvent with the ability to attack after the start, 600 ms for the normal attack) - the time from one shot to
+   // the next is the game's own, the shots only come 350 ms sooner.
+   wandAction.key=key;wandAction.until=now+uint64_t(length/1000000)+3000;++wandShotsEarly;
+   controllerUiFixture::wandNextShotMs=now+uint64_t((traits.attackAt>0&&traits.attackAt<length?traits.attackAt:length)/1000000);
+  }else if(skill){
    // The weapon hits live from this first tick until the next attack may begin (the action's first EnableAbilityEvent
    // with the ability to attack; else its end): a move-then-strike skill hits whenever the weapon touches, and no hit
    // of this action outlives it into the next one. The hits' own lengths grow by this factor (impact_lifetime.hpp).
@@ -447,7 +460,7 @@ inline void stillElsewhere(void* output,const void* actor,void* registry,const v
   const auto world=stillWorld.load();const auto entity=stillEntity.load();const auto key=actionKey(before,world,entity);if(!key.valid())return;
   const auto now=GetTickCount64();int64_t sourceStart=0,sourceEnd=0,length=0;std::memcpy(&sourceStart,before.data()+0x1b8,8);std::memcpy(&sourceEnd,before.data()+0x1c0,8);std::memcpy(&length,before.data()+0x188,8);
   std::lock_guard<std::mutex> lock(retimeMutex);
-  if(skillOwned(key,now))return;   // a skill attack's motion stays the game's at every call site
+  if(skillOwned(key,now)||wandOwned(key,now))return;   // a skill attack's motion stays the game's at every call site (the wand's swing too)
   if(!liveLedger.owns(key,now)&&!(stillAction.until>=now&&stillAction.key==key)){
    if(sourceStart!=0||!livePress)return;const auto press=livePress();const auto root=rootCamera::snapshot();uint32_t triggerEntity=0;std::memcpy(&triggerEntity,before.data()+16,4);
    if(!press.starts(key,now)||root.entity!=entity||triggerEntity!=entity||!rootCamera::firstPerson(root)||length<=0||length>60000000000ll)return;

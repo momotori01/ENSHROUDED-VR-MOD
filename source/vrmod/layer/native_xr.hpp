@@ -45,6 +45,7 @@ struct LiveNativeXr
     uint64_t uiOverlaySerial=0;unsigned uiOverlayLogs=0;   // the overlay picture last given to the UI transfer (evrSetUiOverlay)
     bool uiPlateLogged=false;unsigned uiPlateLogs=0; // the menu's plate (evrSetUiPlate): what the record last told
     bool aimClusterLogged=false;unsigned aimClusterLogs=0; // the aim cluster's quads: what the record last told
+    int targetHudState=-1;unsigned targetHudStateLogs=0;   // the health bar's part: what the record last told (target_hud_state)
     // Opt-in (EVR_XR_ASYNC_COMPLETION=1): release after queue-ordered submission instead of
     // a per-frame device idle. Only when the binding family has exactly one created queue,
     // so the eye writer's family proves the same VkQueue as the XR binding queue.
@@ -133,7 +134,11 @@ extern "C" __declspec(dllexport) int evrUiOverlayShown() noexcept {const auto at
 // evrRequestNativeXrBurst; 1 while pictures of an earlier request are still being taken. evrSetCaptureHalf: 1 half size,
 // 0 full, -1 as the environment says (EVR_CAPTURE_HALF).
 diagnostic::CaptureBurst bugCaptureBurst;
-extern "C" __declspec(dllexport) int evrRequestBugCapture(uint32_t count) noexcept {if(bugCaptureBurst.pending())return 1;bugCaptureBurst.reset();return bugCaptureBurst.request(count);}
+// The bug report's first picture (one pair) also writes the UI image (2026-10-19: where the game draws the locked target's
+// health bar on the HUD, for moving it above the enemy - native-xr/ui-frame-<n>-native.rgba8 and .json, made into a JPEG
+// of the report by the settings program).
+std::atomic<bool> bugUiWanted{false};
+extern "C" __declspec(dllexport) int evrRequestBugCapture(uint32_t count) noexcept {if(bugCaptureBurst.pending())return 1;bugCaptureBurst.reset();const int r=bugCaptureBurst.request(count);if(!r&&count==1)bugUiWanted=true;return r;}
 extern "C" __declspec(dllexport) int evrSetCaptureHalf(int half) noexcept {if(half<-1||half>1)return 2;captureHalfOverride=half;return 0;}
 extern "C" __declspec(dllexport) int evrSetUiOverlay(const uint8_t* rgba,uint32_t w,uint32_t h,float u0,float v0,float u1,float v1,int onlyWhereEmpty) noexcept {
     try{
@@ -171,6 +176,44 @@ extern "C" __declspec(dllexport) int evrSetThrowGuide(const float* points,uint32
         std::lock_guard<std::mutex> l(throwGuideLock);for(uint32_t i=0;i<count;i++)throwGuidePoints[i]={points[i*3],points[i*3+1],points[i*3+2]};
     }
     throwGuideCount=shown?count:0;throwGuideAt=GetTickCount64();return 0;
+}
+// The locked combat target's mark (hooks/target_mark.hpp): `point` is the place just above the target's head in the LOCAL
+// space; shown 1 = a downward chevron is drawn into both eyes' images there, as large to the eye at any distance. For a
+// quarter of a second after the last call; shown 0 takes it away.
+std::mutex targetMarkLock;Vec3 targetMarkPoint{};std::atomic<int> targetMarkShown{0};std::atomic<uint64_t> targetMarkAt{0},targetMarkFrames{0};std::atomic<bool> targetMarkFailed{false};
+extern "C" __declspec(dllexport) int evrSetTargetMark(const float* point,int shown) noexcept {
+    if(shown<0||shown>1||(shown&&!point))return 2;
+    if(shown){
+        for(unsigned i=0;i<3;i++)if(!std::isfinite(point[i])||std::abs(point[i])>100000.f)return 2;
+        std::lock_guard<std::mutex> l(targetMarkLock);targetMarkPoint={point[0],point[1],point[2]};
+    }
+    targetMarkShown=shown;targetMarkAt=GetTickCount64();return 0;
+}
+// The locked enemy's health bar and lock-on arrow (the game's spatial HUD, FbUiHUDSpatial) as the game drew them into the HUD
+// image: values = the anchor's place in the LOCAL space (3), where the game's own third-person camera sees it as slopes
+// (x / z, y / z of its camera space, +z ahead), the tangent of that camera's half field of view and 1 when that field is
+// the vertical one. The HUD image's part about it is taken out of the plate and set at the anchor (aim_mark.hpp partAt).
+// Mock game-20261019-142512: with the head alone turning, the spatial HUD stayed put in the HUD image - the game's own
+// camera projects it, not the eyes'. For a quarter of a second after the last call; shown 0 takes it away.
+std::mutex targetHudLock;std::array<float,7> targetHudValues{};std::atomic<int> targetHudShown{0};std::atomic<uint64_t> targetHudAt{0},targetHudFrames{0};
+extern "C" __declspec(dllexport) int evrSetTargetHud(const float* values,int shown) noexcept {
+    if(shown<0||shown>1||(shown&&!values))return 2;
+    if(shown){
+        for(unsigned i=0;i<7;i++)if(!std::isfinite(values[i])||std::abs(values[i])>100000.f)return 2;
+        if(!(values[5]>.05f&&values[5]<20.f))return 2;
+        std::lock_guard<std::mutex> l(targetHudLock);std::copy(values,values+7,targetHudValues.begin());
+    }
+    targetHudShown=shown;targetHudAt=GetTickCount64();return 0;
+}
+inline bool targetHudNow(std::array<float,7>& values) {
+    if(!targetHudShown.load())return false;
+    const auto now=GetTickCount64();const auto at=targetHudAt.load();if(now<at||now-at>250)return false;
+    std::lock_guard<std::mutex> l(targetHudLock);values=targetHudValues;return true;
+}
+inline bool targetMarkNow(Vec3& point) {
+    if(!targetMarkShown.load())return false;
+    const auto now=GetTickCount64();const auto at=targetMarkAt.load();if(now<at||now-at>250)return false;
+    std::lock_guard<std::mutex> l(targetMarkLock);point=targetMarkPoint;return true;
 }
 // The bug report's last seconds (eye_history.hpp): asked from the hooks (hooks/bug_report.hpp) when its button is pressed
 // and when its window ends; written before the next pair. evrEyeHistorySaved: the saves done so far.
@@ -427,6 +470,25 @@ int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice de
                         if(n<=4||n%300==0){std::ostringstream o;o<<std::setprecision(6)<<"\"frames\":"<<n<<",\"frame\":"<<st->xr->pendingFrame().frame<<",\"eye\":"<<eye<<",\"points\":"<<count<<",\"drawn\":"<<on
                             <<",\"first\":["<<guide[0].x<<','<<guide[0].y<<','<<guide[0].z<<"],\"last\":["<<guide[count-1].x<<','<<guide[count-1].y<<','<<guide[count-1].z<<']';st->log->event("throw_guide_frame",o.str());}
                     }catch(const std::exception& e){throwGuideFailed=true;st->log->event("throw_guide_failed","\"reason\":"+jsonString(e.what()));}
+                }
+                // The locked target's mark: a downward chevron (two beams to its tip) above the target's head, 0.8 degrees
+                // half wide to the eye at any distance (0.7 at first: 13 pixels in a Mock eye image of 1570, lost in the view;
+                // then 1.6, and the user after the headset run of 2026-10-19 14:00: "half of the present size is right").
+                Vec3 targeted{};
+                if(eye<2&&!targetMarkFailed.load()&&targetMarkNow(targeted)){
+                    try{
+                        const auto& view=st->xr->pendingFrame().views[eye];
+                        const auto tip=aim::eyePlace(view.pose,view.fov.angleLeft,view.fov.angleRight,view.fov.angleUp,view.fov.angleDown,targeted,dst.width,dst.height,.014f);
+                        if(tip.on&&tip.radius>0){
+                            if(!st->eyeMark){st->eyeMark=std::make_unique<EyeMark>(st->xr->vk,st->xr->format);st->log->event("aim_mark_enabled","\"format\":"+std::to_string(st->xr->format)+",\"by\":\"target_mark\"");}
+                            const float w=tip.radius,h=w*1.3f,thick=std::max(2.5f,w*.26f);
+                            st->eyeMark->recordBeam(cmd,dst,{tip.x,tip.y,tip.x-w,tip.y-h,thick,1.f},drawn);drawn=true;
+                            st->eyeMark->recordBeam(cmd,dst,{tip.x,tip.y,tip.x+w,tip.y-h,thick,1.f},drawn);
+                            const auto n=eye==0?++targetMarkFrames:targetMarkFrames.load();
+                            if(n<=4||n%300==0){std::ostringstream o;o<<std::setprecision(6)<<"\"frames\":"<<n<<",\"frame\":"<<st->xr->pendingFrame().frame<<",\"eye\":"<<eye<<",\"pixel\":["<<tip.x<<','<<tip.y<<"],\"half_width\":"<<w
+                                <<",\"point\":["<<targeted.x<<','<<targeted.y<<','<<targeted.z<<']';st->log->event("target_mark_frame",o.str());}
+                        }
+                    }catch(const std::exception& e){targetMarkFailed=true;st->log->event("target_mark_failed","\"reason\":"+jsonString(e.what()));}
                 }
                 return drawn;
             };
@@ -874,17 +936,69 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                     <<"],\"distance_m\":"<<placement.distance<<",\"space\":"<<(placement.localSpace?"\"LOCAL\"":"\"VIEW\"");
                 state.log->event("native_ui_plate",o.str());
             }
-            if(cluster&&!placement.localSpace){
-                // The plate ahead of the head as the four parts around the cluster, and the cluster at the aimed point.
-                const auto cut=aim::clusterRect(uiSource.width,uiSource.height);
-                const auto at=aim::clusterAt(cut,uiSource.width,uiSource.height,placement.width,placement.distance,xr.headLocation.pose.position,aimedPoint);
-                if(at.width>0){
-                    const auto around=aim::plateAround(cut,uiSource.width,uiSource.height,placement.width);
-                    for(const auto& p:around){auto& part=placement.parts[placement.partCount++];
-                        part={p.rect.x0,p.rect.y0,p.rect.x1-p.rect.x0,p.rect.y1-p.rect.y0,false,Pose{{0,0,0,1},{p.pose.position.x,p.pose.position.y,-placement.distance}},p.width,p.height};}
-                    placement.parts[placement.partCount++]={cut.x0,cut.y0,cut.x1-cut.x0,cut.y1-cut.y0,true,at.pose,at.width,at.height};
-                }
+            // The locked enemy's health bar and lock-on arrow: where the game's camera put them into the HUD image (the
+            // anchor pixel), a part 380 by 180 (of 1080 rows) about it, the anchor 50 rows above its bottom - the bar and
+            // the level badge stand above the arrow (bug report 20261019-141055, ui-031117: badge 341, bar 353, arrow 372).
+            std::array<float,7> hud{};const bool hudKnown=targetHudNow(hud);bool targetHud=hudKnown&&!(uiPlateFixed.load()&&GetTickCount64()-uiPlateAt.load()<=2000);
+            // Why the bar is or is not taken out (2026-10-19 18:45, user: "the health bar shows in the UI when the enemy leaves
+            // my view"): 0 no target from the hooks, 1 the plate fixed in the room (a menu), 2 the anchor off the image,
+            // 3 the plate in the room's space, 4 no part (too near, or overlapping the cluster), 5 moved. Logged on each change.
+            int hudState=!hudKnown?0:!targetHud?1:5;
+            aim::PixelRect hudCut{};float hudX=0,hudY=0;
+            if(targetHud){
+                const float w=float(uiSource.width),h=float(uiSource.height),aspect=w/h,tanHalf=hud[5];const bool vertical=hud[6]>.5f;
+                hudX=w*.5f*(1+hud[3]/(vertical?tanHalf*aspect:tanHalf));hudY=h*.5f*(1-hud[4]/(vertical?tanHalf:tanHalf/aspect));
+                const float s=h/1080.f;
+                // 380 by 180 since 2026-10-19 18:20 (user after the headset run of 17:52: "the health bar sometimes goes out of
+                // the area and is cut"): wider and taller round the anchor, and near the image's edge the part is the image's
+                // side of it (before, a part over the edge was not taken out at all and the bar went back to the HUD).
+                hudCut={int32_t(hudX-190*s),int32_t(hudY-130*s),int32_t(hudX+190*s),int32_t(hudY+50*s)};
+                // The anchor may be off the image while the bar, beside and above it, still shows at the edge (2026-10-19 19:25,
+                // user: "the bar stays in the UI only when it sticks out of the cut"; headset run 20261019-191819: every frame
+                // the part was not taken out had the anchor just off the image - x 1958, 1987, y -36, 1140): the part is taken
+                // out as long as any of it is on the image.
+                targetHud=std::isfinite(hudX)&&std::isfinite(hudY)&&hudCut.x1>1&&hudCut.y1>1&&hudCut.x0<int32_t(uiSource.width)-1&&hudCut.y0<int32_t(uiSource.height)-1;if(!targetHud)hudState=2;
+                if(targetHud){hudCut.x0=std::max(hudCut.x0,int32_t(1));hudCut.y0=std::max(hudCut.y0,int32_t(1));
+                    hudCut.x1=std::min(hudCut.x1,int32_t(uiSource.width)-1);hudCut.y1=std::min(hudCut.y1,int32_t(uiSource.height)-1);
+                    targetHud=hudCut.x1-hudCut.x0>=int32_t(40*s)&&hudCut.y1-hudCut.y0>=int32_t(40*s);}
             }
+            if((cluster||targetHud)&&!placement.localSpace){
+                // The plate ahead of the head as the parts around the cluster (and the health bar), and those at their points.
+                std::array<aim::PixelRect,2> cuts{};std::array<aim::QuadPart,2> moved{};size_t count=0;
+                // The locked enemy's widget stands near the middle of the game's lock camera, so it nearly always overlaps the
+                // cluster's rows (headset run 20261019-144734: anchor rows 430, the cluster 420..660 - the plate fell back to
+                // the cluster alone and the health bar went with it to the aimed point). The cluster gives up the rows on the
+                // widget's side; with less than 80 rows (of 1080) left it is not taken out this frame.
+                auto clusterCut=aim::clusterRect(uiSource.width,uiSource.height);bool clusterFits=true;
+                if(cluster&&targetHud&&clusterCut.x0<hudCut.x1&&hudCut.x0<clusterCut.x1&&clusterCut.y0<hudCut.y1&&hudCut.y0<clusterCut.y1){
+                    if(hudCut.y0+hudCut.y1<clusterCut.y0+clusterCut.y1)clusterCut.y0=hudCut.y1;else clusterCut.y1=hudCut.y0;
+                    clusterFits=clusterCut.y1-clusterCut.y0>=int32_t(80.f*float(uiSource.height)/1080.f);
+                }
+                if(cluster&&clusterFits){const auto cut=clusterCut;
+                    const auto at=aim::clusterAt(cut,uiSource.width,uiSource.height,placement.width,placement.distance,xr.headLocation.pose.position,aimedPoint);
+                    if(at.width>0){cuts[count]=cut;moved[count++]=at;}}
+                if(targetHud){const Vec3 anchor{hud[0],hud[1],hud[2]};
+                    const auto at=aim::partAt(hudCut,hudX,hudY,uiSource.width,uiSource.height,placement.width,placement.distance,xr.headLocation.pose.position,anchor);
+                    if(at.width>0){cuts[count]=hudCut;moved[count++]=at;}else hudState=4;}
+                std::array<aim::QuadPart,10> pieces{};size_t n=0;
+                if(count&&!aim::plateWithout(cuts.data(),count,uiSource.width,uiSource.height,placement.width,pieces,n)&&count==2){   // overlapping: the first alone
+                    count=1;aim::plateWithout(cuts.data(),count,uiSource.width,uiSource.height,placement.width,pieces,n);if(targetHud&&cluster)hudState=4;}
+                if(count&&n&&n+count<=placement.parts.size()){
+                    for(size_t i=0;i<n;++i){const auto& p=pieces[i];auto& part=placement.parts[placement.partCount++];
+                        part={p.rect.x0,p.rect.y0,p.rect.x1-p.rect.x0,p.rect.y1-p.rect.y0,false,Pose{{0,0,0,1},{p.pose.position.x,p.pose.position.y,-placement.distance}},p.width,p.height};}
+                    for(size_t i=0;i<count;++i)placement.parts[placement.partCount++]={cuts[i].x0,cuts[i].y0,cuts[i].x1-cuts[i].x0,cuts[i].y1-cuts[i].y0,true,moved[i].pose,moved[i].width,moved[i].height};
+                }
+                if(targetHud){const auto k=++targetHudFrames;
+                    if(k<=4||k%300==0){std::ostringstream o;o<<std::setprecision(6)<<"\"frames\":"<<k<<",\"frame\":"<<frame<<",\"anchor_pixel\":["<<hudX<<','<<hudY<<"],\"cut\":["<<hudCut.x0<<','<<hudCut.y0<<','<<hudCut.x1<<','<<hudCut.y1
+                        <<"],\"anchor\":["<<hud[0]<<','<<hud[1]<<','<<hud[2]<<"],\"slopes\":["<<hud[3]<<','<<hud[4]<<"],\"tan_half_fov\":"<<hud[5]<<",\"vertical\":"<<(hud[6]>.5f?"true":"false")
+                        <<",\"with_cluster\":"<<(cluster&&clusterFits?"true":"false")<<",\"cluster_rows\":["<<clusterCut.y0<<','<<clusterCut.y1<<"],\"parts\":"<<placement.partCount;state.log->event("target_hud_part",o.str());}}
+            }
+            if(targetHud&&placement.localSpace)hudState=3;
+            if(hudState!=state.targetHudState&&state.targetHudStateLogs<2000){++state.targetHudStateLogs;state.targetHudState=hudState;
+                static const char* names[]={"no_target","plate_fixed","anchor_off_image","plate_in_room","no_part","moved"};
+                std::ostringstream o;o<<std::setprecision(6)<<"\"frame\":"<<frame<<",\"state\":\""<<names[std::clamp(hudState,0,5)]<<"\",\"anchor_pixel\":["<<hudX<<','<<hudY<<"],\"cluster\":"<<(cluster?"true":"false");
+                if(hudKnown)o<<",\"slopes\":["<<hud[3]<<','<<hud[4]<<"],\"anchor\":["<<hud[0]<<','<<hud[1]<<','<<hud[2]<<']';
+                state.log->event("target_hud_state",o.str());}
             if((placement.partCount!=0)!=state.aimClusterLogged&&state.aimClusterLogs<200){
                 ++state.aimClusterLogs;state.aimClusterLogged=placement.partCount!=0;std::ostringstream o;o<<std::setprecision(7)<<"\"frame\":"<<frame<<",\"on\":"<<(placement.partCount?"true":"false")<<",\"parts\":"<<placement.partCount;
                 if(placement.partCount){const auto& c=placement.parts[placement.partCount-1];
@@ -902,6 +1016,12 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                 ",\"format\":\"RGBA8_SRGB\",\"color_policy\":\"unpremultiply_srgb_decode_premultiply\"";
             if(capture&&uiBurst){
                 const auto native=uiDraw::captureSource(state.device,uiSource);
+                if(bugUiWanted.exchange(false)&&native.size()==size_t(uiSource.width)*uiSource.height*4)try{
+                    const auto prefix=output+"/native-xr/ui-frame-"+std::to_string(frame);
+                    {std::ofstream file(prefix+"-native.rgba8",std::ios::binary);file.write(reinterpret_cast<const char*>(native.data()),std::streamsize(native.size()));}
+                    {std::ofstream json(prefix+".json");json<<"{\"frame\":"<<frame<<",\"width\":"<<uiSource.width<<",\"height\":"<<uiSource.height<<",\"by\":\"bug_report\"}\n";}
+                    state.log->event("bug_report_ui_frame","\"frame\":"+std::to_string(frame)+",\"width\":"+std::to_string(uiSource.width)+",\"height\":"+std::to_string(uiSource.height));
+                }catch(const std::exception& e){state.log->event("bug_report_ui_frame_failed","\"reason\":"+jsonString(e.what()));}
                 const auto stat=[&](const std::vector<uint8_t>& p){
                     const unsigned w=uiSource.width,h=uiSource.height;std::array<uint32_t,144> cells{};uint64_t alpha=0,color=0;uint32_t covered=0;
                     if(p.size()!=size_t(w)*h*4)return std::string("null");

@@ -35,6 +35,7 @@ struct State {
     VkCommandPool pool{};VkCommandBuffer cmd{};VkFence fence{};  // the copy onto the plate
     VkBuffer dot{};VkDeviceMemory dotMemory{};uint8_t* dotBytes=nullptr;int dotLook=-1;
     VkBuffer text{};VkDeviceMemory textMemory{};uint32_t textWidth=0,textHeight=0;   // "VR Now Loading..." as pixels
+    VkBuffer notice{};VkDeviceMemory noticeMemory{};uint32_t noticeWidth=0,noticeHeight=0;   // "MOD Update" (mod_update_check.hpp)
     bool failed=false,formatTold=false,threadTold=false;unsigned failures=0;uint64_t frames=0,saves=0,worldPlates=0;
     bool plateSet=false;Pose origin=identityPose();evr::screen::Recentre recentre;evr::screen::Level level;uint64_t lastFrameTick=0;
     evr::menu::Buttons buttons;evr::menu::ClickSlack slack;POINT lastClient{-1,-1};HWND window{};uint64_t windowLooked=0;int pointerHand=-1;
@@ -113,12 +114,14 @@ inline void release() noexcept {
         if(state.fence)v.vkDestroyFence(v.device,state.fence,nullptr);if(state.pool)v.vkDestroyCommandPool(v.device,state.pool,nullptr);
         if(state.dotBytes)v.vkUnmapMemory(v.device,state.dotMemory);if(state.dot)v.vkDestroyBuffer(v.device,state.dot,nullptr);if(state.dotMemory)v.vkFreeMemory(v.device,state.dotMemory,nullptr);
         if(state.text)v.vkDestroyBuffer(v.device,state.text,nullptr);if(state.textMemory)v.vkFreeMemory(v.device,state.textMemory,nullptr);
+        if(state.notice)v.vkDestroyBuffer(v.device,state.notice,nullptr);if(state.noticeMemory)v.vkFreeMemory(v.device,state.noticeMemory,nullptr);
         if(state.saved)v.vkDestroyImage(v.device,state.saved,nullptr);if(state.savedMemory)v.vkFreeMemory(v.device,state.savedMemory,nullptr);
         note("screen_xr_released","\"frames\":"+std::to_string(state.frames)+",\"world_frames_with_the_plate\":"+std::to_string(state.worldPlates)+",\"pictures_saved\":"+std::to_string(state.saves));
     }catch(...){}
     state.v=nullptr;state.device={};state.saved={};state.savedMemory={};state.written=false;state.width=state.height=0;state.fence={};state.pool={};state.cmd={};
     state.dot={};state.dotMemory={};state.dotBytes=nullptr;state.dotLook=-1;state.plateSet=false;
     state.text={};state.textMemory={};state.textWidth=state.textHeight=0;
+    state.notice={};state.noticeMemory={};state.noticeWidth=state.noticeHeight=0;
 }
 inline void ensure(LiveNativeXr& live,const SwapData& swap){
     auto& v=live.xr->vk;
@@ -156,6 +159,17 @@ inline void ensure(LiveNativeXr& live,const SwapData& swap){
         void* bytes=nullptr;vkCheck(v.vkMapMemory(v.device,state.textMemory,0,VK_WHOLE_SIZE,0,&bytes),"screen text map");
         std::memcpy(bytes,picture.rgba.data(),picture.rgba.size());v.vkUnmapMemory(v.device,state.textMemory);
         state.textWidth=picture.width;state.textHeight=picture.height;}}
+    // "MOD Update" (user 2026-10-19: "white letters, not standing out too much, a size that keeps the mood, blinking slowly,
+    // like 'VR Loading...'"): the same white on a dark band, three quarters of its size.
+    {const uint32_t scale=std::max<uint32_t>(2,swap.height/240);
+     const auto picture=evr::text::render(evr::modupdate::noticeText,scale,scale*3,{245,245,245,255},{18,18,18,255});
+     if(picture.width&&picture.width<=swap.width&&picture.height<=swap.height){
+        VkBufferCreateInfo t{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};t.size=picture.rgba.size();t.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT;t.sharingMode=VK_SHARING_MODE_EXCLUSIVE;
+        vkCheck(v.vkCreateBuffer(v.device,&t,nullptr,&state.notice),"screen notice buffer");VkMemoryRequirements treq{};v.vkGetBufferMemoryRequirements(v.device,state.notice,&treq);
+        state.noticeMemory=v.allocate(treq,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);vkCheck(v.vkBindBufferMemory(v.device,state.notice,state.noticeMemory,0),"screen notice memory");
+        void* bytes=nullptr;vkCheck(v.vkMapMemory(v.device,state.noticeMemory,0,VK_WHOLE_SIZE,0,&bytes),"screen notice map");
+        std::memcpy(bytes,picture.rgba.data(),picture.rgba.size());v.vkUnmapMemory(v.device,state.noticeMemory);
+        state.noticeWidth=picture.width;state.noticeHeight=picture.height;}}
     note("screen_xr_ready","\"width\":"+std::to_string(swap.width)+",\"height\":"+std::to_string(swap.height)+",\"format\":"+std::to_string(swap.format)+",\"plate_m\":["+std::to_string(plateWidth)+","+std::to_string(plateWidth*float(swap.height)/float(swap.width))+
         "],\"distance_m\":"+std::to_string(plateDistance));
 }
@@ -193,7 +207,13 @@ struct Mark {bool shown=false;int x=0,y=0,look=0;};   // the pointer's place in 
 // to show that it goes on - the walking green block until 2026-10-14 (user: "make it a blinking VR Now Loading...").
 inline bool loadingShown(uint64_t now){return state.text&&(now/500)%2==0;}
 // The saved picture onto the plate's image, the pointer's mark over it; done before the frame is handed over.
-inline void copyToPlate(OpenXrClient& xr,uint32_t index,const Mark& mark,bool loading=false){
+// The main menu's "MOD Update" (screen frames only - not over a world's warm-up - while a newer mod is out, blinking
+// slowly: include/evr/mod_update.hpp), above the menu's "Play" (user 2026-10-19 after the first picture: "blink it above
+// Play"): in the game's 1920 x 1080 main menu (Mock auto-start-20261019-173930) "Play" is centred at x 510, its top at
+// y 474, the logo's "ENSHROUDED" ends at y 340 - the notice is centred at (510, 415) of that, scaled by the height (the
+// menu stands at the left).
+inline bool noticeShown(uint64_t now){return state.notice&&evr::modupdate::noticeShown(modUpdate::state.load(),now);}
+inline void copyToPlate(OpenXrClient& xr,uint32_t index,const Mark& mark,bool loading=false,bool notice=false){
     auto& v=*state.v;const auto target=xr.uiSwapchain().images[index].image;
     vkCheck(v.vkWaitForFences(v.device,1,&state.fence,VK_TRUE,2000000000ull),"screen plate previous copy");
     v.vkResetFences(v.device,1,&state.fence);v.vkResetCommandBuffer(state.cmd,0);
@@ -216,6 +236,11 @@ inline void copyToPlate(OpenXrClient& xr,uint32_t index,const Mark& mark,bool lo
         const int x0=int(state.width-state.textWidth)/2,y0=std::clamp(int(state.height)-int(state.height)/12-int(state.textHeight)/2,0,int(state.height-state.textHeight));
         VkBufferImageCopy region{};region.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};region.imageOffset={x0,y0,0};region.imageExtent={state.textWidth,state.textHeight,1};
         state.copyBufferToImage(state.cmd,state.text,target,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region);}
+    if(notice&&state.notice&&state.noticeWidth<=state.width&&state.noticeHeight<=state.height){
+        const float unit=float(state.height)/1080.f;
+        const int x0=std::clamp(int(510.f*unit)-int(state.noticeWidth)/2,0,int(state.width-state.noticeWidth)),y0=std::clamp(int(415.f*unit)-int(state.noticeHeight)/2,0,int(state.height-state.noticeHeight));
+        VkBufferImageCopy region{};region.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};region.imageOffset={x0,y0,0};region.imageExtent={state.noticeWidth,state.noticeHeight,1};
+        state.copyBufferToImage(state.cmd,state.notice,target,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&region);}
     barrier(v,state.cmd,target,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
     vkCheck(v.vkEndCommandBuffer(state.cmd),"screen plate end");
     VkSubmitInfo s{VK_STRUCTURE_TYPE_SUBMIT_INFO};s.commandBufferCount=1;s.pCommandBuffers=&state.cmd;
@@ -357,7 +382,7 @@ inline void frame(LiveNativeXr& live,bool own){
         vkCheck(xr.vk.vkDeviceWaitIdle(xr.vk.device),"screen plate: HUD transfer retired");live.uiTransfer.reset();live.log->event("native_ui_transfer_destroyed","\"reason\":\"screen_plate_size\"");}
     xr.configureUi(state.width,state.height,VK_FORMAT_R8G8B8A8_SRGB);
     const auto index=xr.acquireUi(snapshot.frame);
-    copyToPlate(xr,index,mark,loading&&loadingShown(now));
+    copyToPlate(xr,index,mark,loading&&loadingShown(now),own&&noticeShown(now));
     if(dumpAt(own)&&(own?state.frames+1:state.worldPlates+1)==dumpAt(own))dumpPlate(live,index,own?"screen":"world");
     UiQuadPlacement placement;placement.localSpace=true;placement.origin=state.origin;placement.distance=plateDistance;placement.width=plateWidth;placement.opaque=true;
     xr.markUiRendered(snapshot.frame,placement);xr.finishFrame();
@@ -405,6 +430,7 @@ inline void present(VkQueue queue,const VkPresentInfoKHR* p,VkPresentInfoKHR& re
             liveNativeXr->log->event("screen_xr_session","\"eye_scale\":"+std::to_string(eyeScale())+",\"present\":"+std::to_string(presents.load())+",\"thread\":"+std::to_string(GetCurrentThreadId()));
         }
         auto& live=*liveNativeXr;
+        modUpdate::start();                                                        // once: is a newer mod out?
         if(live.thread!=GetCurrentThreadId()||live.device!=dd.device||queue!=live.xr->vk.queue){
             if(!state.threadTold){state.threadTold=true;note("screen_xr_off","\"reason\":\"another thread, device or queue presents than the session's\",\"thread\":"+std::to_string(GetCurrentThreadId())+",\"session_thread\":"+std::to_string(live.thread));}
             return;}

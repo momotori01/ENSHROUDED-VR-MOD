@@ -231,6 +231,7 @@ void desktopMirrorSource(VkDevice device,VkImage right) noexcept;
 void desktopMirrorOwnedSource(VkDevice device,VkImage image,uint32_t width,uint32_t height) noexcept;
 #include "native_xr.hpp"
 #include "desktop_mirror.hpp"
+#include "mod_update_check.hpp"
 #include "screen_xr.hpp"
 extern "C"
     __declspec(dllexport) PFN_vkVoidFunction VKAPI_CALL evrGetInstanceProcAddr(VkInstance, const char *);

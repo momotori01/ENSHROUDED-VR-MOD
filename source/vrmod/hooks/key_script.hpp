@@ -23,9 +23,12 @@
 //   "<XR frame> BURST <n>"                    asks for n (1..32) consecutive pictures of both eyes (<game folder>/
 //                                             xr-burst.request; up to 4 a session) - a flicker of one frame in thirty
 //   "<XR frame> STOP"                         ends the session as its minute limit does (<probe folder>/stop.request)
-//   "<XR frame> TURN <yaw> <pitch>" / "TURN OFF"  turns the Mock head: yaw added to its pose script's, pitch instead
+//   "<XR frame> TURN <yaw> <pitch>" / "TURN OFF"  turns the Mock head: yaw added to its pose script's (a positive yaw turns
+//                                             LEFT - user watching a Mock, 2026-10-19: "TURN 130 looks left"), pitch instead
 //                                             of it, degrees (the Mock runtime's EVR_MockHeadTurn; nothing on a headset)
 //   "<XR frame> MARK <word>"                  only a line in the log (key_script_mark), to find a place of the script
+//   "<XR frame> MBUTTON down|up"             the middle mouse button (2026-10-19, the game's combat target lock), as a
+//                                             raw mouse record with no movement
 // A step may be timed instead: "t<milliseconds> <step>" runs that long after the frame of "<XR frame> ORIGIN". The
 // game moves by time, not by frames, and a replay runs at another frame rate than the walk it repeats (Mock replay
 // game-20261014-184902: 24.5 ms a frame against the user's 20.5, 5 m away after 600 frames); tools/save_route.py
@@ -34,7 +37,7 @@
 // <game folder>/input-record.jsonl - the mouse summed per frame. The keys and the turning of a walk, for repeating it.
 namespace keyScript {
 enum class Kind:uint8_t{Key,Mouse,Capture,Stop,Turn,Mark,Origin,Burst};
-struct Step {uint64_t frame=0;uint16_t make=0,vkey=0,flags=0;bool extended=false,down=true,rawFlags=false,timed=false,turnOn=false;Kind kind=Kind::Key;int32_t dx=0,dy=0;float yaw=0,pitch=0;std::string name;};
+struct Step {uint64_t frame=0;uint16_t make=0,vkey=0,flags=0;bool extended=false,down=true,rawFlags=false,timed=false,turnOn=false;Kind kind=Kind::Key;int32_t dx=0,dy=0;uint16_t buttons=0;float yaw=0,pitch=0;std::string name;};
 inline std::vector<Step> steps,timedSteps;inline size_t next=0,nextTimed=0;inline bool installed=false;
 inline const bool exclusive=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_KEY_SCRIPT_EXCLUSIVE",v,sizeof v);return !(n==1&&v[0]=='0');}();
 inline uint64_t originUs=0;   // steady clock, microseconds (as the probe log's "us"), when ORIGIN was reached
@@ -175,6 +178,8 @@ inline void install(){
                     if(!(in>>s.pitch))throw std::runtime_error("key script line "+std::to_string(row));s.turnOn=true;}
                 list.push_back(s);continue;}
             if(name=="MOUSE"){s.kind=Kind::Mouse;if(!(in>>s.dx>>s.dy))throw std::runtime_error("key script line "+std::to_string(row));s.name=name;list.push_back(s);continue;}
+            if(name=="MBUTTON"){s.kind=Kind::Mouse;std::string how2;if(!(in>>how2)||(how2!="down"&&how2!="up"))throw std::runtime_error("key script line "+std::to_string(row));
+                s.down=how2=="down";s.buttons=s.down?RI_MOUSE_MIDDLE_BUTTON_DOWN:RI_MOUSE_MIDDLE_BUTTON_UP;s.name=name;list.push_back(s);continue;}
             if(name=="CAPTURE"){s.kind=Kind::Capture;s.name=name;list.push_back(s);continue;}
             if(name=="BURST"){s.kind=Kind::Burst;s.name=name;if(!(in>>s.dx)||s.dx<1||s.dx>32)throw std::runtime_error("key script line "+std::to_string(row));list.push_back(s);continue;}
             if(name=="STOP"){s.kind=Kind::Stop;s.name=name;list.push_back(s);continue;}
@@ -275,7 +280,7 @@ inline void perform(const Step& s,uint64_t xrFrame,HWND window){
         const auto index=posted.fetch_add(1);RAWINPUT input{};
         if(s.kind==Kind::Mouse){
             input.header.dwType=RIM_TYPEMOUSE;input.header.dwSize=UINT(sizeof(RAWINPUTHEADER)+sizeof(RAWMOUSE));
-            input.data.mouse.usFlags=MOUSE_MOVE_RELATIVE;input.data.mouse.lLastX=s.dx;input.data.mouse.lLastY=s.dy;
+            input.data.mouse.usFlags=MOUSE_MOVE_RELATIVE;input.data.mouse.lLastX=s.dx;input.data.mouse.lLastY=s.dy;input.data.mouse.usButtonFlags=s.buttons;
         }else{
             input.header.dwType=RIM_TYPEKEYBOARD;input.header.dwSize=UINT(sizeof(RAWINPUTHEADER)+sizeof(RAWKEYBOARD));
             auto& k=input.data.keyboard;k.MakeCode=s.make;k.Flags=s.rawFlags?s.flags:USHORT((s.down?RI_KEY_MAKE:RI_KEY_BREAK)|(s.extended?RI_KEY_E0:0));
@@ -283,7 +288,7 @@ inline void perform(const Step& s,uint64_t xrFrame,HWND window){
         }
         {std::lock_guard<std::mutex> lock(mutex);ring[index%ring.size()]=input;}
         const BOOL ok=PostMessageW(window,WM_INPUT,RIM_INPUT,LPARAM(handleBase+(index%ring.size())));
-        if(s.kind==Kind::Mouse)return;   // one a frame while turning: the posts are counted in key_script_removed
+        if(s.kind==Kind::Mouse&&!s.buttons)return;   // one a frame while turning: the posts are counted in key_script_removed
         logFile->event("key_script_step","\"frame\":"+std::to_string(xrFrame)+when(s)+",\"key\":"+jsonString(s.name.c_str())+",\"down\":"+(s.down?"true":"false")+
             ",\"posted\":"+(ok?"true":"false")+",\"served\":"+std::to_string(served.load()));
 }

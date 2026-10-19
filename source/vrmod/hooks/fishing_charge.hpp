@@ -40,10 +40,10 @@ __declspec(noinline) void* __fastcall charging(void* context,uint8_t mode){
         controllerUiFixture::FishingSwing swing;{std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);swing=controllerUiFixture::fishingSwing;}
         const float game=read<float>(machine+machineCharge);float charge=game;
         const bool bySwing=swing.serial&&swing.until>now;
-        if(bySwing){
-            charge=evr::motion::swingCharge(game,swing.strength);
-            if(charge!=game){*reinterpret_cast<float*>(machine+machineCharge)=charge;++applied;}
-        }
+        // 2026-10-19 18:45 (user: "not from how long the trigger is held, only from the swing's speed"): the swing's
+        // strength alone, none without a swing (the trigger's release now taps the button: controller_ui_fixture.hpp).
+        charge=bySwing?evr::motion::swingOnlyCharge(swing.strength):0.f;
+        if(charge!=game){*reinterpret_cast<float*>(machine+machineCharge)=charge;++applied;}
         if(number<=200){
             std::ostringstream o;o<<std::setprecision(6)<<"\"cast\":"<<number<<",\"by_swing\":"<<(bySwing?"true":"false")<<",\"swing_serial\":"<<swing.serial
                 <<",\"swing_strength\":"<<swing.strength<<",\"game_charge\":"<<game<<",\"game_held_seconds\":"<<game*2<<",\"charge\":"<<charge

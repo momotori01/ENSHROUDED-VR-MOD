@@ -33,6 +33,11 @@ inline OverlayFn setOverlay=nullptr;inline ShownFn overlayShown=nullptr;inline C
 // once the second is written (or 5 s later).
 using SaveHistoryFn=int(*)();using HistorySavedFn=uint64_t(*)();inline SaveHistoryFn saveHistory=nullptr;inline HistorySavedFn historySaved=nullptr;
 inline uint64_t makerWaitSaves=0,makerWaitUntil=0;
+// A newer mod is out (layer evrModUpdateState, layer/mod_update_check.hpp; user 2026-10-19: "where the bug report is in
+// the left stick's menu too"): "MOD Update" in white beside the buttons, blinking slowly (include/evr/mod_update.hpp).
+using UpdateStateFn=int(*)();inline UpdateStateFn updateState=nullptr;
+inline bool noticeOn(){return updateState&&evr::modupdate::noticeShown(updateState(),GetTickCount64());}
+constexpr RECT noticeBox{1000,18,1200,66};   // right of the settings' button (980), within the button row (84)
 inline bool installed=false;
 enum class Phase {Idle,Armed,Recording,Making,Done};
 inline std::atomic<int> phase{int(Phase::Idle)};
@@ -105,7 +110,7 @@ inline std::vector<uint8_t> render(uint32_t w,uint32_t h,const std::vector<Block
 }
 // What the panel shows, as one number: a change of any part draws it again.
 inline uint64_t look(int kind){
-    return uint64_t(kind&3)|uint64_t(hoverHit.load()&15)<<2|uint64_t(settingsOpen.load()?1:0)<<6|uint64_t(controllerUiFixture::roomSneakOn.load()?1:0)<<7|uint64_t(controllerUiFixture::crouchDrop.load()&255)<<8|uint64_t(sliderHeld.load()?1:0)<<19;
+    return uint64_t(kind&3)|uint64_t(hoverHit.load()&15)<<2|uint64_t(settingsOpen.load()?1:0)<<6|uint64_t(controllerUiFixture::roomSneakOn.load()?1:0)<<7|uint64_t(controllerUiFixture::crouchDrop.load()&255)<<8|uint64_t(sliderHeld.load()?1:0)<<19|uint64_t(noticeOn()?1:0)<<21;
 }
 inline RECT rectOf(const evr::vrpanel::Box& b){return {LONG(b.x0),LONG(b.y0),LONG(b.x1),LONG(b.y1)};}
 // kind 0 the button with its note, 1 armed; the VR settings' button beside it, and its rows instead of the note while open
@@ -118,6 +123,7 @@ inline void drawPanel(int kind){
     b.push_back({{0,0,LONG(buttonW),LONG(buttonH)},texts.title,46,FW_BOLD,lit?RGB(228,200,184):red,lit?RGB(92,32,26):dark,uint8_t(lit?235:215),red,4,DT_CENTER|DT_VCENTER|DT_SINGLELINE});
     {const bool on=hit==Hit::Settings||open;   // the settings' button: a quiet stone colour, lit while pointed at or open
      b.push_back({rectOf(evr::vrpanel::settingsButton),panelTexts.button,40,FW_BOLD,on?RGB(240,232,214):stone,on?RGB(64,58,48):dark,uint8_t(on?235:215),stone,4,DT_CENTER|DT_VCENTER|DT_SINGLELINE});}
+    if(noticeOn())b.push_back({noticeBox,evr::modupdate::wideNotice,28,FW_SEMIBOLD,RGB(245,245,245),RGB(18,18,18),200,0,0,DT_CENTER|DT_VCENTER|DT_SINGLELINE});
     if(open){
         const bool crouch=controllerUiFixture::roomSneakOn.load();const int drop=controllerUiFixture::crouchDrop.load();
         b.push_back({{0,LONG(buttonH)+10,LONG(panelW),LONG(panelH)},L"",0,0,0,dark,200,0,0,0});
@@ -212,6 +218,7 @@ inline void install(){
     const auto layer=GetModuleHandleW(L"evr_diagnostic.dll");if(!layer)return;
     setOverlay=reinterpret_cast<OverlayFn>(GetProcAddress(layer,"evrSetUiOverlay"));overlayShown=reinterpret_cast<ShownFn>(GetProcAddress(layer,"evrUiOverlayShown"));
     requestCapture=reinterpret_cast<CaptureFn>(GetProcAddress(layer,"evrRequestBugCapture"));
+    updateState=reinterpret_cast<UpdateStateFn>(GetProcAddress(layer,"evrModUpdateState"));
     saveHistory=reinterpret_cast<SaveHistoryFn>(GetProcAddress(layer,"evrSaveEyeHistory"));historySaved=reinterpret_cast<HistorySavedFn>(GetProcAddress(layer,"evrEyeHistorySaved"));captureHalf=reinterpret_cast<HalfFn>(GetProcAddress(layer,"evrSetCaptureHalf"));
     if(!setOverlay||!overlayShown){logFile->event("bug_report_unavailable","\"reason\":\"the layer has no overlay\"");return;}
     language=gameLanguage();texts=evr::bugreport::texts(language);panelTexts=evr::vrpanel::texts(language);

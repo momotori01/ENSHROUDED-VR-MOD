@@ -40,7 +40,7 @@ inline IdleHeadResult patchIdleHeadCamera(const ClientInputBytes& source,ClientI
         const IdleHeadGate& gate,const HeadInputSnapshot& head,float previousYaw){
     output=source;IdleHeadResult r;
     if(!gate.normalUiBound){r.status=IdleHeadStatus::Ui;return r;}
-    if(!gate.playerStateCurrent||!(gate.playerFlags&1u)||gate.playerFlags&((1u<<1)|(1u<<2)|(1u<<12))){
+    if(!gate.playerStateCurrent||!(gate.playerFlags&1u)||(gate.playerFlags&nativeCameraFlags())){
         r.status=IdleHeadStatus::PlayerState;return r;}
     if(gate.freeCamera||source[clientMask]||source[clientBuildingCamera]||source[clientInputMode]>1){r.status=IdleHeadStatus::SpecialMode;return r;}
     std::array<float,2> stick;uint64_t digital;

@@ -27,13 +27,14 @@ inline uint8_t legacyCameraId(uint8_t id){
 enum class CameraPresentation { FirstPerson, NativeEvent, NativeSpecial, Unknown };
 inline CameraPresentation cameraPresentation(uint8_t id){
     if(id>=45)return CameraPresentation::Unknown;
-    if(id<=3||id==18||(id>=30&&id<=33)||id==42)return CameraPresentation::NativeEvent;
+    if(id<=3||id==18||(id>=30&&id<=33))return CameraPresentation::NativeEvent;
     // 38 is the camera the game uses while a pickaxe is in hand (Mock run game103654: 19 -> 38 on selecting
     // it, back to 4 on the sword). It is ordinary play, and the native third-person view in the headset was
     // reported on the first headset run (game100334), so it is first person like the other play cameras.
     // 39..41 are the cameras of fishing (Mock run game065355: 4 -> 39 while the rod is cast, back to 4): the headset
     // showed the player from behind for the length of the cast. Fishing is ordinary play (VHVR fishes in first
-    // person); only the victory camera (42) stays the game's own.
+    // person). The victory camera (42, the catch shown to the player) was the game's own until 2026-10-19 (headset run
+    // 20261019-185327, user: "after the catch it turns third person"): first person too.
     // 36 / 37 (PlayerCameraBuildingFirstPerson, ...Sneak) are what 38 (BuildingThirdPerson) becomes when the player
     // toggles the game's "first person mode" (right stick click with a building tool in hand, in a flame altar's
     // area; the HUD names it). Headset run game145015: that toggle, hit by accident, left the player with the game's
@@ -108,6 +109,8 @@ inline bool headingRealignCamera(uint8_t id){
     if(id==5||id==8||id==10||id==12||id==14||id==17)return false; // the ...Target cameras: the game keeps them on the locked target
     return cameraPresentation(id)==CameraPresentation::FirstPerson&&id!=23&&id!=24&&id!=25&&id!=28&&id!=29; // Climbing, HookShot, Glider, HeadDiving
 }
+// The cameras of a locked combat target (June ids): DefaultTarget 5 and the bow's / staff's / hipfire's ...Target ones.
+inline bool targetLockCamera(uint8_t id){return id==5||id==8||id==10||id==12||id==14||id==17;}
 struct HeadingRealign {float gain=.3f,limit=.15f,dead=.002f;};
 // Native heading minus VR heading, in (-pi, pi]. reference: StableHeading::reference.
 inline float headingError(float nativeYaw,double turn,double reference){

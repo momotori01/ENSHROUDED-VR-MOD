@@ -13,6 +13,38 @@ inline bool live=false;inline motion::LiveColliderLedger<16> liveLease;inline st
 // then. The position is moved on by the blade's speed over the last two poses times EVR_MELEE_COLLIDER_LEAD_MS
 // (18; 0 none), at most 15 cm; the sweep from the previous pose then covers the predicted way. Orientation as tracked.
 inline const unsigned colliderLeadMs=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MELEE_COLLIDER_LEAD_MS",v,sizeof v);if(!n||n>=sizeof v)return 18u;const auto x=std::strtoul(v,nullptr,10);return x>60?60u:unsigned(x);}();
+// The hit volume a little larger than the weapon (2026-10-19, user: "can the weapon's hit be slightly larger than the model?
+// a hit feels better than a miss"): the scale the transform keeps from the game (bytes 40..51, 1.0 each - the tracked pose
+// gives the place and the turn only) times EVR_MELEE_HIT_SCALE (1.15; 1 the game's own size, at most 1.5).
+inline const float hitScale=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_MELEE_HIT_SCALE",v,sizeof v);if(!n||n>=sizeof v)return 1.15f;
+ const float x=std::strtof(v,nullptr);return std::isfinite(x)?std::clamp(x,1.f,1.5f):1.15f;}();
+inline void enlarge(std::array<uint8_t,56>& current){
+ if(hitScale==1.f)return;
+ for(size_t at=40;at<52;at+=4){float s=0;std::memcpy(&s,current.data()+at,4);if(std::isfinite(s)&&s>0&&s<100){s*=hitScale;std::memcpy(current.data()+at,&s,4);}}
+}
+// The sweep from the tip (2026-10-19, user after the headset run of 15:22: "strokes miss at a distance where they surely
+// hit - when I swing compactly, the hand moving little and the wrist much"): the game sweeps the hit volume from its previous
+// transform to the current one, and the tracked transform is the weapon model's, whose origin is the grip. A stroke of the
+// wrist turns the blade about the grip: the grip moves a few centimetres an update, the tip tens of centimetres, and what
+// the blade passed between two updates is not swept (presumed: the sweep moves the shape along a line, it does not turn it).
+// The sweep therefore starts with the current orientation, placed where its tip stands at the previous tip: the swept way
+// is the tip's. A stroke without turning keeps its sweep as it was (the tip moved as the grip did). EVR_MELEE_TIP_SWEEP=0: off.
+inline const bool tipSweep=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MELEE_TIP_SWEEP",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline std::atomic<unsigned> tipSweeps{0};inline double lastTipSweepMetres=0;
+inline void sweepFromTip(const motion::ColliderPose& pose,const std::array<uint8_t,56>& current,std::array<uint8_t,72>& previous){
+ lastTipSweepMetres=0;
+ if(!tipSweep||!(pose.tipY>.2f&&pose.tipY<4.f))return;
+ WorldPositionQ32 cp,pp;Quat cq,pq;std::memcpy(&cp,current.data(),24);std::memcpy(&cq,current.data()+24,16);std::memcpy(&pp,previous.data(),24);std::memcpy(&pq,previous.data()+24,16);
+ {const float a=cq.x*cq.x+cq.y*cq.y+cq.z*cq.z+cq.w*cq.w,b=pq.x*pq.x+pq.y*pq.y+pq.z*pq.z+pq.w*pq.w;if(!(a>.5f&&a<1.5f&&b>.5f&&b<1.5f))return;}
+ const Vec3 tip{0,pose.tipY,0};const Vec3 ct=rotate(normalized(cq),tip),pt=rotate(normalized(pq),tip);
+ const Vec3 grip{float(relativeQ32(pp.x,cp.x)),float(relativeQ32(pp.y,cp.y)),float(relativeQ32(pp.z,cp.z))};   // previous grip - current grip
+ const Vec3 shift=grip+pt-ct;                                                                                 // previous tip - current tip
+ const float tipWay=length(shift),gripWay=length(grip);
+ if(!std::isfinite(tipWay)||tipWay>1.5f||tipWay<gripWay+.02f)return;                                           // no turn worth it, or a jump
+ WorldPositionQ32 start=cp;start.x+=int64_t(double(shift.x)*4294967296.);start.y+=int64_t(double(shift.y)*4294967296.);start.z+=int64_t(double(shift.z)*4294967296.);
+ std::memcpy(previous.data(),&start,24);std::memcpy(previous.data()+24,current.data()+24,16);
+ lastTipSweepMetres=tipWay;++tipSweeps;
+}
 struct PoseSeen {uint32_t item=0;uint64_t serial=0;int64_t predictedTime=0;WorldPositionQ32 position{};bool valid=false;};
 inline PoseSeen poseSeen;inline double lastLeadMetres=0;inline std::atomic<unsigned> leadApplied{0};
 inline void leadPosition(const motion::ColliderPose& pose,std::array<uint8_t,56>& current){
@@ -72,18 +104,18 @@ inline void begin(uintptr_t world,uint32_t entity,void* query,unsigned sample,co
  if(live){
   if(!pose.valid||!combatEpochGate::newAllowed(combatEpochGate::Stage::Collider,pose.clientWorld,world)){++ignored;return;}
   sourceCurrent=read<std::array<uint8_t,56>>(q[1]);sourcePrevious=q[3]?read<std::array<uint8_t,72>>(q[3]):std::array<uint8_t,72>{};
-  auto current=motion::colliderTransform(pose,sourceCurrent);leadPosition(pose,current);
+  auto current=motion::colliderTransform(pose,sourceCurrent);leadPosition(pose,current);enlarge(current);
   const auto decision=liveLease.apply(key,true,GetTickCount64(),current);
   if(!decision.track){++ignored;return;}
   impactLifetime::tracked(world,entity,key.event);
   sourceQuery=q;scopeKey=key;cancelScope=false;lookupSeen=false;readySample=sample;
   // The game sweeps from the previous transform: the tracked weapon's own previous pose, or no sweep on the first update.
-  auto previous=sourcePrevious;if(q[3])std::memcpy(previous.data(),decision.previous.data(),52);
+  auto previous=sourcePrevious;if(q[3]){std::memcpy(previous.data(),decision.previous.data(),52);if(decision.continuous)sweepFromTip(pose,current,previous);}
   borrow.open(q,current,previous);activeScope=true;++outstanding;++opened;++applied;if(decision.continuous)++liveContinuous;
   if(liveLogged.fetch_add(1)<400||!(liveLogged.load()%20))logFile->event("motion_collider_apply_begin","\"ready_sample\":"+std::to_string(sample)+",\"entity\":"+std::to_string(entity)+",\"frame\":"+std::to_string(pose.frame)+",\"collider_before\":"+std::to_string(id)+
    ",\"original_current\":"+jsonString(nativeImpactComponents::asHex(sourceCurrent))+",\"applied_current\":"+jsonString(nativeImpactComponents::asHex(current))+
    ",\"original_previous\":"+jsonString(nativeImpactComponents::asHex(sourcePrevious))+",\"applied_previous\":"+jsonString(nativeImpactComponents::asHex(previous))+
-   ",\"previous_present\":"+(q[3]?"true":"false")+",\"live\":true,\"continuous\":"+(decision.continuous?"true":"false")+",\"item\":"+std::to_string(pose.item)+",\"lead_ms\":"+std::to_string(colliderLeadMs)+",\"lead_metres\":"+std::to_string(lastLeadMetres)+",\"ecs_written_by_mod\":false");
+   ",\"previous_present\":"+(q[3]?"true":"false")+",\"live\":true,\"continuous\":"+(decision.continuous?"true":"false")+",\"item\":"+std::to_string(pose.item)+",\"hit_scale\":"+std::to_string(hitScale)+",\"tip_y\":"+std::to_string(pose.tipY)+",\"tip_sweep_metres\":"+std::to_string(lastTipSweepMetres)+",\"lead_ms\":"+std::to_string(colliderLeadMs)+",\"lead_metres\":"+std::to_string(lastLeadMetres)+",\"ecs_written_by_mod\":false");
   return;
  }
  const bool forced=cancelAfter&&applied.load()>=cancelAfter;

@@ -84,6 +84,29 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(length(z-want)<1e-3f&&std::abs(x.y)<1e-4f&&rotate(c.pose.orientation,{0,1,0}).y>0);
   ck(clusterAt(r,1920,1080,2.f,1.5f,{0,1.6f,0},{0,1.6f,-.2f}).width==0&&clusterAt(r,1920,1080,2.f,1.5f,{0,1.6f,0},{NAN,0,0}).width==0);
   c=clusterAt(r,1920,1080,2.f,1.5f,{0,0,0},{0,100,0});ck(c.width>0&&close(rotate(c.pose.orientation,{0,0,1}).y,-1));}   // straight above: a place all the same
+ {// partAt: the anchor pixel lies on the line from the eye to the point; with the image's middle as the anchor it is clusterAt.
+  const PixelRect r{800,300,1100,450};const Vec3 eye{0,1.6f,0},point{2,2.5f,-6};
+  const auto a=partAt(r,960,540,1920,1080,2.f,1.5f,eye,point),b=clusterAt(r,1920,1080,2.f,1.5f,eye,point);
+  ck(a.width>0&&close(a.width,b.width)&&close(a.pose.position.x,b.pose.position.x)&&close(a.pose.position.y,b.pose.position.y)&&close(a.pose.position.z,b.pose.position.z));
+  const auto c=partAt(r,950,420,1920,1080,2.f,1.5f,eye,point);const float s=c.width/300.f;
+  const Vec3 anchor=c.pose.position+rotate(c.pose.orientation,Vec3{(950-950.f)*s,(375-420.f)*s,0});   // the anchor pixel on the quad (the rect's centre is 950, 375)
+  const Vec3 toAnchor=anchor-eye,toPoint=point-eye;const Vec3 normal=cross(toAnchor,toPoint);
+  ck(length(normal)<1e-3f*length(toAnchor)*length(toPoint)&&dot(toAnchor,toPoint)>0);}
+ {// plateWithout: the pieces and the parts cover the image once, the pieces stay out of the parts; overlapping parts are refused.
+  const auto area=[](const PixelRect& r){return int64_t(r.x1-r.x0)*int64_t(r.y1-r.y0);};
+  const auto check=[&](const PixelRect* cuts,size_t count){
+   std::array<QuadPart,10> out{};size_t pieces=0;ck(plateWithout(cuts,count,1920,1080,2.f,out,pieces)&&pieces<=10);
+   int64_t sum=0;for(size_t i=0;i<count;++i)sum+=area(cuts[i]);
+   for(size_t i=0;i<pieces;++i){const auto& r=out[i].rect;sum+=area(r);
+    for(size_t j=0;j<count;++j){const auto& c=cuts[j];ck(!(r.x0<c.x1&&c.x0<r.x1&&r.y0<c.y1&&c.y0<r.y1));}
+    ck(close(out[i].width,float(r.x1-r.x0)*2.f/1920)&&close(out[i].pose.position.x,(float(r.x0+r.x1)*.5f-960)*2.f/1920));}
+   ck(sum==int64_t(1920)*1080);return pieces;};
+  const PixelRect cluster=clusterRect(1920,1080);const PixelRect bar{800,250,1100,400},beside{1500,400,1800,700},under{700,700,1000,900};
+  ck(check(&cluster,1)==4);                                       // as plateAround
+  {const PixelRect two[2]{cluster,bar};check(two,2);}
+  {const PixelRect two[2]{cluster,beside};check(two,2);}
+  {const PixelRect two[2]{under,cluster};check(two,2);}
+  {const PixelRect two[2]{cluster,{900,500,1000,560}};std::array<QuadPart,10> out{};size_t pieces=0;ck(!plateWithout(two,2,1920,1080,2.f,out,pieces));}}
  // How far along the line the mark sits: a body in the way, else the level ground of the feet, else 128 m.
  {const float nan=std::nanf("");int by=-1;
   const Line level{true,{0,1.3f,0},{0,0,-1}};

@@ -21,6 +21,42 @@ inline void retire(const char* event,const std::string& detail){
         ",\"reference_released\":"+(released?"true":"false")+detail);
     if(!invalid||!released)throw std::runtime_error("off-hand retirement failed");
 }
+// The caught fish in the tracked left hand (2026-10-19 19:15, user: "after the catch, let the caught fish stick to the left
+// hand"). From the catch (35 Victory) until the fish is taken or let go (36..38): where the game has put the fish on the
+// character (its SlotAttachment, as the attachment system read it), the same attachment from the tracked left grip -
+// as the left part of a pair is mounted - in the game's world, published for the fish's own entity;
+// attachment_observer.hpp writes it right after the game attaches the fish. EVR_FISH_IN_HAND=0: off.
+inline void fishInHand(const game::StableAnchor& anchor){
+    static const bool on=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_IN_HAND",v,sizeof v);return !(n==1&&v[0]=='0');}();
+    if(!on)return;
+    const auto now=GetTickCount64();const auto fish=controllerUiFixture::fishingFishId.load();
+    const int state=controllerUiFixture::fishingState.load();const auto stateAt=controllerUiFixture::fishingStateMs.load();
+    if(!fish||state<35||state>38||!stateAt||now<stateAt||now-stateAt>500)return;
+    if(!shownHands.focused||!shownHands.hands[0].tracked())return;
+    std::array<uint8_t,48> slot{};uintptr_t world=0;uint32_t parent=0;bool seen=false;
+    {std::lock_guard<std::mutex> lock(attachmentObserver::followMutex);const auto& c=attachmentObserver::fishAttach;
+     if(c.entity==fish&&c.at&&now>=c.at&&now-c.at<=500){slot=c.slot;world=c.world;parent=c.parent;seen=true;}}
+    static uint32_t toldMissing=0;
+    if(!seen){
+        // Attached to nothing (headset runs 20261019-191819 / -193001: the game places the caught fish itself, every
+        // frame): its render object is moved instead, right before the eyes are drawn, as the body's parts are
+        // (motion_body_ik.hpp) - its origin to the tracked left grip, its orientation the game's.
+        // (19:40..19:55 its render object's origin went to the tracked grip, the game's orientation kept - user: "the fish
+        // is held on the line of the wrist"; the body's solve now holds it as the game's animation does: motion_body_ik.hpp.)
+        if(toldMissing!=fish){toldMissing=fish;logFile->event("fishing_fish_not_attached","\"fish\":"+std::to_string(fish)+",\"state\":"+std::to_string(state)+",\"held_by\":\"body_ik\"");}
+        return;}
+    const auto root=rootCamera::snapshot();if(!root.entity)return;
+    const auto held=motion::mountPairPart(shownHands.hands[0].grip,slot,motionVisual::weaponPitchDegrees);
+    const auto tracking=game::trackingPose(compose(liveTrackingToAnchor,held));
+    const auto facing=normalized(anchor.orientation);
+    const auto origin=cameraPosition(anchor.root,rotate(facing,anchor.cameraOffsetGameUnits),1);
+    const auto position=cameraPosition(origin,rotate(facing,tracking.position),anchor.worldUnitsPerMeter);
+    const auto rotation=normalized(multiply(facing,tracking.orientation));
+    attachmentObserver::Follow f;f.entity=fish;f.parent=parent;f.world=world;f.at=now;f.frame=liveFrame.frame;
+    std::memcpy(f.transform.data(),&position,24);std::memcpy(f.transform.data()+24,&rotation,16);
+    attachmentObserver::stampAnchor(f,anchor.root);attachmentObserver::publishFishFollow(f);
+    static unsigned published=0;if(published++<4)logFile->event("fishing_fish_in_hand","\"fish\":"+std::to_string(fish)+",\"state\":"+std::to_string(state)+",\"slot\":"+std::to_string(slot[41]));
+}
 inline void prepare(const game::StableAnchor& anchor,uint64_t currentSerial){
     if(!requested)return;ready=false;meleeWeapon={};
     if(!motionVisual::contextReady||motionVisual::contextSerial!=currentSerial||motionVisual::contextFrame!=liveFrame.frame||

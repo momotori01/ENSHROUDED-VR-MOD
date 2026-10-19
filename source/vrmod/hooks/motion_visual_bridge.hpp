@@ -23,6 +23,7 @@ inline float bowDrawProgress=0;inline bool bowDrawHandValid=false;inline Vec3 bo
 inline motion::BowPhysicalGeometry rangedGeometry;inline uint32_t rangedItem=0;inline bool rangedTwoHanded=false;
 // Melee weapon shown this frame for the live swing detector (live_melee.hpp); binding 0 when none.
 inline motion::LiveMeleeWeapon meleeWeapon;
+inline float meleeTipY=0;inline uint32_t meleeTipItem=0;   // the blade's tip of the shown weapon for its hit volume (ColliderPose::tipY)
 // Fishing rod shown this frame (item category FishingRod, 5: the five rods of the game data, held-models.json), for
 // casting by a swing (live_swing_cast.hpp); binding 0 when none.
 inline motion::LiveSwingRod heldRod;
@@ -409,7 +410,7 @@ inline void prepare(uintptr_t s,uintptr_t v,const game::StableAnchor& anchor,uin
          if(bladeBinding!=meleeWeapon.binding){bladeBinding=meleeWeapon.binding;std::ostringstream row;row<<std::setprecision(5)<<"\"item\":"<<item<<",\"grip_y\":"<<grip<<",\"hilt_y\":"<<from<<",\"tip_y\":"<<to<<",\"source\":\""<<reach<<"\",\"model_rear_y\":"<<rear<<",\"model_tip_y\":"<<tip<<",\"tool\":"<<(tool?"true":"false");logFile->event("live_melee_blade",row.str());}
          const auto a=cameraPosition(position,rotate(orientation,Vec3{0,from,0}),anchor.worldUnitsPerMeter),b=cameraPosition(position,rotate(orientation,Vec3{0,to,0}),anchor.worldUnitsPerMeter);
          meleeWeapon.bladeFrom={a.x,a.y,a.z};meleeWeapon.bladeTo={b.x,b.y,b.z};meleeWeapon.blade=true;meleeWeapon.needsTarget=!tool;
-         meleeWeapon.weaponType=tool||!current.weaponCategoryKnown?uint8_t(255):current.weaponType;meleeWeapon.reach=to-grip;}
+         meleeWeapon.weaponType=tool||!current.weaponCategoryKnown?uint8_t(255):current.weaponType;meleeWeapon.reach=to-grip;meleeTipY=to;meleeTipItem=item;}
     }
     // The rod's model points along +Y; its tip is the far end of the model (1.89 m for the basic rod).
     if(controllerUiFixture::liveHandUseRequested&&liveEquipment()&&!nativeBow&&current.category==5){
@@ -439,7 +440,7 @@ inline void prepare(uintptr_t s,uintptr_t v,const game::StableAnchor& anchor,uin
     if(motionColliderChannel::requested){
         motion::ColliderPose p;p.valid=true;p.frame=hands.frame;p.session=hands.sessionGeneration;p.origin=hands.originGeneration;
         p.predictedTime=hands.predictedTime;p.milliseconds=GetTickCount64();p.serial=serial;p.clientWorld=current.world;
-        p.root=root.entity;p.item=item;p.child=child;p.transform=transform;p.attachment=current.slotBytes;
+        p.root=root.entity;p.item=item;p.child=child;p.transform=transform;p.attachment=current.slotBytes;p.tipY=meleeTipItem==item?meleeTipY:0.f;
         // A weapon pair: the hit volume of an attack that the left hand struck goes to the left-hand weapon (its pose
         // of the previous frame; that part is prepared after this one).
         if(offhandStrike&&offhandStrike(p.transform))fields<<",\"collider_hand\":0";

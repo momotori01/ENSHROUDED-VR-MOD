@@ -43,6 +43,10 @@ public:
 // whose trigger time differs from the one seen at the press, within `windowMs`.
 struct LiveAttackPress {
  uint32_t entity=0,item=0;int64_t previousTrigger=0;uint64_t pressed=0,serial=0;
+ // A swing of the wand (2026-10-19, user: "the shot flies the moment the wand is swung; the cooldown as in the game"):
+ // only what the action spawns (its projectiles, 350 and 400 ms into the wand's normal attack) comes on its first tick;
+ // nothing else of the action is withheld or moved.
+ bool spawnsOnly=false;
  bool starts(const EventActionKey& k,uint64_t now,uint64_t windowMs=1000)const{
   return serial&&pressed&&now>=pressed&&now-pressed<=windowMs&&k.valid()&&k.entity==entity&&k.item==item&&k.trigger!=previousTrigger;
  }

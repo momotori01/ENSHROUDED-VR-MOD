@@ -60,6 +60,8 @@ inline float swingCharge(float game,float strength){
  const float own=std::isfinite(game)?std::clamp(game,0.f,1.f):0.f;
  return std::isfinite(strength)?std::max(own,std::clamp(strength,0.f,1.f)):own;
 }
+// The swing's strength alone as the charge (2026-10-19: the trigger's hold no longer counts).
+inline float swingOnlyCharge(float strength){return std::isfinite(strength)?std::clamp(strength,0.f,1.f):0.f;}
 inline float castDistance(float charge){return 3.f+15.f*charge;}   // metres, the game's 30fff0
 // The rod as shown in the hand: its axis in tracking space (handle to tip) and the metres from the grip to the tip.
 struct LiveSwingRod {uint64_t binding=0;Vec3 forward{0,1,0};float tip=0;};

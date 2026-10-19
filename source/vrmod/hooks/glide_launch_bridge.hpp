@@ -22,7 +22,7 @@ inline void capture(uintptr_t actor,uintptr_t input,uint32_t entity,uint32_t tic
     v.playedTime=read<int64_t>(actor+0x178);v.currentTime=read<int64_t>(actor+0x180);
     const auto ui=inputUi::snapshot();const auto pose=inputPose::channel.read(entity,v.milliseconds,inputPose::observationMaxAgeMs);
     v.valid=inputHeadIdle::vrLocomotion&&pose.status==game::InputPoseStatus::Current&&(pose.head.flags&15)==15&&
-        inputUi::boundNormal(ui,ui.senderContext,entity,v.milliseconds)&&gravityNormal&&(flags&1u)&&!(flags&((1u<<1)|(1u<<2)|(1u<<12)))&&
+        inputUi::boundNormal(ui,ui.senderContext,entity,v.milliseconds)&&gravityNormal&&(flags&1u)&&!(flags&game::nativeCameraFlags())&&
         read<uint8_t>(input+game::playerInputMode)==1&&!read<uint8_t>(input+game::playerInputMask)&&!read<uint8_t>(input+game::playerInputReady+2)&&read<float>(input+0x50)==0;
     std::lock_guard<std::mutex> lock(mutex);
     // Values expire across world/entity changes; saved addresses are identity

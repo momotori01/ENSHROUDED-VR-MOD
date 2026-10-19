@@ -13,8 +13,28 @@ namespace liveTargets {
 inline bool requested=false;
 // healthBytes: the Health component's size in this build (68 in June; 1.0 found no Health of 68 bytes and the list stayed
 // empty, live_targets_types health -1 in the Mock auto start 20261016-141318).
-struct Types {uintptr_t world=0,registry=0;int health=-1,current=-1,actor=-1;uint16_t healthBytes=68;bool usable=false;};
-struct Layout {bool health=false,current=false,actor=false;uint16_t healthOffset=0,currentOffset=0;};
+struct Types {uintptr_t world=0,registry=0;int health=-1,current=-1,actor=-1,selected=-1,relevant=-1;uint16_t healthBytes=68,selectedBytes=0,relevantBytes=0;bool usable=false;};
+struct Layout {bool health=false,current=false,actor=false,selected=false,relevant=false;uint16_t healthOffset=0,currentOffset=0,selectedOffset=0,relevantOffset=0;};
+// The local player's combat target (2026-10-19, user: "I cannot tell what is locked on - its health bar is on the HUD, not
+// above the enemy's head"): keen::ecs::SelectedTargets of the player (16 TargetInfo of 136 bytes, the layout of June and of
+// 1.0.0.1 alike - tools/reflection_struct_diff.py), slot 0 = TargetType Combat; TargetInfo: the target's transform +0 (its
+// position, Q32, first), the targeting offset +0x38, its entity +0x64, a change counter +0x80, LockedTargetFlags +0x82
+// (bit 3 SupportsHardLock). Read with the rest of the list on the local Actor's tick, read only.
+// The same target among the player's PlayerRelevantEnemies (8 PlayerRelevantTarget of 80 bytes, the count +0x280; entity +0,
+// its transform +8 (position Q32 first), boundingBoxHeight +0x48, validBoundingBox +0x4c, isCurrentTarget +0x4f): how tall it is.
+struct CombatTarget {bool valid=false;uint32_t entity=0;uint8_t flags=0;uint16_t counter=0;std::array<int64_t,3> position{};std::array<float,10> offset{};uint64_t ms=0;
+ bool relevant=false,boxValid=false,current=false;float height=0;std::array<int64_t,3> relevantPosition{};};
+constexpr size_t relevantTargetBytes=0x50,relevantCountAt=0x280;
+inline CombatTarget combat;inline uintptr_t localRow=0;constexpr size_t targetInfoBytes=0x88;
+// Slot 13 of the same SelectedTargets, keen::ecs::TargetType HardLockCandidate (1.0 reflection, 2026-10-19): the enemy a
+// lock would take - the game marks it, and shows its health bar, without any lock or fight (headset run 20261019-185327:
+// no combat target at all, the bar of a far enemy unaware in a cave in the HUD after a catch). Read the same way.
+constexpr size_t hardLockCandidateSlot=13;inline CombatTarget candidate;
+// The player's relevant enemies (PlayerRelevantEnemies, up to 8: the enemies that know of the player) - whose health bars
+// the game shows with neither a combat target nor a candidate (headset run 20261019-193946, report 194241: a far enemy's
+// bar in the HUD while fishing, nothing selected). The one marked as the current target first, else the nearest within
+// 40 m, for the health bar's part (target_mark.hpp).
+inline CombatTarget relevantChoice;
 struct Cached {evr::motion::LiveTarget target;uintptr_t record=0,layout=0,data=0,pose=0;uint32_t row=0;uint64_t seen=0;};
 struct Contact {bool reached=true,gated=false;uint32_t entity=0;float distance=0,nearest=-1;unsigned cached=0;bool ahead=false;};
 // The blade as it was at the last look, a hand each, for where it will be `leadMs` later (live_targets.hpp bladeAhead:
@@ -52,11 +72,13 @@ inline void learn(uintptr_t world){
  if(!block(header[1],records.data(),records.size()))throw std::runtime_error("live target type registry unreadable");
  for(unsigned id=0;id<header[2];++id){
   const auto* raw=records.data()+size_t(id)*256;uintptr_t text=0,length=0;uint16_t size=0;std::memcpy(&text,raw+16,8);std::memcpy(&length,raw+24,8);std::memcpy(&size,raw+56,2);
-  if(!text||length<16||length>27)continue;
-  char name[28]{};if(!block(text,name,size_t(length)))continue;const std::string_view n(name,size_t(length));
+  if(!text||length<16||length>40)continue;
+  char name[41]{};if(!block(text,name,size_t(length)))continue;const std::string_view n(name,size_t(length));
   if(n=="keen::ecs::Health"&&size>=40&&size<=256){types.health=int(id);types.healthBytes=size;}
   else if(n=="keen::ecs::CurrentTransform"&&size==56)types.current=int(id);
   else if(n=="keen::ecs::Actor")types.actor=int(id);
+  else if(n=="keen::ecs::SelectedTargets"&&size>=16*targetInfoBytes&&size<=0x1000){types.selected=int(id);types.selectedBytes=size;}
+  else if(n=="keen::ecs::PlayerRelevantEnemies"&&size>relevantCountAt&&size<=0x400){types.relevant=int(id);types.relevantBytes=size;}
  }
  if(types.health<0){   // which types of this build look like it (bounded; names up to 64 characters)
   std::string seen;unsigned shown=0;
@@ -69,7 +91,7 @@ inline void learn(uintptr_t world){
  }
  types.registry=registry;types.usable=types.health>=0&&types.current>=0;
  logFile->event("live_targets_types","\"world\":"+hex(world)+",\"types\":"+std::to_string(header[2])+",\"health\":"+std::to_string(types.health)+",\"health_bytes\":"+std::to_string(types.healthBytes)+",\"current_transform\":"+std::to_string(types.current)+
-  ",\"actor\":"+std::to_string(types.actor)+",\"usable\":"+(types.usable?"true":"false")+",\"read_only\":true");
+  ",\"actor\":"+std::to_string(types.actor)+",\"selected_targets\":"+std::to_string(types.selected)+",\"selected_targets_bytes\":"+std::to_string(types.selectedBytes)+",\"relevant_enemies\":"+std::to_string(types.relevant)+",\"usable\":"+(types.usable?"true":"false")+",\"read_only\":true");
 }
 inline Layout layout(uintptr_t address){
  const auto known=layouts.find(address);if(known!=layouts.end())return known->second;
@@ -81,6 +103,8 @@ inline Layout layout(uintptr_t address){
   l.health=has(types.health)&&place(types.health,types.healthBytes,l.healthOffset);
   l.current=has(types.current)&&place(types.current,56,l.currentOffset);
   l.actor=has(types.actor);
+  l.selected=types.selected>=0&&has(types.selected)&&place(types.selected,types.selectedBytes,l.selectedOffset);
+  l.relevant=types.relevant>=0&&has(types.relevant)&&place(types.relevant,types.relevantBytes,l.relevantOffset);
  }
  layouts[address]=l;return l;
 }
@@ -119,7 +143,8 @@ inline void tick(uintptr_t world,uint32_t local){
   cursor=first+count;
   if(whole)for(uint64_t at=0;at<count;++at){
    if(!((occupied[size_t(at/64)]>>(at%64))&1))continue;
-   const auto id=ids[size_t(at)];if(!id||id==local||!rows[size_t(at)])continue;
+   const auto id=ids[size_t(at)];if(id&&id==local&&rows[size_t(at)])localRow=rows[size_t(at)];
+   if(!id||id==local||!rows[size_t(at)])continue;
    const auto r=record(rows[size_t(at)]);if(!r.valid)continue;
    const auto l=layout(r.layout);if(!l.health||!l.current)continue;
    const auto hp=r.data+l.healthOffset+uintptr_t(r.row)*types.healthBytes,pose=r.data+l.currentOffset+uintptr_t(r.row)*56;
@@ -153,6 +178,44 @@ inline void tick(uintptr_t world,uint32_t local){
    known->target.entity=id;known->target.position=position;known->target.character=l.actor;
    known->record=rows[size_t(at)];known->layout=r.layout;known->data=r.data;known->row=r.row;known->pose=pose;known->seen=now;
   }
+  // The local player's combat target (slot 0 of its SelectedTargets), once a tick; and its hard-lock candidate (slot 13).
+  if(types.selected>=0&&localRow){
+   const auto r=record(localRow);CombatTarget c,h;
+   if(r.valid){const auto l=layout(r.layout);
+    if(l.selected){
+     auto readSlot=[&](size_t slot,CombatTarget& t){std::array<uint8_t,targetInfoBytes> info{};
+      if(!block(r.data+l.selectedOffset+uintptr_t(r.row)*types.selectedBytes+slot*targetInfoBytes,info.data(),info.size()))return;
+      t.valid=true;std::memcpy(t.position.data(),info.data(),24);std::memcpy(t.offset.data(),info.data()+0x38,40);std::memcpy(&t.entity,info.data()+0x64,4);
+      std::memcpy(&t.counter,info.data()+0x80,2);t.flags=info[0x82];t.ms=now;};
+     readSlot(0,c);if(types.selectedBytes>=(hardLockCandidateSlot+1)*targetInfoBytes)readSlot(hardLockCandidateSlot,h);
+     CombatTarget pick;double pickMetres=40.;
+     if(l.relevant){std::array<uint8_t,relevantCountAt+1> enemies{};
+      if(block(r.data+l.relevantOffset+uintptr_t(r.row)*types.relevantBytes,enemies.data(),enemies.size()))
+       for(unsigned k=0;k<std::min<unsigned>(enemies[relevantCountAt],8);++k){const auto* e=enemies.data()+k*relevantTargetBytes;uint32_t who=0;std::memcpy(&who,e,4);
+        for(auto* t:{&c,&h}){if(!t->valid||!t->entity||who!=t->entity||t->relevant)continue;
+         t->relevant=true;std::memcpy(t->relevantPosition.data(),e+8,24);std::memcpy(&t->height,e+0x48,4);t->boxValid=e[0x4c]!=0;t->current=e[0x4f]!=0;}
+        if(!who)continue;
+        CombatTarget q;q.valid=true;q.entity=who;q.ms=now;q.relevant=true;std::memcpy(q.relevantPosition.data(),e+8,24);q.position=q.relevantPosition;
+        std::memcpy(&q.height,e+0x48,4);q.boxValid=e[0x4c]!=0;q.current=e[0x4f]!=0;
+        const double m=metres(q.position,origin);
+        if((q.current&&!pick.current)||(q.current==pick.current&&m<pickMetres)){pick=q;pickMetres=m;}}}
+     if(pick.entity!=relevantChoice.entity){static std::atomic<unsigned> toldRelevant{0};
+      if(toldRelevant.fetch_add(1)<400)logFile->event("relevant_enemy_choice","\"entity\":"+std::to_string(pick.entity)+",\"current\":"+(pick.current?"true":"false")+",\"metres\":"+std::to_string(pick.entity?pickMetres:-1.));}
+     relevantChoice=pick;}}
+   else localRow=0;
+   if(h.entity!=candidate.entity){static std::atomic<unsigned> toldCandidate{0};
+    if(toldCandidate.fetch_add(1)<400)logFile->event("hard_lock_candidate","\"entity\":"+std::to_string(h.entity)+",\"metres\":"+std::to_string(h.valid&&h.entity?metres(h.position,origin):-1.)+",\"relevant\":"+(h.relevant?"true":"false"));}
+   candidate=h;
+   if(c.entity!=combat.entity||c.flags!=combat.flags||c.valid!=combat.valid){
+    static std::atomic<unsigned> told{0};
+    if(told.fetch_add(1)<400){std::ostringstream o;o<<std::setprecision(5)<<"\"valid\":"<<(c.valid?"true":"false")<<",\"entity\":"<<c.entity<<",\"flags\":"<<unsigned(c.flags)<<",\"counter\":"<<c.counter
+      <<",\"metres\":"<<(c.valid&&c.entity?metres(c.position,origin):-1.)<<",\"up_metres\":"<<(c.valid&&c.entity?double(c.position[1]-origin[1])/4294967296.0:0.)<<",\"relevant\":"<<(c.relevant?"true":"false")
+      <<",\"box_height\":"<<c.height<<",\"box_valid\":"<<(c.boxValid?"true":"false")<<",\"current\":"<<(c.current?"true":"false")
+      <<",\"relevant_up_metres\":"<<(c.relevant?double(c.relevantPosition[1]-origin[1])/4294967296.0:0.)<<",\"offset\":[";
+     for(size_t k=0;k<c.offset.size();++k)o<<(k?",":"")<<c.offset[k];
+     o<<"]";logFile->event("combat_target",o.str());}}
+   combat=c;
+  }
   lastTick=now;
   if(now-lastLog>=5000){lastLog=now;
    std::ostringstream o;o<<std::setprecision(4)<<"\"cached\":"<<cache.size()<<",\"full_scans\":"<<fullScans<<",\"ticks\":"<<ticks.load()<<",\"map_capacity\":"<<capacity<<",\"adopted\":"<<adopted.load()<<",\"dropped\":"<<dropped.load()<<",\"failures\":"<<failures.load()<<",\"nearest\":[";
@@ -183,6 +246,28 @@ inline Contact contact(const evr::motion::LiveMeleeWeapon& weapon,uint64_t now){
   if(std::isfinite(distance)&&(out.nearest<0||distance<out.nearest))out.nearest=distance;
  }
  return out;
+}
+// Any thread: the local player's combat target (slot 0 of its SelectedTargets), if read within the last half second.
+inline bool combatTarget(CombatTarget& out,uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);
+ if(!combat.valid||!combat.entity||now<combat.ms||now-combat.ms>500)return false;
+ out=combat;return true;
+}
+// Any thread: the enemy whose health bar the game shows - the combat target, else the hard-lock candidate - if read within
+// the last half second (target_mark.hpp). candidateOnly: true when it is the candidate.
+inline bool hudTarget(CombatTarget& out,bool& candidateOnly,uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);candidateOnly=false;
+ if(combat.valid&&combat.entity&&now>=combat.ms&&now-combat.ms<=500){out=combat;return true;}
+ if(candidate.valid&&candidate.entity&&now>=candidate.ms&&now-candidate.ms<=500){out=candidate;candidateOnly=true;return true;}
+ if(relevantChoice.valid&&relevantChoice.entity&&now>=relevantChoice.ms&&now-relevantChoice.ms<=500){out=relevantChoice;candidateOnly=true;return true;}   // 19:55
+ return false;
+}
+// Any thread: where a creature among the kept ones stands now (its origin, Q32), if it is kept (2026-10-19: the health
+// bar follows its enemy for a while after the game's combat target is lost - target_mark.hpp).
+inline bool entityPosition(uint32_t entity,std::array<int64_t,3>& out,uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);
+ for(const auto& c:cache)if(entity&&c.target.entity==entity&&now>=c.seen&&now-c.seen<=4000){out=c.target.position;return true;}
+ return false;
 }
 // Any thread: how far along this line (the game's world; direction a unit vector) the aim mark sits - the creature in
 // the way, the level ground of the player's feet, or 128 m. by: 0 far, 1 ground, 2 creature.

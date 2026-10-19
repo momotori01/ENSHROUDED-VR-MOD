@@ -21,7 +21,7 @@ int main(){
         modes&=mode<=1?x.status==IdleHeadStatus::Applied:x.status==IdleHeadStatus::SpecialMode&&out==s;}
     check(modes,"explicit idle diagnostic accepts two existing modes without rewriting either");
     bool states=true;for(unsigned bit=0;bit<8;++bit){auto s=source;s[clientMask]=uint8_t(1u<<bit);auto x=patchIdleHeadCamera(s,out,g,h,0);states&=x.status==IdleHeadStatus::SpecialMode&&out==s;}
-    for(unsigned bit:{1u,2u,12u}){auto f=g;f.playerFlags|=1u<<bit;auto x=patchIdleHeadCamera(source,out,f,h,0);states&=x.status==IdleHeadStatus::PlayerState&&out==source;}
+    for(unsigned bit:{1u,2u}){auto f=g;f.playerFlags|=1u<<bit;auto x=patchIdleHeadCamera(source,out,f,h,0);states&=x.status==IdleHeadStatus::PlayerState&&out==source;}
     check(states,"every special client bit and UI/target-lock flag preserves native bytes");
     bool actions=true;for(unsigned bit=0;bit<64;++bit){auto s=source;s[clientDigital+bit/8]=uint8_t(1u<<(bit%8));auto x=patchIdleHeadCamera(s,out,g,h,0);actions&=x.status==IdleHeadStatus::ActiveInput&&out==s;}
     for(float value:{-.7f,.000001f,1.f})for(unsigned axis=0;axis<2;++axis){auto s=source;std::memcpy(s.data()+clientStick+4*axis,&value,4);

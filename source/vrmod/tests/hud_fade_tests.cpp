@@ -46,7 +46,8 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  bool rejected=false;try{d.update(nullptr,w,h,now);}catch(const std::invalid_argument&){rejected=true;}ck(rejected);
  // The zones of the layout: prompt positions seen in the Mock runs are inside the pins, the HUD parts are outside.
  {const HudLayout l;auto shown=[&](int x,int y){return l.pins.contains(x,y)||l.pinsWide.contains(x,y);};
-  ck(shown(1000,866)&&shown(1100,766)&&shown(1140,868)&&shown(900,120)&&shown(1000,955)&&shown(1000,95)&&shown(20,600)&&shown(1470,600));
+  ck(shown(1000,866)&&shown(1100,766)&&shown(1140,868)&&shown(900,120)&&shown(1000,95)&&shown(20,600)&&shown(1470,600));
+  ck(!shown(1000,955)&&!shown(960,910)&&l.heldItem.contains(1000,955)&&l.heldItem.contains(960,910)&&!l.heldItem.contains(960,980));   // the held item's name and hints fade (2026-10-19)
   ck(!shown(100,40)&&!shown(1700,90)&&!shown(960,1030)&&!shown(960,980)&&!shown(250,105)&&!shown(40,188)&&!shown(1700,140)&&!shown(200,1040)&&!shown(935,18));
   ck(!shown(1900,600)&&!shown(1500,300)&&!shown(1700,880));            // the top right column of pinned recipes fades with the HUD
   // ... and the band's height of it is no reason to show the HUD (a prompt held at the right edge), above it is one.

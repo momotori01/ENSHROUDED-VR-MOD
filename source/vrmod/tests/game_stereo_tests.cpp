@@ -62,6 +62,23 @@ int main(int argc, char **argv)
     check(length(rotate(centered.eyes[0].orientation, {0, 0, 1}) -
                  rotate(centered.eyes[1].orientation, {0, 0, 1})) > .06f,
           "runtime canted eye rotations remain independent");
+    // A world point back into the XR space (trackingPointFromWorld): each eye's own world position gives its XR position,
+    // for a turned anchor, a camera offset, a tracking origin away from identity and two world scales.
+    for(const double units:{1.0,2.0}){
+        game::StableAnchor turnedAnchor=anchor;turnedAnchor.orientation=euler(.7f,-.15f,.05f);turnedAnchor.worldUnitsPerMeter=units;
+        const Pose origin{euler(-1.1f,.1f,.02f),{.4f,-1.2f,.9f}};
+        const auto cams=game::stereoCameras(turnedAnchor,origin,views,3,100,1,turnedAnchor.root,.01f,10000);
+        for(unsigned eye=0;eye<2;++eye){
+            const auto back=game::trackingPointFromWorld(turnedAnchor,origin,cams.eyes[eye].position);
+            check(length(back-views[eye].pose.position)<2e-5f,"world point maps back to the eye's XR position");
+        }
+        // and a point 3 m ahead of the left eye along its view
+        const Vec3 ahead=views[0].pose.position+rotate(views[0].pose.orientation,{0,0,-3});
+        const auto local=game::trackingPose(compose(origin,Pose{{0,0,0,1},ahead}));
+        const auto world=cameraPosition(cameraPosition(turnedAnchor.root,rotate(normalized(turnedAnchor.orientation),turnedAnchor.cameraOffsetGameUnits),1),
+            rotate(normalized(turnedAnchor.orientation),local.position),units);
+        check(length(game::trackingPointFromWorld(turnedAnchor,origin,world)-ahead)<5e-5f,"a world point ahead maps to its XR point");
+    }
     // Same captured world cameras across independently recentered sessions.
     game::StableAnchor reference=anchor;reference.cameraOffsetGameUnits={0,0,0};reference.orientation=euler(.8f,.1f,-.04f);
     const auto expectedReplay=game::stereoCameras(reference,identityPose(),views,3,100,1,reference.root,.01f,10000);

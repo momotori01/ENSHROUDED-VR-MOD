@@ -93,6 +93,24 @@ inline void traceEntityTypes(uintptr_t world,uint32_t entity){
 }
 inline void publishFollow(const Follow& f){std::lock_guard<std::mutex> lock(followMutex);follow=f;}
 inline Follow followLeft;inline void publishFollowLeft(const Follow& f){std::lock_guard<std::mutex> lock(followMutex);followLeft=f;}
+// The caught fish in the tracked left hand (motion_offhand_visual.hpp motionFishInHand): its world transform, written over
+// the game's right after the attachment system has put the fish on the character.
+inline Follow fishFollow;inline void publishFishFollow(const Follow& f){std::lock_guard<std::mutex> lock(followMutex);fishFollow=f;}
+inline std::atomic<unsigned> fishWrites{0};
+struct FishAttach {uint32_t entity=0,parent=0;uintptr_t world=0;std::array<uint8_t,48> slot{};uint64_t at=0;};inline FishAttach fishAttach;   // under followMutex
+// The caught fish's model as the model pass sees it (19:40: it is attached to nothing - the game places the fish itself):
+// its render object's handle in the world Scene, for motionFishInHand to move. Under followMutex.
+// Since 19:55 for every caught fish that is watched (the own one and other players' - remote_body.hpp): the game's pose
+// of its render object as the model pass found it, unless that is the pose the mod last wrote (then the game has not
+// placed it again since). Under followMutex.
+struct FishModel {uint32_t entity=0,handle=0;uintptr_t scene=0;uint64_t at=0;std::array<uint8_t,56> pose{},written{};bool gamePose=false;};
+inline std::array<FishModel,8> fishModels{};inline std::array<std::pair<uint32_t,uint64_t>,8> fishWatch{};
+inline void watchFish(uint32_t entity,uint64_t now){if(!entity)return;std::lock_guard<std::mutex> lock(followMutex);size_t at=0;
+    for(size_t i=0;i<fishWatch.size();++i){if(fishWatch[i].first==entity){at=i;break;}if(fishWatch[i].second<fishWatch[at].second)at=i;}fishWatch[at]={entity,now+1000};}
+inline bool fishWatched(uint32_t entity,uint64_t now){if(!entity)return false;std::lock_guard<std::mutex> lock(followMutex);for(const auto& w:fishWatch)if(w.first==entity&&now<=w.second)return true;return false;}
+inline FishModel* fishModelOf(uint32_t entity,bool create){   // under followMutex
+    FishModel* oldest=&fishModels[0];for(auto& m:fishModels){if(m.entity==entity)return &m;if(m.at<oldest->at)oldest=&m;}
+    if(!create)return nullptr;*oldest={};oldest->entity=entity;return oldest;}
 // Other players' held items (2026-10-15, online 2.1): the attachment of a hand-slot item (8 the main hand, 9 the off
 // hand, 12 the shield) of a character driven by another player's body (remote_body.hpp) is replaced, as the own one
 // above, by where that player's datagram puts the item: its hand socket and the item's pose in that hand (online_
@@ -313,8 +331,24 @@ inline void capture(uintptr_t caller,uintptr_t sp,void* context,void* query,uint
             // read SlotAttachment+2c, with target+28 and slot+29.
             const auto component=read<uintptr_t>(sp+0x50+14*8);if(!component)throw std::runtime_error("slot attachment component absent");   // 1.0: SlotAttachment slot 14 (June 6)
             const auto a=read<std::array<uint8_t,48>>(component);uint32_t parent=0;std::memcpy(&parent,a.data()+44,4);
-            if(parent!=local.entity){remoteItemFollow(sp,a,parent,now,nullptr);return;}   // another player's character: its items by its datagram
             const auto state=read<uintptr_t>(reinterpret_cast<uintptr_t>(context)),world=read<uintptr_t>(state+0x30);
+            // The caught fish (2026-10-19 19:15, user: "after the catch, let the fish stick to the left hand"), whatever it is
+            // attached to (19:25: the headset run 20261019-191819 found it on nothing of the player's - fishing_fish_not_attached):
+            // its SlotAttachment is kept for motionFishInHand, and the tracked left hand's pose (one frame old) is written
+            // over the game's right after the attachment system has put the fish there.
+            if(const auto fish=controllerUiFixture::fishingFishId.load();fish&&entity==fish){
+                static uint32_t toldFish=0;if(toldFish!=fish){toldFish=fish;logFile->event("fishing_fish_attachment","\"entity\":"+std::to_string(entity)+",\"parent\":"+std::to_string(parent)+
+                    ",\"local\":"+std::to_string(local.entity)+",\"target\":"+std::to_string(a[40])+",\"slot\":"+std::to_string(a[41])+",\"state\":"+std::to_string(controllerUiFixture::fishingState.load()));}
+                {std::lock_guard<std::mutex> lock(followMutex);fishAttach={entity,parent,world,a,now};}
+                Follow f;{std::lock_guard<std::mutex> lock(followMutex);f=fishFollow;}
+                if(f.entity==entity&&f.world==world&&now>=f.at&&now-f.at<=250){
+                    const auto transform=read<uintptr_t>(sp+0x50+8*8);   // 1.0: RenderTransform slot 8, as the held item's
+                    std::memcpy(reinterpret_cast<void*>(transform),f.transform.data(),40);
+                    const auto count=fishWrites.fetch_add(1);
+                    if(count<4||count%300==0)logFile->event("fishing_fish_in_hand_write","\"entity\":"+std::to_string(entity)+",\"writes\":"+std::to_string(count+1)+",\"slot\":"+std::to_string(a[41])+",\"pose_age_ms\":"+std::to_string(now-f.at));
+                }
+            }
+            if(parent!=local.entity){remoteItemFollow(sp,a,parent,now,nullptr);return;}   // another player's character: its items by its datagram
             nativeImpactComponents::learnSlot(state,entity,component);
             if(nativeImpactComponents::requested&&(!local.world||world!=local.world))return;
             if(a[40]>1||a[41]>=36||a!=read<std::array<uint8_t,48>>(component))throw std::runtime_error("slot attachment fields changed");
@@ -387,6 +421,19 @@ inline void capture(uintptr_t caller,uintptr_t sp,void* context,void* query,uint
             if(changed&&observations.fetch_add(1)<256)logFile->event("attachment_slot","\"entity\":"+std::to_string(entity)+",\"parent\":"+std::to_string(parent)+
                 ",\"target\":"+std::to_string(a[40])+",\"slot\":"+std::to_string(a[41])+",\"read_only\":true");
         }else{
+            // The caught fish's model, if this pass sees it at all (2026-10-19 19:25: where the game shows it, for the left hand).
+            if(const auto fish=controllerUiFixture::fishingFishId.load();(fish&&entity==fish)||fishWatched(entity,now)){static uint32_t toldModel=0;
+                uint32_t handle=0;uintptr_t scene=0;std::array<uint8_t,56> pose{};bool posed=false;
+                try{const auto component=read<uintptr_t>(sp+0x30+9*8);
+                    for(const unsigned slot:{22u,21u}){const auto o=read<uintptr_t>(sp+0x30+slot*8);const auto v=o?read<uintptr_t>(o+layout::ownerView):0;if(v&&read<uintptr_t>(v)==o){scene=read<uintptr_t>(o+layout::ownerScene);break;}}
+                    if(component)handle=read<uint32_t>(component);
+                    if(handle&&scene){const auto objects=read<uintptr_t>(scene+0x1b0),gens=read<uintptr_t>(scene+0x1c8);const auto bytes=read<uint64_t>(scene+0x1b8),count=read<uint64_t>(scene+0x1d0);const auto index=handle&0xffffff;
+                        if(objects&&gens&&bytes%0x1b0==0&&index<bytes/0x1b0&&index<count&&read<uint8_t>(gens+index)==(handle>>24)){pose=read<std::array<uint8_t,56>>(objects+uintptr_t(index)*0x1b0+0x38);posed=true;}}}
+                catch(...){}
+                if(handle&&scene){std::lock_guard<std::mutex> lock(followMutex);auto* m=fishModelOf(entity,true);m->handle=handle;m->scene=scene;m->at=now;
+                    if(posed&&pose!=m->written){m->pose=pose;m->gamePose=true;}}
+                if(toldModel!=entity){toldModel=entity;logFile->event("fishing_fish_model_pass","\"entity\":"+std::to_string(entity)+",\"own\":"+(entity==fish?"true":"false")+",\"state\":"+std::to_string(controllerUiFixture::fishingState.load())+
+                    ",\"handle\":"+std::to_string(handle)+",\"scene\":"+hex(scene)+",\"world_scene\":"+(scene&&scene==provenWorldScene?"true":"false"));}}
             std::lock_guard<std::mutex> lock(mutex);auto c=child(entity,now,false);
             if(!c||c->parent!=local.entity||now<c->seen||now-c->seen>1000)return;
             // 1.0 (query census, Mock game-20261016-081657): ModelComponent is slot 9 (sp+0x78, as June's slot 11 at +0x20 was);

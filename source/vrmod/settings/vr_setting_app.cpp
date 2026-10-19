@@ -433,6 +433,25 @@ unsigned convertPictures(const std::wstring& nativeXr,const std::wstring& to,lon
             ++made;DeleteFileW(left.c_str());if(pair)DeleteFileW(right.c_str());
             listing+="  bug-report\\screenshots\\"+narrow(name)+(pair?"  (left | right)\r\n":"  (left eye only)\r\n");}
     }
+    // The UI image of the report's first picture (native-xr/ui-frame-<n>-native.rgba8 and its .json, 2026-10-19: where the
+    // HUD shows the locked target's health bar), over a grey ground, as ui-<n>.jpg.
+    {WIN32_FIND_DATAW f{};const HANDLE s=FindFirstFileW((nativeXr+L"\\ui-frame-*-native.rgba8").c_str(),&f);
+     if(s!=INVALID_HANDLE_VALUE){
+        do{ULARGE_INTEGER w{};w.LowPart=f.ftLastWriteTime.dwLowDateTime;w.HighPart=f.ftLastWriteTime.dwHighDateTime;
+            const long long unixTime=static_cast<long long>(w.QuadPart/10000000ull)-11644473600ll;if(unixTime<start-600||unixTime>end+20)continue;
+            const auto n=std::wcstoul(f.cFileName+9,nullptr,10);const std::wstring raw=nativeXr+L"\\"+f.cFileName,json=nativeXr+L"\\ui-frame-"+std::to_wstring(n)+L".json";
+            std::string meta,bytes;uint32_t width=1920,height=1080;
+            if(readFile(json,meta)){auto number=[&](const char* key,uint32_t& v){const auto at=meta.find(key);if(at!=std::string::npos)v=uint32_t(std::strtoul(meta.c_str()+at+std::strlen(key),nullptr,10));};
+                number("\"width\":",width);number("\"height\":",height);}
+            if(!readFile(raw,bytes)||!width||!height||width>8192||height>8192||bytes.size()!=size_t(width)*height*4)continue;
+            const uint32_t stride=(width*3+3)&~3u;std::vector<uint8_t> bgr(size_t(stride)*height);
+            for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<width;++x){const auto* q=reinterpret_cast<const uint8_t*>(bytes.data())+(size_t(y)*width+x)*4;uint8_t* d=&bgr[size_t(y)*stride+size_t(x)*3];
+                const float a=q[3]/255.f;const uint8_t ground[3]={96,80,64};for(unsigned c=0;c<3;++c)d[c]=uint8_t(std::min(255.f,q[2-c]*a+ground[c]*(1-a)+.5f));}
+            wchar_t name[64]{};swprintf_s(name,L"ui-%06lu.jpg",n);
+            if(writeJpeg(factory,to+L"\\"+name,bgr,width,height,stride)){++made;DeleteFileW(raw.c_str());DeleteFileW(json.c_str());
+                listing+="  bug-report\\screenshots\\"+narrow(name)+"  (the HUD as the game drew it)\r\n";}
+        }while(FindNextFileW(s,&f));
+        FindClose(s);}}
     factory->Release();CoUninitialize();return made;
 }
 // unfinished: the 30 seconds did not end (the watcher or "Make zip" finishes it; end is the last time the game wrote report.json).

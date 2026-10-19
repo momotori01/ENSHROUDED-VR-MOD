@@ -248,6 +248,7 @@ __declspec(noinline) bool __fastcall advance(void* context,void* query,uint32_t 
             // The player's state; its changes of Blocking, ParryOportunity and EnemyPrepareAttack are put on record
             // (headset runs keep few lines: changes only). The BaseActor names the local player for the swing parry.
             controllerUiFixture::playerActorState=effective;controllerUiFixture::playerActorStateMs=GetTickCount64();controllerUiFixture::playerBaseActor=baseActor;
+            if(effective>>5&1)controllerUiFixture::blockOpportunityMs=GetTickCount64();
             // Walking while guarding (headset run 20261014-230255, user: "while guarding I walk only where the shield faces;
             // I cannot step back"): the game strafes while Blocking only if the input component's byte +51a is 0 (237de8 ->
             // 336420), and it was 1 all through the guard (Mock game-20261014-233556) - so the character walked only along

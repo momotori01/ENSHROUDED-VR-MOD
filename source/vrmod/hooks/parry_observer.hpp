@@ -52,8 +52,48 @@ constexpr uint64_t clientWindowMs=150,serverWindowMs=300;
 //     0x46c310: taken +0, pressed +8), the actor row +0xb8 (its +0x1b1 bit 0 and +0x18 == 8: in the block's sequence).
 constexpr size_t clientConsumerAt=0x70,serverActorAt=0xb8,serverConsumerAt=0x2f8,serverPendingAt=0x298;
 inline bool plausible(uintptr_t p){return p>=0x10000&&p<0x7ff000000000ull&&!(p&7);}
+inline bool fresh(uint64_t at,uint64_t window){const auto now=GetTickCount64();return at&&now>=at&&now-at<=window;}
 inline std::atomic<uint64_t> calls{0},withTargets{0},lastTargets{0},armed{0},natural{0};inline std::atomic<unsigned> inside{0};
 inline std::atomic<uintptr_t> clientConsumer{0};
+// The relaxed parry (2026-10-19; user: "swinging the shield right as the enemy strikes down, no parry and I take the hit;
+// swinging as it raises the weapon, the parry works - I want the first to parry", and asked for it with the game's rules
+// widened, knowing it is easier than the game and only the host's game decides the gameplay side). The game parries an
+// enemy only (read in 1.0.0.1):
+//   client, the choice 0x2acf60 -> per enemy 0x3b5110: the enemy's state ParryOportunity (StateFlag 4, its attack's
+//     opening) is up (0x21a900 with 4) and it stands within 3 m (shapes' distance less half sizes) - else not chosen;
+//   gameplay, the parry's target 0x3b6090: an enemy within 8 m, facing the player within 60 degrees, within 0.8 m + its
+//     radius of the player's forward line, 1.1 m up or down, which closes in fast enough to reach the player in 0.4 s
+//     ((distance along its movement - 0.6 - radius) / speed <= 400000000 ns at 0x3b670f; standing still: never).
+// Headset run 20261019-124800 (bug report 125505): four swings while guarding, the choice made at the swing's own frame
+// each time, 0 enemies every time - the striking enemy had stopped and its opening was over. So while the enemy's
+// blow is landing - the player's own BlockOpportunity (StateFlag 5) is up then, for 0.16 .. 0.29 s before the hit in
+// that run - a swing parries the enemy within 3 m without its opening: the client's choice is made once more with
+// StateFlag 4 taken as up (0x21a900 answers true for 4 in that call only), and where the gameplay side then finds no
+// target, it takes the one the client chose (0x9a5910, the entity of that id). A swing up to relaxAfterSwingMs before
+// the blow lands makes the relaxed choice when BlockOpportunity comes up (0.2 s: the user, "0.4 is long, can it be 0.2?"). For the local player only (solo, or the
+// host's own); a guest's parry is decided by the host's game. EVR_PARRY_RELAX=0: the game's rules only.
+inline bool relax=true;inline bool relaxHooked=false;
+constexpr uint64_t relaxAfterSwingMs=200,opportunityFreshMs=80,relaxedTargetMs=500;
+constexpr uintptr_t flagTestRva=0x21a900,candidateRva=0x3b5110,entityRva=0x9a5910;
+constexpr const char* flagTestPattern="4C 8B C1 0F B6 CA BA 01 00 00 00 48 D3 E2 41 F6 80 B1 01 00 00 01";
+constexpr const char* candidatePattern="48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 70 48 8B F2 49 8B F9 B2 04";
+constexpr const char* entityPattern="40 53 48 83 EC 20 48 8B 01 89 54 24 38 48 8D 54 24 38 48 8B 58 30";
+using FlagTest=bool(__fastcall*)(void*,uint8_t);
+using Candidate=bool(__fastcall*)(void*,void*,void*,void*,void*,void*);
+using Entity=void*(__fastcall*)(void*,uint32_t);
+inline FlagTest originalFlagTest=nullptr;inline Candidate originalCandidate=nullptr;inline Entity entityOf=nullptr;
+inline thread_local bool relaxChoice=false,openingTaken=false,relaxGameplay=false;
+inline std::atomic<uint64_t> relaxArm{0},relaxPressAt{0},relaxedAt{0},swingTargets{0},relaxedCandidates{0},relaxedTargets{0};
+inline std::atomic<uint32_t> relaxedId{0};
+inline bool __fastcall flagTest(void* actor,uint8_t flag){
+    if(openingTaken&&flag==4)return true;
+    return originalFlagTest(actor,flag);
+}
+inline bool __fastcall candidate(void* actor,void* b,void* c,void* d,void* e,void* f){
+    auto r=originalCandidate(actor,b,c,d,e,f);
+    if(!r&&relaxChoice){openingTaken=true;r=originalCandidate(actor,b,c,d,e,f);openingTaken=false;if(r)++relaxedCandidates;}
+    return r;
+}
 inline std::atomic<uint64_t> clientArm{0},serverArm{0},serverTried{0};   // the swing (its time) the client took / the gameplay side asked for / tried
 inline std::atomic<unsigned> tries{0},suppressed{0};
 struct Inside {Inside(){++inside;}~Inside(){--inside;}};
@@ -90,10 +130,21 @@ void* __fastcall secondCheck(void* out,void* a,void* b,void* c,uint64_t s1){
     return r;
 }
 void* __fastcall findTarget(void* parameters,void* position,float radius){
-    const Inside counted;const auto r=originalFindTarget(parameters,position,radius);
-    if(conditions.local&&reinterpret_cast<uintptr_t>(_ReturnAddress())==baseAddress+findTargetCaller)try{
+    const Inside counted;auto r=originalFindTarget(parameters,position,radius);
+    const bool ours=conditions.local&&reinterpret_cast<uintptr_t>(_ReturnAddress())==baseAddress+findTargetCaller;
+    if(ours)try{
         conditions.targetFound=r?1:0;conditions.radius=radius;
         const auto p=reinterpret_cast<uintptr_t>(position);for(size_t i=0;i<3;++i)conditions.player[i]=double(read<int64_t>(p+i*8))/4294967296.0;
+    }catch(...){}
+    // The relaxed parry's gameplay side: no enemy closes in, so the enemy the client chose without its opening (relaxedId)
+    // is the target - the entity of that id, looked up as the search itself does (0x9a5910 with the parameters' first word).
+    if(!r&&ours&&relaxGameplay&&entityOf&&fresh(relaxedAt.load(),relaxedTargetMs))try{
+        const auto id=relaxedId.load();const auto world=read<uintptr_t>(reinterpret_cast<uintptr_t>(parameters));
+        if(id&&plausible(world)){r=entityOf(reinterpret_cast<void*>(world),id);
+            if(r)conditions.targetFound=2;
+            static std::atomic<unsigned> told{0};
+            if(told.fetch_add(1)<200)logFile->event("parry_relaxed_gameplay","\"frame\":"+std::to_string(liveFrame.frame)+",\"enemy\":"+std::to_string(id)+
+                ",\"entity_found\":"+(r?"true":"false")+",\"chosen_ms_ago\":"+std::to_string(GetTickCount64()-relaxedAt.load()));}
     }catch(...){}
     return r;
 }
@@ -105,16 +156,38 @@ uint64_t __fastcall choose(void* targets,void* row){
     const ObserverLastError preserve;
     try{
         {const auto c=read<uintptr_t>(reinterpret_cast<uintptr_t>(row)+clientConsumerAt);clientConsumer=plausible(c)?c:0;}lastTargets=result;
+        // The relaxed choice's first enemy (the targets: {uint32 ids, capacity}, written from the start), for the gameplay side.
+        if(relaxChoice&&result){const auto ids=read<uintptr_t>(reinterpret_cast<uintptr_t>(targets));
+            if(plausible(ids&~uintptr_t(7))){relaxedId=read<uint32_t>(ids);relaxedAt=GetTickCount64();++relaxedTargets;}}
         const auto n=++calls;if(result)++withTargets;
         if(n<=2000)logFile->event("parry_targets_chosen","\"frame\":"+std::to_string(liveFrame.frame)+",\"targets\":"+std::to_string(result)+
             ",\"calls\":"+std::to_string(n)+",\"with_targets\":"+std::to_string(withTargets.load())+",\"read_only\":true");
     }catch(...){}
     return result;
 }
-inline bool fresh(uint64_t at,uint64_t window){const auto now=GetTickCount64();return at&&now>=at&&now-at<=window;}
 void __fastcall clientTask(void* task){
     const Inside counted;
     const auto at=controllerUiFixture::swingParryAt.load();const auto consumer=clientConsumer.load();
+    const bool opening=relax&&relaxHooked&&fresh(controllerUiFixture::blockOpportunityMs.load(),opportunityFreshMs);
+    // The relaxed press: the swing's own press chose nobody, and the enemy's blow comes to land within relaxAfterSwingMs.
+    if(swingParry&&opening&&plausible(consumer)&&clientArm.load()==at&&relaxArm.load()!=at&&swingTargets.load()==0&&fresh(at,relaxAfterSwingMs)){
+        relaxArm=at;
+        const auto takenAt=consumer+8,pressedAt=consumer+0x18;constexpr uint64_t bit=parryBit;
+        uint64_t taken=0,pressed=0;bool written=false;
+        try{taken=read<uint64_t>(takenAt);pressed=read<uint64_t>(pressedAt);
+            *reinterpret_cast<uint64_t*>(takenAt)=taken&~bit;*reinterpret_cast<uint64_t*>(pressedAt)=pressed|bit;written=true;}catch(...){}
+        const auto before=calls.load();const auto candidatesBefore=relaxedCandidates.load();
+        relaxChoice=true;originalClient(task);relaxChoice=false;
+        const ObserverLastError preserve;
+        try{
+            if(written&&!(pressed&bit))*reinterpret_cast<uint64_t*>(pressedAt)&=~bit;
+            const bool chosen=calls.load()!=before;relaxPressAt=GetTickCount64();
+            logFile->event("parry_relaxed_client","\"frame\":"+std::to_string(liveFrame.frame)+",\"swing_ms_ago\":"+std::to_string(GetTickCount64()-at)+
+                ",\"at_the_swing\":false,\"choice_made\":"+(chosen?"true":"false")+",\"targets\":"+std::to_string(chosen?lastTargets.load():0)+
+                ",\"without_opening\":"+std::to_string(relaxedCandidates.load()-candidatesBefore)+",\"enemy\":"+std::to_string(relaxedId.load()));
+        }catch(...){}
+        return;
+    }
     if(swingParry&&plausible(consumer)&&(clientArm.load()==at||!fresh(at,clientWindowMs))&&fresh(controllerUiFixture::guardRepressAt.load(),clientWindowMs)){
         try{*reinterpret_cast<uint64_t*>(consumer+8)|=parryBit;}catch(...){}   // the guard's own press again: Parry taken
         if(suppressed.fetch_add(1)<20)try{logFile->event("parry_input_taken_on_repress","\"frame\":"+std::to_string(liveFrame.frame));}catch(...){}
@@ -126,12 +199,18 @@ void __fastcall clientTask(void* task){
     uint64_t taken=0,pressed=0;bool written=false;
     try{taken=read<uint64_t>(takenAt);pressed=read<uint64_t>(pressedAt);
         *reinterpret_cast<uint64_t*>(takenAt)=taken&~bit;*reinterpret_cast<uint64_t*>(pressedAt)=pressed|bit;written=true;}catch(...){}
-    const auto before=calls.load();
+    const auto before=calls.load();const auto candidatesBefore=relaxedCandidates.load();
+    // The blow is landing already at the swing: the relaxed choice at once (and no second press for this swing).
+    if(opening){relaxArm=at;relaxChoice=true;}
     originalClient(task);
+    relaxChoice=false;
     const ObserverLastError preserve;
     try{
         if(written&&!(pressed&bit))*reinterpret_cast<uint64_t*>(pressedAt)&=~bit;
-        const bool chosen=calls.load()!=before;
+        const bool chosen=calls.load()!=before;swingTargets=chosen?lastTargets.load():0;
+        if(opening){relaxPressAt=GetTickCount64();
+            logFile->event("parry_relaxed_client","\"frame\":"+std::to_string(liveFrame.frame)+",\"swing_ms_ago\":0,\"at_the_swing\":true,\"choice_made\":"+(chosen?"true":"false")+
+                ",\"targets\":"+std::to_string(chosen?lastTargets.load():0)+",\"without_opening\":"+std::to_string(relaxedCandidates.load()-candidatesBefore)+",\"enemy\":"+std::to_string(relaxedId.load()));}
         logFile->event("swing_parry_client","\"frame\":"+std::to_string(liveFrame.frame)+",\"swing_ms_ago\":"+std::to_string(GetTickCount64()-at)+
             ",\"parry_taken_before\":"+((taken&bit)?"true":"false")+",\"parry_pressed_before\":"+((pressed&bit)?"true":"false")+
             ",\"written\":"+(written?"true":"false")+",\"choice_made\":"+(chosen?"true":"false")+",\"targets\":"+std::to_string(chosen?lastTargets.load():0));
@@ -146,7 +225,10 @@ bool __fastcall serverParry(void* out,void* row,void* a,void* b){
     try{if(caller==baseAddress+serverCallerRva){actor=read<uintptr_t>(r+serverActorAt);consumer=read<uintptr_t>(r+serverConsumerAt);if(!plausible(actor)||!plausible(consumer))actor=consumer=0;}}catch(...){actor=0;}
     const bool local=actor&&actor==controllerUiFixture::playerBaseActor.load();
     struct Marked {explicit Marked(bool l){conditions=Conditions{};conditions.local=l;}~Marked(){conditions=Conditions{};}} marked(local);
-    if(!swingParry||!local||!consumer||clientArm.load()!=at||serverArm.load()==at||!fresh(at,serverWindowMs)){
+    // The gameplay side's window runs from the relaxed press when the swing made one after its own (0.2 s at the most).
+    const auto relaxedPress=relaxPressAt.load();const bool relaxedSwing=relax&&relaxArm.load()==at&&relaxedPress>=at;
+    const auto windowFrom=relaxedSwing?relaxedPress:at;
+    if(!swingParry||!local||!consumer||clientArm.load()!=at||serverArm.load()==at||!fresh(windowFrom,serverWindowMs)){
         uint16_t sequence=0;uint8_t flags=0;uint64_t taken=0,pressed=0;uint32_t pending=0;bool known=false;
         if(local)try{sequence=read<uint16_t>(actor+0x18);flags=read<uint8_t>(actor+0x1b1);taken=read<uint64_t>(consumer);pressed=read<uint64_t>(consumer+8);
             pending=read<uint32_t>(read<uintptr_t>(r+serverPendingAt)+0x44);known=true;}catch(...){known=false;}
@@ -172,7 +254,9 @@ bool __fastcall serverParry(void* out,void* row,void* a,void* b){
         if((flags&1)&&sequence==8){*reinterpret_cast<uint16_t*>(actor+0x18)=0;sequenceWritten=true;}
         *reinterpret_cast<uint64_t*>(consumer)=taken&~bit;*reinterpret_cast<uint64_t*>(consumer+8)=pressed|bit;written=true;
     }catch(...){}
+    relaxGameplay=relaxedSwing&&fresh(relaxedAt.load(),relaxedTargetMs);
     const bool result=originalServer(out,row,a,b);
+    relaxGameplay=false;
     const ObserverLastError preserve;
     try{
         if(sequenceWritten&&read<uint16_t>(actor+0x18)==0)*reinterpret_cast<uint16_t*>(actor+0x18)=sequence;
@@ -213,6 +297,18 @@ inline void install() noexcept {
             conditionsHooked=true;logFile->event("parry_conditions_observed","\"ability_start\":"+hex(abilityStartRva)+",\"second_check\":"+hex(secondCheckRva)+",\"target_search\":"+hex(findTargetRva)+",\"read_only\":true");
         }catch(const std::exception& e){try{logFile->event("parry_conditions_failure","\"reason\":"+jsonString(e.what()));}catch(...){}}
         {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_SWING_PARRY",v,sizeof v);swingParry=!(m==1&&v[0]=='0');}
+        {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_PARRY_RELAX",v,sizeof v);relax=!(m==1&&v[0]=='0');}
+        if(swingParry&&relax&&conditionsHooked)try{
+            const auto call=baseAddress+0x2ad328;   // the choice's call of the per-enemy check
+            if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+candidateRva)throw std::runtime_error("parry candidate caller changed");
+            if(scan(reinterpret_cast<const uint8_t*>(baseAddress+entityRva),parsePattern(entityPattern).size(),parsePattern(entityPattern))!=std::vector<size_t>{0})throw std::runtime_error("entity lookup signature changed");
+            entityOf=reinterpret_cast<Entity>(baseAddress+entityRva);
+            hook(candidateRva,candidatePattern,reinterpret_cast<void*>(&candidate),reinterpret_cast<void**>(&originalCandidate),"parry candidate check");
+            hook(flagTestRva,flagTestPattern,reinterpret_cast<void*>(&flagTest),reinterpret_cast<void**>(&originalFlagTest),"actor state flag test");
+            relaxHooked=true;
+            logFile->event("parry_relaxed_enabled","\"candidate\":"+hex(candidateRva)+",\"flag_test\":"+hex(flagTestRva)+",\"entity\":"+hex(entityRva)+
+                ",\"after_swing_ms\":"+std::to_string(relaxAfterSwingMs)+",\"opportunity_fresh_ms\":"+std::to_string(opportunityFreshMs)+",\"local_player_only\":true");
+        }catch(const std::exception& e){relaxHooked=false;try{logFile->event("parry_relaxed_failure","\"reason\":"+jsonString(e.what()));}catch(...){}}
         if(swingParry){
             const auto serverCall=baseAddress+serverCallerRva-5;
             if(read<uint8_t>(serverCall)!=0xe8||uintptr_t(int64_t(serverCall+5)+read<int32_t>(serverCall+1))!=baseAddress+serverRva)throw std::runtime_error("parry sequence caller changed");
@@ -232,9 +328,11 @@ inline void disable() noexcept {
     const auto clientStatus=clientHooked?MH_DisableHook(reinterpret_cast<void*>(baseAddress+clientRva)):MH_OK;
     const auto serverStatus=serverHooked?MH_DisableHook(reinterpret_cast<void*>(baseAddress+serverRva)):MH_OK;
     if(conditionsHooked){conditionsHooked=false;for(auto rva:{abilityStartRva,secondCheckRva,findTargetRva})MH_DisableHook(reinterpret_cast<void*>(baseAddress+rva));}
+    if(relaxHooked){relaxHooked=false;for(auto rva:{candidateRva,flagTestRva})MH_DisableHook(reinterpret_cast<void*>(baseAddress+rva));}
     const auto deadline=GetTickCount64()+500;while(inside.load()&&GetTickCount64()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(1));
     try{logFile->event("parry_observer_removed","\"status\":"+std::to_string(status)+",\"client_status\":"+std::to_string(clientStatus)+",\"gameplay_status\":"+std::to_string(serverStatus)+
         ",\"calls\":"+std::to_string(calls.load())+",\"with_targets\":"+std::to_string(withTargets.load())+",\"swing_parries_asked\":"+std::to_string(armed.load())+
-        ",\"parries_asked_by_the_game\":"+std::to_string(natural.load()));}catch(...){}
+        ",\"parries_asked_by_the_game\":"+std::to_string(natural.load())+
+        ",\"relaxed_targets\":"+std::to_string(relaxedTargets.load())+",\"relaxed_candidates\":"+std::to_string(relaxedCandidates.load()));}catch(...){}
 }
 }

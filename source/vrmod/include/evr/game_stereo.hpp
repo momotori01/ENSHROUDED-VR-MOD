@@ -92,4 +92,23 @@ inline StereoCameras stereoCameras(const StableAnchor &anchor, Pose trackingToAn
     }
     return result; // constructed atomically; no partially published left eye on failure
 }
+// The other way (2026-10-19, the locked target's mark above its head): where a point of the game's world shows in the XR
+// reference space the views are in, for the anchor and the tracking origin of a frame - stereoCameras' eye position
+// formula turned round (world = root camera + orientation * trackingVector(trackingToAnchor * xr) / units per metre).
+inline Vec3 trackingPointFromWorld(const StableAnchor &anchor, Pose trackingToAnchor, WorldPositionQ32 world)
+{
+    if (!finite(trackingToAnchor.position) || !std::isfinite(anchor.worldUnitsPerMeter) || anchor.worldUnitsPerMeter <= 0)
+        throw std::invalid_argument("invalid tracking origin or world scale");
+    const auto orientation = normalized(anchor.orientation);
+    const auto rootCamera = cameraPosition(anchor.root, rotate(orientation, anchor.cameraOffsetGameUnits), 1);
+    const Vec3 offset{float(relativeQ32(world.x, rootCamera.x) / anchor.worldUnitsPerMeter),
+                      float(relativeQ32(world.y, rootCamera.y) / anchor.worldUnitsPerMeter),
+                      float(relativeQ32(world.z, rootCamera.z) / anchor.worldUnitsPerMeter)};
+    const Vec3 composed = trackingVector(rotate(inverse(orientation), offset));   // the z reflection is its own inverse
+    const auto t = normalized(trackingToAnchor.orientation);
+    const Vec3 xr = rotate(inverse(t), composed - trackingToAnchor.position);
+    if (!finite(xr))
+        throw std::invalid_argument("world point outside the tracking space");
+    return xr;
+}
 } // namespace evr::game

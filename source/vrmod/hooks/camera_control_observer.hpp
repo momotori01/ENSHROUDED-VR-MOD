@@ -33,6 +33,9 @@ inline std::atomic<float> realignRequest{0},disturbRequest{0};inline std::atomic
 inline std::atomic<unsigned> realignApplied{0};
 inline thread_local Pending* current=nullptr;
 inline std::mutex mutex;inline Sample latest;inline double gameplayTurn=0;inline uint32_t turnEntity=0;
+// Until this time (GetTickCount64) the game's orbit input is not the player's turn: the right stick the mod sends for a fish's
+// pull from the rod's lean (controller_ui_fixture.hpp, 2026-10-19) must not turn the view.
+inline std::atomic<uint64_t> turnHeldUntil{0};
 struct CallbackScope {CallbackScope(){++callbacks;}~CallbackScope(){--callbacks;}};
 // regs: the stub's pushes from r15 (index 0) to the flags (15): rdi 8, rsi 9. fx: the FXSAVE64 area, XMM i at 0xa0 + 16 i.
 inline void onSum(const uintptr_t* regs,uint8_t* fx) noexcept {
@@ -74,7 +77,8 @@ __declspec(noinline) void __fastcall update(void* controller,const void* paramet
                 game::legacyCameraId(read<uint8_t>(p.value.identity+cameraOffset))==p.value.camera;
             {std::lock_guard<std::mutex> lock(mutex);
                 if(turnEntity!=p.value.entity){turnEntity=p.value.entity;gameplayTurn=0;}
-                if(p.value.valid&&game::cameraPresentation(p.value.camera)==game::CameraPresentation::FirstPerson)
+                const auto held=turnHeldUntil.load();
+                if(p.value.valid&&game::cameraPresentation(p.value.camera)==game::CameraPresentation::FirstPerson&&!(held&&p.value.milliseconds<=held))
                     gameplayTurn+=p.value.weighted[0];
                 p.value.gameplayTurn=gameplayTurn;latest=p.value;}
             if(p.value.number<=8||p.value.number%120==0||!p.value.valid){

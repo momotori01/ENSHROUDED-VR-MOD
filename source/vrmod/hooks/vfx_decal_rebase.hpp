@@ -31,6 +31,18 @@ constexpr const char* pattern="48 8B C4 55 53 56 41 56 48 8D A8 F8 FE FF FF 48 8
 constexpr size_t parameterBytes=0x480,objectBytes=0x400,target=0x1c8,countAt=0x248,counterAt=0x24c;
 constexpr std::array<size_t,3> otherPasses{0x200,0x278,0x2b0};constexpr size_t decalPass=0x240;
 constexpr uintptr_t viewDecals=0x580,viewDecalCapacity=0xc8,viewDecalCounter=0xb70;   // shared_point_lights.hpp viewList
+// The second list of 112-byte records (2026-10-19): the VFX object's +0x278 pass (0x1af26a) writes it into the target of
+// parameters+0x1f0, count parameters+0x250, counter id parameters+0x254, its payload allocated at 0x1af2d0 - the decal pass's
+// shape and shader. The View keeps it at +0x590 (capacity +0xcc, counter +0xb74). The grass (the detail scatter) takes its
+// records as the boxes that shrink the blades: the burn marks of hits, the floors of buildings. The eye borrowed the owner's
+// list (shared_point_lights.hpp, 2026-10-16), in the owner's camera space - each box off by the distance between the eyes
+// for the eye's grass, and that offset turning with the head (headset run 2026-10-19 14:47, user: "the grass drawn back
+// by a hit's burn mark differs between the eyes; the grass and the barnacles behind change size as I shake my head";
+// RenderDoc game-20261019-115549: both eyes' scatter reads buffer 187, one blade 0.522 in the left eye, 0.652 in the right).
+// The eye gets its own copy like the decals: writeEyeSecond. EVR_SECOND_REBASE=0: borrowed as before.
+constexpr size_t secondPass=0x278,secondTarget=0x1f0,secondCountAt=0x250,secondCounterAt=0x254;
+constexpr uintptr_t secondPayloadCaller=0x1af2d5,viewSecond=0x590,viewSecondCapacity=0xcc,viewSecondCounter=0xb74;
+inline bool secondEnabled=false;inline std::atomic<uint64_t> eyeSecondWrites{0};inline std::atomic<bool> secondFailed{false};
 struct Source {PairResources* pair=nullptr;uint64_t serial=0;uintptr_t view=0;std::array<uint8_t,objectBytes> object{};std::array<uint8_t,parameterBytes> parameters{};bool ready=false;};
 inline thread_local Source source;
 inline std::atomic<uint64_t> sources{0},eyeWrites{0};
@@ -45,6 +57,15 @@ inline bool sourceFor(const PairResources& pair){
 }
 inline void fail(const char* reason) noexcept {
     if(!failed.exchange(true))try{logFile->event("vfx_decal_rebase_failure","\"reason\":"+jsonString(reason)+",\"falls_back_to\":\"the owner's list as it is\"");}catch(...){}
+}
+// The owner's second list of this very frame is on record: the eye can have its own copy of it.
+inline bool secondSourceFor(const PairResources& pair){
+    if(!secondEnabled||secondFailed.load()||!sourceFor(pair))return false;
+    const auto o=reinterpret_cast<uintptr_t>(source.object.data()),p=reinterpret_cast<uintptr_t>(source.parameters.data());
+    return read<uint32_t>(o+secondPass)!=0&&read<uint32_t>(p+secondCountAt)!=0;
+}
+inline void secondFail(const char* reason) noexcept {
+    if(!secondFailed.exchange(true))try{logFile->event("vfx_second_rebase_failure","\"reason\":"+jsonString(reason)+",\"falls_back_to\":\"the owner's second list as it is\"");}catch(...){}
 }
 // The owner's call of this frame: what it was called with, for the eye's call.
 void __fastcall invoke(void* holder,void* graphContext,void* parameters){
@@ -109,6 +130,43 @@ inline bool writeEye(void* graphContext,PairResources& pair,unsigned eye,uintptr
         return true;
     }catch(const std::exception& e){fail(e.what());return false;}
 }
+// The eye's own second list for this frame: as writeEye, for the +0x278 pass into the eye's View+0x590. true: the eye's
+// buffer holds the owner's records of this frame in the eye's own space, as many as the owner's counter says.
+inline bool writeEyeSecond(void* graphContext,PairResources& pair,unsigned eye,uintptr_t eyeView,uintptr_t sourceView) noexcept {
+    if(!secondSourceFor(pair))return false;
+    const ObserverLastError preserve;
+    try{
+        if(eye>1||GetCurrentThreadId()!=pair.renderThread||!eyeView||!sourceView||eyeView==sourceView)throw std::runtime_error("second list writeback outside the private eye");
+        auto parameters=source.parameters;const auto p=reinterpret_cast<uintptr_t>(parameters.data());
+        const auto own=read<Handle>(eyeView+viewSecond),owner=read<Handle>(sourceView+viewSecond);const auto capacity=read<uint32_t>(sourceView+viewSecondCapacity);
+        const auto kind=read<uint8_t>(p+secondTarget);
+        if((kind!=9&&kind!=11)||(source.view&&source.view!=sourceView)||read<Handle>(p+secondTarget+8)!=owner||read<uint64_t>(p+secondTarget+0x18)!=0||read<uint32_t>(p+secondTarget+0x20)!=112||
+           read<uint32_t>(p+secondTarget+0x24)!=capacity||read<uint32_t>(p+secondCounterAt)!=read<uint32_t>(sourceView+viewSecondCounter)||!capacity||capacity>65536||!read<uint32_t>(p+secondCountAt)||
+           read<uint32_t>(eyeView+viewSecondCapacity)!=capacity||own==owner||!read<uint64_t>(eyeView+viewSecond))
+            throw std::runtime_error("second list writeback parameters differ from the Views");
+        std::memcpy(parameters.data()+secondTarget+8,own.data(),16);
+        // Only the second pass: the VFX object's other three tests (particles, decals, the fourth) zeroed in a copy.
+        auto object=source.object;const auto o=reinterpret_cast<uintptr_t>(object.data());
+        if(!read<uint32_t>(o+secondPass))throw std::runtime_error("the owner's second pass was closed");
+        for(const auto at:{otherPasses[0],decalPass,otherPasses[2]})std::memset(object.data()+at,0,4);
+        const std::array<uintptr_t,2> inner{0,o};const uintptr_t holder=reinterpret_cast<uintptr_t>(inner.data());
+        const auto from=vfxTransparent::source.position;const auto to=read<WorldPositionQ32>(reinterpret_cast<uintptr_t>(pair.parameters[eye].data())+0x38);
+        constexpr double q=4294967296.;
+        const Vec3 delta{float((double(from.x)-double(to.x))/q),float((double(from.y)-double(to.y))/q),float((double(from.z)-double(to.z))/q)};
+        if(!finite(delta)||std::abs(delta.x)>50||std::abs(delta.y)>50||std::abs(delta.z)>50)throw std::runtime_error("second list delta is not a distance between two eyes");
+        const Vec3 moved{delta.x+testShift.x,delta.y+testShift.y,delta.z+testShift.z};
+        vfxTransparent::ExtraPayload payload;payload.caller=secondPayloadCaller;payload.words=evr::vfx::decalPayload({moved.x,moved.y,moved.z},marker);
+        struct Arm {vfxTransparent::ExtraPayload* previous;explicit Arm(vfxTransparent::ExtraPayload& p):previous(vfxTransparent::extraPayload){vfxTransparent::extraPayload=&p;}
+            ~Arm(){vfxTransparent::extraPayload=previous;}};
+        {Arm arm(payload);original(const_cast<uintptr_t*>(&holder),graphContext,parameters.data());}
+        if(payload.used!=1)throw std::runtime_error("second list payload was not extended");
+        const auto n=++eyeSecondWrites;
+        if(n<=4||n%1800==0){std::ostringstream s;s<<std::setprecision(7)<<"\"serial\":"<<pair.serial<<",\"eye\":"<<eye<<",\"writes\":"<<n<<",\"delta\":["<<delta.x<<','<<delta.y<<','<<delta.z
+            <<"],\"capacity\":"<<capacity<<",\"count\":"<<read<uint32_t>(p+secondCountAt)<<",\"count_from\":\"the owner's counter\"";
+            logFile->event("vfx_second_rebase_eye",s.str());}
+        return true;
+    }catch(const std::exception& e){secondFail(e.what());return false;}
+}
 inline void install() noexcept {
     try{
         char value[8]{};auto n=GetEnvironmentVariableA("EVR_DECAL_REBASE",value,sizeof value);
@@ -137,13 +195,17 @@ inline void install() noexcept {
         if(MH_CreateHook(reinterpret_cast<void*>(site),reinterpret_cast<void*>(&invoke),reinterpret_cast<void**>(&original))!=MH_OK||
            MH_EnableHook(reinterpret_cast<void*>(site))!=MH_OK)throw std::runtime_error("decal writeback hook failed");
         enabled=true;
-        logFile->event("vfx_decal_rebase_enabled","\"rva\":"+hex(rva)+",\"caller\":"+hex(callerRva)+",\"payload_caller\":"+hex(payloadCaller)+",\"shader_modules\":"+std::to_string(status())+
+        {const auto second=baseAddress+secondPayloadCaller-5;char v[8]{};const auto m=GetEnvironmentVariableA("EVR_SECOND_REBASE",v,sizeof v);
+         if(m==1&&v[0]=='0')logFile->event("vfx_second_rebase_off","\"reason\":\"EVR_SECOND_REBASE=0\"");
+         else if(read<uint8_t>(second)!=0xe8||uintptr_t(int64_t(second+5)+read<int32_t>(second+1))!=baseAddress+allocate.rva)logFile->event("vfx_second_rebase_off","\"reason\":\"the second pass's payload allocation call differs\"");
+         else secondEnabled=true;}
+        logFile->event("vfx_decal_rebase_enabled","\"rva\":"+hex(rva)+",\"caller\":"+hex(callerRva)+",\"payload_caller\":"+hex(payloadCaller)+",\"second_list\":"+(secondEnabled?"true":"false")+",\"shader_modules\":"+std::to_string(status())+
             ",\"allocation_hooked_here\":"+(allocationHooked?"true":"false")+",\"form\":"+(marker==evr::vfx::decalMarkerInto?"\"into_the_decal\"":"\"place_of_the_decal\""));
     }catch(const std::exception& e){fail(e.what());}
 }
 inline void disable() noexcept {
     if(!enabled)return;
     const auto status=renderHookRetirement::disable(reinterpret_cast<void*>(baseAddress+rva));if(status==MH_OK)enabled=false;
-    try{logFile->event("vfx_decal_rebase_removed","\"status\":"+std::to_string(status)+",\"owner_calls\":"+std::to_string(sources.load())+",\"eye_writes\":"+std::to_string(eyeWrites.load())+",\"failed\":"+(failed.load()?"true":"false"));}catch(...){}
+    try{logFile->event("vfx_decal_rebase_removed","\"status\":"+std::to_string(status)+",\"owner_calls\":"+std::to_string(sources.load())+",\"eye_writes\":"+std::to_string(eyeWrites.load())+",\"eye_second_writes\":"+std::to_string(eyeSecondWrites.load())+",\"failed\":"+(failed.load()?"true":"false"));}catch(...){}
 }
 }

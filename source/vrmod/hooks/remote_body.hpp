@@ -76,6 +76,15 @@ inline bool drive(uint32_t entity,const std::array<uint32_t,24>& handles,bool ow
         bodyik::Report report;
         auto joints=bodyik::solve(animated,rig.neutral(),parents,targets,{},{},&report);
         if(leaning)bodyik::lean(joints,parents,inverse(leanQ));
+        // The caught fish of that player in that player's left hand, as the own one (motion_body_ik.hpp holdFish): the
+        // character's NetworkFishing (state, fish) as this game has it.
+        if(!leaning&&motionBodyIk::fishHoldWanted())try{
+            const int type=controllerUiFixture::fishingComponentType.load();const auto world=controllerUiFixture::fishingComponentWorld.load();
+            if(type>=0&&world){const auto fishing=nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(world,entity),unsigned(type),96);
+                if(fishing){const auto state=read<uint8_t>(fishing);const auto fish=read<uint32_t>(fishing+0x34);
+                    WorldPositionQ32 root;std::memcpy(&root,transform.data(),24);
+                    if(state>=35&&state<=38&&fish)motionBodyIk::holdFish(s,fish,animated,joints,parents,root,modelQ,modelScale,entity);}}}
+        catch(const std::exception& e){static unsigned told=0;if(told++<3)logFile->event("remote_fish_hold_failure","\"entity\":"+std::to_string(entity)+",\"reason\":"+jsonString(e.what()));}
         // Fingers from the curl amounts, as the sender's own hands are made.
         if(rig.curlEnabled()){const auto fingers=rig.locate({identityPose(),identityPose()},&body.fingers);
             for(unsigned h=0;h<2;h++){const auto wrist=rig.branches()[h].wrist;
