@@ -141,10 +141,9 @@ For details, see EnshroudedVR\README.txt in the package.
 - An OpenXR runtime (tested with SteamVR)
 
 ## Known issues
-Most of the parallax and visual differences between the eyes are fixed. Three visual issues remain:
+Most of the parallax and visual differences between the eyes are fixed. Two visual issues remain:
 - Water reflections can look different between the left and right eye.
-- Buildings occasionally disappear for a moment while you are falling from a height.
-- The distance at which trees switch their level of detail differs slightly between the left and right eye.
+- A puddle in the shade of trees can look brighter in the right eye.
 
 ---
 

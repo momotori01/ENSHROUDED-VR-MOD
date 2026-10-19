@@ -71,10 +71,14 @@ inline std::unordered_map<VkDevice,std::shared_ptr<Device>> giDevices;
 // R32_UINT images). Each eye builds them from its own previous frame (RenderDoc hq: 6554 -> 6558/6562, right 10342 ->
 // 10346/10350), so they drift apart; the night sky came out 7 % redder in the left eye. Just before the second eye's
 // composite every cell of its volumes takes the first eye's volumes at the same point of the world (the GI pass's kept
-// first-eye matrix and this eye's lighting constants, recorded when the GI was taken). EVR_FOG_REPROJECT=0: off.
+// first-eye matrix and this eye's lighting constants, recorded when the GI was taken). Off by default since 2026-10-20
+// (EVR_FOG_REPROJECT=1: on): in the dense fog by the hand-shaped rock (save 20261019-160414-299, report 161149's head script)
+// the copy left the second eye darker everywhere - sky 7..12, middle 5..8, the ground at the feet 10..22 of 255 (Mock
+// 032405, 033042) - while each eye's own fog matched within 1 (Mock 033724, EVR_FOG_REPROJECT=0). The drift it was made
+// for came, as far as was seen, from the fog blobs' counter (+0xb68) the second eye did not borrow (fixed 2026-10-19).
 constexpr uint32_t fogBytes=26088,fogSet=0,fogUboBinding=0,fogScatterBinding=10,fogThroughBinding=11;
 constexpr const char* fogSha="af60aa16a14645ef23a714a6589fd2c759b0408971d49193c0fbfb759924ffcb";
-inline bool fogEnabled(){static const bool yes=[]{const char* v=std::getenv("EVR_FOG_REPROJECT");return enabled()&&!(v&&!std::strcmp(v,"0"));}();return yes;}
+inline bool fogEnabled(){static const bool yes=[]{const char* v=std::getenv("EVR_FOG_REPROJECT");return enabled()&&v&&!std::strcmp(v,"1");}();return yes;}
 struct FogRecord {VkImageView scatter{},through{};VkImageLayout scatterLayout{},throughLayout{};VkBuffer ubo{};VkDeviceSize uboOffset=0,uboRange=0;VkDescriptorType uboType=VK_DESCRIPTOR_TYPE_MAX_ENUM;};
 inline std::unordered_set<VkShaderModule> fogModules;inline std::unordered_set<VkPipeline> fogPipelines;
 inline std::unordered_map<VkDescriptorSet,FogRecord> fogRecords;
