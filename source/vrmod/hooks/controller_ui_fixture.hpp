@@ -477,13 +477,26 @@ inline void checkEpochStop(){
   try{logFile->event("controller_world_epoch_stopped","\"expected\":"+std::string(expected?"true":"false")+",\"state\":"+std::to_string(unsigned(value))+",\"neutral_packet\":"+std::to_string(packet>>8)+",\"ticket_revoked\":true,\"ledgers_retained\":true,\"thread\":"+std::to_string(GetCurrentThreadId()));}catch(...){failed=true;}
  }
 }
+// A real pad plugged in (2026-10-19, a player's logs EnshroudedVR-logs-20261019-001026: "with an Xbox controller connected
+// the buttons did nothing" - controller_fixture_failure "neutral fixture needs all ports disconnected" on every start with
+// it, and the fixture connected once it was unplugged): the mod's pad was only put in while all four ports were empty, and
+// a pad arriving later stopped it. Now, while the mod's pad is in, the game sees port 0 as the mod's pad and the other ports
+// as empty - real pads are hidden from the game (the motion controllers are the input in VR; Steam Input or a real pad
+// may sit on any port). EVR_HIDE_PHYSICAL_PADS=0: as before (a real pad stops the mod's pad).
+inline const bool hidePhysicalPads=[]{char v[4]{};return !(GetEnvironmentVariableA("EVR_HIDE_PHYSICAL_PADS",v,sizeof v)==1&&v[0]=='0');}();
+inline std::atomic<unsigned> physicalHidden{0};
+// Test (Mock has no real pad): EVR_TEST_PHYSICAL_PAD=<0..3> makes that port answer as a connected pad with nothing pressed.
+inline const int testPhysicalPort=[]{char v[4]{};return GetEnvironmentVariableA("EVR_TEST_PHYSICAL_PAD",v,sizeof v)==1&&v[0]>='0'&&v[0]<='3'?v[0]-'0':-1;}();
+template<class T> inline DWORD testPhysical(DWORD user,DWORD result,T* output){
+    if(int(user)!=testPhysicalPort||result!=ERROR_DEVICE_NOT_CONNECTED)return result;if(output)*output={};return ERROR_SUCCESS;}
 inline DWORD WINAPI state(DWORD user,XINPUT_STATE* output){
     const Callback scope;
-    const auto result=nativeState(user,output);
+    const auto result=testPhysical(user,nativeState(user,output),output);
     const ObserverLastError preserve;
-    if(!active.load()||user!=port)return result;
-    if(result!=ERROR_DEVICE_NOT_CONNECTED){failed=true;active=false;stop=true;return result;}
-    ++states;if(!connected.load()){++disconnects;return result;}
+    if(!active.load())return result;
+    if(user!=port){if(!hidePhysicalPads||result==ERROR_DEVICE_NOT_CONNECTED)return result;++physicalHidden;if(output)*output={};return ERROR_DEVICE_NOT_CONNECTED;}
+    if(result!=ERROR_DEVICE_NOT_CONNECTED){if(!hidePhysicalPads){failed=true;active=false;stop=true;return result;}++physicalHidden;}
+    ++states;if(!connected.load()){++disconnects;if(hidePhysicalPads&&result!=ERROR_DEVICE_NOT_CONNECTED){if(output)*output={};return ERROR_DEVICE_NOT_CONNECTED;}return result;}   // leaving: a hidden real pad stays hidden, so the game sees the mod's pad go
     if(!output)return ERROR_BAD_ARGUMENTS;
     if(liveRequested){
         if(stop.load())publishLive({});
@@ -510,10 +523,11 @@ inline DWORD WINAPI state(DWORD user,XINPUT_STATE* output){
     return ERROR_SUCCESS;
 }
 inline DWORD WINAPI caps(DWORD user,DWORD flags,XINPUT_CAPABILITIES* output){
-    const Callback scope;const auto result=nativeCaps(user,flags,output);const ObserverLastError preserve;
-    if(!active.load()||user!=port)return result;
-    if(result!=ERROR_DEVICE_NOT_CONNECTED){failed=true;active=false;stop=true;return result;}
-    ++capabilities;if(!connected.load())return result;if(!output)return ERROR_BAD_ARGUMENTS;
+    const Callback scope;const auto result=testPhysical(user,nativeCaps(user,flags,output),output);const ObserverLastError preserve;
+    if(!active.load())return result;
+    if(user!=port){if(!hidePhysicalPads||result==ERROR_DEVICE_NOT_CONNECTED)return result;if(output)*output={};return ERROR_DEVICE_NOT_CONNECTED;}
+    if(result!=ERROR_DEVICE_NOT_CONNECTED&&!hidePhysicalPads){failed=true;active=false;stop=true;return result;}
+    ++capabilities;if(!connected.load()){if(hidePhysicalPads&&result!=ERROR_DEVICE_NOT_CONNECTED){if(output)*output={};return ERROR_DEVICE_NOT_CONNECTED;}return result;}if(!output)return ERROR_BAD_ARGUMENTS;
     *output={};output->Type=XINPUT_DEVTYPE_GAMEPAD;output->SubType=XINPUT_DEVSUBTYPE_GAMEPAD;
     output->Gamepad.wButtons=0xf3ff;output->Gamepad.bLeftTrigger=output->Gamepad.bRightTrigger=255;
     output->Gamepad.sThumbLX=output->Gamepad.sThumbLY=output->Gamepad.sThumbRX=output->Gamepad.sThumbRY=32767;
@@ -522,6 +536,7 @@ inline DWORD WINAPI caps(DWORD user,DWORD flags,XINPUT_CAPABILITIES* output){
 inline DWORD WINAPI rumble(DWORD user,XINPUT_VIBRATION* value){
     const Callback scope;
     if(active.load()&&user==port){++rumbles;return connected.load()?ERROR_SUCCESS:ERROR_DEVICE_NOT_CONNECTED;}
+    if(active.load()&&hidePhysicalPads)return ERROR_DEVICE_NOT_CONNECTED;   // a hidden real pad does not shake
     return nativeRumble(user,value);
 }
 inline bool exchange(uintptr_t location,uintptr_t expected,uintptr_t value){
@@ -548,7 +563,7 @@ inline void restore(){
         ",\"capabilities\":"+std::to_string(capabilities.load())+",\"rumble_requests_suppressed\":"+std::to_string(rumbles.load())+
         ",\"rescan_pending\":"+std::to_string(pending)+",\"native_connected\":"+std::to_string(nativeConnected)+
         ",\"native_connection_seen\":"+(nativeConnectedSeen?"true":"false")+",\"native_disconnection_seen\":"+(nativeDisconnectedSeen?"true":"false")+
-        ",\"disconnect_results\":"+std::to_string(disconnects.load())+",\"neutral_only\":"+neutralLabel()+",\"system_settings_unchanged\":true");
+        ",\"disconnect_results\":"+std::to_string(disconnects.load())+",\"physical_pad_polls_hidden\":"+std::to_string(physicalHidden.load())+",\"neutral_only\":"+neutralLabel()+",\"system_settings_unchanged\":true");
 }
 // The frontend's input manager (frontend+0x4b0 in June). 1.0 moved the frontend's fields (ui +0x490 -> +0x5b0, device
 // +0x4d0 -> +0x5f8) and this one is not pinned down from the code yet: it is found once by the identity the checks below
@@ -578,13 +593,18 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
             const auto dll=read<HMODULE>(current+8);const auto get=read<uintptr_t>(current+0x10),set=read<uintptr_t>(current+0x18),cap=read<uintptr_t>(current+0x20);
             if(!dll||!get||!set||!cap||(get!=reinterpret_cast<uintptr_t>(resolveExport(dll,MAKEINTRESOURCEA(100)))&&get!=reinterpret_cast<uintptr_t>(resolveExport(dll,"XInputGetState")))||
                 set!=reinterpret_cast<uintptr_t>(resolveExport(dll,"XInputSetState"))||cap!=reinterpret_cast<uintptr_t>(resolveExport(dll,"XInputGetCapabilities")))throw std::runtime_error("fixture API table differs");
-            // First neutral test intentionally refuses any connected physical pad.
+            // A real pad on any port: refused before 2026-10-19; now hidden from the game while the mod's pad is in
+            // (hidePhysicalPads above) - the game may have bound it already, and the rescan below binds port 0 again.
+            unsigned physicalPorts=0;
             for(DWORD user=0;user<4;user++){
                 XINPUT_STATE s{};XINPUT_CAPABILITIES c{};
-                if(reinterpret_cast<StateFn>(get)(user,&s)!=ERROR_DEVICE_NOT_CONNECTED||reinterpret_cast<CapsFn>(cap)(user,0,&c)!=ERROR_DEVICE_NOT_CONNECTED)
-                    throw std::runtime_error("neutral fixture needs all ports disconnected");
+                if(testPhysical(user,reinterpret_cast<StateFn>(get)(user,&s),&s)!=ERROR_DEVICE_NOT_CONNECTED||testPhysical(user,reinterpret_cast<CapsFn>(cap)(user,0,&c),&c)!=ERROR_DEVICE_NOT_CONNECTED)physicalPorts|=1u<<user;
             }
-            if(!nativeDeviceEvent||read<uintptr_t>(current+0x48)!=current+8||read<uint32_t>(current+0x40)!=0||read<uint8_t>(current+0x50))
+            if(physicalPorts&&!hidePhysicalPads)throw std::runtime_error("neutral fixture needs all ports disconnected");
+            const auto boundPort=read<uint32_t>(current+0x40);const auto boundConnected=read<uint8_t>(current+0x50);
+            if(physicalPorts)logFile->event("controller_fixture_physical_pads_hidden","\"ports\":"+std::to_string(physicalPorts)+",\"game_bound_port\":"+std::to_string(boundPort)+
+                ",\"game_connected\":"+std::to_string(boundConnected)+",\"mod_port\":"+std::to_string(port));
+            if(!nativeDeviceEvent||read<uintptr_t>(current+0x48)!=current+8||(!physicalPorts&&(boundPort!=0||boundConnected)))
                 throw std::runtime_error("fixture native port/rescan binding differs");
             backend=current;manager=input;module=dll;nativeState=reinterpret_cast<StateFn>(get);nativeRumble=reinterpret_cast<RumbleFn>(set);nativeCaps=reinterpret_cast<CapsFn>(cap);
             ownerThread=GetCurrentThreadId();ownerSerial=++nextOwnerSerial;
@@ -611,7 +631,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
             // The next normal input update performs enumeration and device events.
             std::array<uint8_t,64> event{};event[0]=20;
             if(!nativeDeviceEvent(reinterpret_cast<void*>(manager),event.data()))throw std::runtime_error("native rescan event rejected");
-            logFile->event("controller_fixture_connected","\"backend\":"+hex(backend)+",\"port\":0,\"synthetic\":true,\"neutral_only\":"+neutralLabel()+",\"all_native_ports_disconnected\":true,\"navigation_sequence\":"+std::string(tabsRequested?"true":"false")+",\"altar_sequence\":"+std::string(altarRequested?"true":"false")+",\"motion_sequence\":"+std::string(motionRequested?"true":"false")+",\"double_jump\":"+std::string(doubleJumpRequested?"true":"false")+",\"glide_sequence\":"+std::string(glideRequested?"true":"false")+",\"thread\":"+std::to_string(GetCurrentThreadId()));
+            logFile->event("controller_fixture_connected","\"backend\":"+hex(backend)+",\"port\":0,\"synthetic\":true,\"neutral_only\":"+neutralLabel()+",\"all_native_ports_disconnected\":"+std::string(physicalPorts?"false":"true")+",\"navigation_sequence\":"+std::string(tabsRequested?"true":"false")+",\"altar_sequence\":"+std::string(altarRequested?"true":"false")+",\"motion_sequence\":"+std::string(motionRequested?"true":"false")+",\"double_jump\":"+std::string(doubleJumpRequested?"true":"false")+",\"glide_sequence\":"+std::string(glideRequested?"true":"false")+",\"thread\":"+std::to_string(GetCurrentThreadId()));
         }else{
             if(current!=backend||input!=manager||read<HMODULE>(current+8)!=module)throw std::runtime_error("fixture owner changed");
             verifiedOwner=true;

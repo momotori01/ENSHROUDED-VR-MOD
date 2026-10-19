@@ -67,7 +67,7 @@ int main(){try{std::cout<<std::unitbuf;unsigned passed=0,failed=0;auto check=[&]
     check(result==ERROR_SUCCESS&&s.dwPacketNumber==1&&!memcmp(&s.Gamepad,&zero,sizeof(zero))&&GetLastError()==123,"native status replaced with neutral packet; LastError retained");
     XINPUT_CAPABILITIES c{};check(f::caps(0,0,&c)==ERROR_SUCCESS&&c.Type==XINPUT_DEVTYPE_GAMEPAD&&c.SubType==XINPUT_DEVSUBTYPE_GAMEPAD,"controller capabilities are native gamepad shape");
     XINPUT_VIBRATION v{100,200};check(f::rumble(0,&v)==ERROR_SUCCESS&&nativeRumbles==0,"synthetic port never vibrates physical hardware");
-    check(f::state(1,&s)==ERROR_DEVICE_NOT_CONNECTED&&f::rumble(1,&v)==99&&nativeRumbles==1,"other ports retain native return values");
+    check(f::state(1,&s)==ERROR_DEVICE_NOT_CONNECTED&&f::rumble(1,&v)==ERROR_DEVICE_NOT_CONNECTED&&nativeRumbles==0,"other ports are empty to the game while the mod's pad is in, and no real pad shakes");
     nowMs=2599;f::onScope(front(),true);check(f::connected,"connection survives until specified bound");
     nowMs=2600;f::onScope(front(),true);check(!f::connected&&f::state(0,&s)==ERROR_DEVICE_NOT_CONNECTED&&f::disconnects==1,"disconnect is observable by native consumer");
     consumeDisconnect();nowMs=4100;f::onScope(front(),true);f::drain();check(nativeTable()&&f::done&&!f::installed&&!f::failed&&f::callbacks==0,"all pointers restored and callbacks drained");
@@ -82,9 +82,17 @@ int main(){try{std::cout<<std::unitbuf;unsigned passed=0,failed=0;auto check=[&]
     f::state(0,&s);check(!memcmp(&s.Gamepad,&zero,sizeof(zero)),"wheel stop releases grip and both axes");
     nowMs+=10;f::onScope(front(),true);check(!f::connected&&f::disconnectAt,"wheel disconnect follows the consumed neutral packet");
     f::state(0,&s);consumeDisconnect();nowMs+=1500;f::onScope(front(),true);check(nativeTable()&&f::done&&!f::failed,"wheel input table restores on the native owner");
-    reset();physical=2;f::onScope(front(),true);check(f::done&&f::failed&&nativeTable()&&!f::installed,"physical pad on any port blocks fixture without mutation");
-    reset();f::onScope(front(),true);physical=0;check(f::state(0,&s)==ERROR_SUCCESS&&s.dwPacketNumber==42&&s.Gamepad.wButtons==XINPUT_GAMEPAD_Y&&!f::active&&f::failed,"physical arrival immediately returns unmodified real input");
-    f::onScope(front(),true);check(nativeTable()&&f::done,"arrival restores table on owner thread");
+    // A real pad (2026-10-19, a player's logs: an Xbox controller plugged in, no buttons): hidden from the game while the mod's pad is in.
+    reset();physical=2;f::onScope(front(),true);
+    {bool told=false;for(const auto& e:logger.events)told=told||e.rfind("controller_fixture_physical_pads_hidden",0)==0;
+     check(f::installed&&f::active&&!f::failed&&!f::done&&told,"a real pad on another port no longer blocks the mod's pad (it is hidden)");}
+    consumeConnect();s.Gamepad.wButtons=0xffff;check(f::state(2,&s)==ERROR_DEVICE_NOT_CONNECTED&&s.Gamepad.wButtons==0&&f::caps(2,0,&c)==ERROR_DEVICE_NOT_CONNECTED,"the real pad's port answers as empty");
+    check(f::state(0,&s)==ERROR_SUCCESS&&s.Gamepad.wButtons==0&&s.dwPacketNumber!=42,"the mod's port is the mod's pad beside a real one");
+    reset();f::onScope(front(),true);consumeConnect();physical=0;
+    check(f::state(0,&s)==ERROR_SUCCESS&&s.dwPacketNumber!=42&&s.Gamepad.wButtons==0&&f::active&&!f::failed&&f::physicalHidden>0,"a real pad arriving on the mod's port stays hidden; the mod's pad goes on");
+    f::onScope(front(),true);check(!nativeTable()&&!f::done&&f::installed,"a real pad's arrival keeps the mod's table");
+    nowMs=2600;f::onScope(front(),true);check(!f::connected&&f::state(0,&s)==ERROR_DEVICE_NOT_CONNECTED,"leaving: the mod's pad goes although a real pad sits on its port");
+    consumeDisconnect();nowMs=4100;f::onScope(front(),true);f::drain();check(nativeTable()&&f::done&&!f::failed,"after leaving the native table is back (the real pad is the game's again)");
     reset();write(back()+0x10,uintptr_t(0x123));f::onScope(front(),true);check(f::failed&&f::done&&read<uintptr_t>(back()+0x10)==0x123,"unknown backend export is never called or overwritten");
     reset();raceInstall=true;f::onScope(front(),true);check(f::failed&&f::done&&!f::installed&&read<uintptr_t>(back()+0x10)==uintptr_t(&fakeState)&&read<uintptr_t>(back()+0x18)==uintptr_t(&fakeRumble)&&read<uintptr_t>(back()+0x20)==0x12345678,"partial install rolls back ours and preserves foreign entry");
     reset();f::onScope(front(),true);write(back()+0x20,uintptr_t(0x333));f::restore();check(f::done&&f::failed&&read<uintptr_t>(back()+0x20)==0x333&&read<uintptr_t>(back()+0x10)==uintptr_t(&fakeState),"restore conflict cannot overwrite new owner entry");
