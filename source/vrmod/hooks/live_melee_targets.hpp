@@ -74,7 +74,14 @@ constexpr size_t hardLockCandidateSlot=13;inline CombatTarget candidate;
 // 40 m, for the health bar's part (target_mark.hpp).
 inline CombatTarget relevantChoice;
 struct Cached {evr::motion::LiveTarget target;uintptr_t record=0,layout=0,data=0,pose=0;uint32_t row=0;uint64_t seen=0;};
-struct Contact {bool reached=true,gated=false;uint32_t entity=0;float distance=0,nearest=-1;unsigned cached=0;bool ahead=false;};
+// The creatures the game itself names this tick (2026-10-20, user: "the first stroke after walking up often misses - with
+// ordinary enemies too"): the local player's combat target and hard-lock candidate (SelectedTargets) and its relevant
+// enemies (PlayerRelevantEnemies, up to 8), where they stand. Headset run 20261020-112023: the combat target 1.2..2.3 m
+// away while the list above was still empty (targets_known 0) - strokes taken for air until the pass of the map reached
+// the creature 1..1.6 s later (a pass took 4.3 s there). contact() takes these as characters too, at once.
+struct Quick {uint32_t entity=0;std::array<int64_t,3> position{};};
+inline std::array<Quick,10> quick{};inline size_t quickCount=0;inline uint64_t quickTick=0;inline std::atomic<unsigned> quickReached{0};
+struct Contact {bool reached=true,gated=false;uint32_t entity=0;float distance=0,nearest=-1;unsigned cached=0;bool ahead=false,quick=false;};
 // The blade as it was at the last look, a hand each, for where it will be `leadMs` later (live_targets.hpp bladeAhead:
 // the game needs about that long from the stroke to the hit volume). EVR_MELEE_LEAD_MS in the game's environment sets
 // another time, 0 none (no launch flag). 130 since the headset run 20261014-124515 (user: "the hit comes late - make
@@ -102,6 +109,10 @@ inline int32_t healthNow(uint32_t entity){
  return health;
 }
 inline uint64_t cursor=0,lastTick=0,lastLog=0,fullScans=0;inline std::atomic<unsigned> ticks{0},failures{0},adopted{0},dropped{0};
+// 2026-10-20 15:30: a whole pass of the 131072 slots took 2.5 s (Mock) to 4.3 s (headset run 20261020-112023) at 60 ticks
+// a second, where 4096 slots a tick make it 0.5 s (and the client World of 65536 slots took 16 ticks, as made). What
+// each tick did since the last live_targets_state: slots read, ticks that read none and why, the time the ticks took.
+inline uint64_t slotsRead=0,scanTicks=0,noRoot=0,relearns=0,wholeFailed=0;inline double tickSeconds=0,tickSecondsMax=0;
 // 4096 of the map's 131072 slots a tick: the whole map about twice a second. A blade reaches 2.3 m from the player and
 // a target counts from 1.3 m, so 10 m leaves a running creature a second to be noticed. Measured cost: none visible
 // in the frame times (game191128, 2048 slots: median 27.0 ms with the list, 26.9 ms without).
@@ -187,10 +198,12 @@ inline Record record(uintptr_t address){
 inline void tick(uintptr_t world,uint32_t local){
  if(!requested||!world||!local)return;
  try{
-  rootCamera::Sample root;if(!rootCamera::trySnapshot(root)||root.entity!=local)return;
+  rootCamera::Sample root;if(!rootCamera::trySnapshot(root)||root.entity!=local){++noRoot;return;}
   const std::array<int64_t,3> origin{root.stable.position.x,root.stable.position.y,root.stable.position.z};
   const auto now=GetTickCount64();std::lock_guard<std::mutex> lock(mutex);++ticks;
-  if(types.world!=world||types.registry!=read<uintptr_t>(world)){layouts.clear();cache.clear();cursor=0;learn(world);censusLogs=0;census={};typeCounts={};typePasses=0;}
+  const auto started=std::chrono::steady_clock::now();
+  struct Timed{std::chrono::steady_clock::time_point at;~Timed(){const double s=std::chrono::duration<double>(std::chrono::steady_clock::now()-at).count();tickSeconds+=s;tickSecondsMax=std::max(tickSecondsMax,s);}}timed{started};
+  if(types.world!=world||types.registry!=read<uintptr_t>(world)){++relearns;layouts.clear();cache.clear();cursor=0;learn(world);censusLogs=0;census={};typeCounts={};typePasses=0;}
   if(!types.usable)return;
   // The targets already known: where they are now, or forget them.
   for(auto i=cache.begin();i!=cache.end();){
@@ -218,12 +231,17 @@ inline void tick(uintptr_t world,uint32_t local){
    if(typePasses<2)tellTypes(world);typeCounts={};typeCountsNear={};}
   // Fallen players not seen again for a while are forgotten.
   downed.erase(std::remove_if(downed.begin(),downed.end(),[&](const Downed& d){return now<d.seen||now-d.seen>1500;}),downed.end());
-  const uint64_t first=cursor&~63ull,count=std::min<uint64_t>(slotsPerTick,capacity-first);
+  // 2026-10-20 16:40: the server World's map holds 1048576 slots (Mock game-20261020-163718; 131072 is the client World's
+  // of the menu), so 4096 a tick took 256 ticks, 4.3 s, for a pass - a creature that came near was not known for seconds
+  // (the first stroke at it taken for air). A tick of 4096 slots took 0.07 ms (mean, the same Mock): a pass now takes
+  // about 48 ticks (0.8 s) whatever the map's size, 4096..32768 slots a tick.
+  const uint64_t perTick=std::clamp<uint64_t>(capacity/48,slotsPerTick,32768);
+  const uint64_t first=cursor&~63ull,count=std::min<uint64_t>(perTick,capacity-first);
   std::vector<uint64_t> occupied(size_t((count+63)/64));std::vector<uint32_t> ids(static_cast<size_t>(count));std::vector<uintptr_t> rows(static_cast<size_t>(count));
   std::array<uint8_t,0x58> again{};
   const bool whole=block(bitmap+(first/64)*8,occupied.data(),occupied.size()*8)&&block(keys+first*4,ids.data(),ids.size()*4)&&block(values+first*8,rows.data(),rows.size()*8)&&
    block(world+0x148,again.data(),again.size())&&again==map;
-  cursor=first+count;
+  cursor=first+count;slotsRead+=count;++scanTicks;if(!whole)++wholeFailed;
   if(whole)for(uint64_t at=0;at<count;++at){
    if(!((occupied[size_t(at/64)]>>(at%64))&1))continue;
    const auto id=ids[size_t(at)];if(id&&id==local&&rows[size_t(at)])localRow=rows[size_t(at)];
@@ -295,6 +313,7 @@ inline void tick(uintptr_t world,uint32_t local){
    known->record=rows[size_t(at)];known->layout=r.layout;known->data=r.data;known->row=r.row;known->pose=pose;known->seen=now;
   }
   // The local player's combat target (slot 0 of its SelectedTargets), once a tick; and its hard-lock candidate (slot 13).
+  std::array<Quick,8> relevantSeen{};size_t relevantCount=0;bool selectedRead=false;
   if(types.selected>=0&&localRow){
    const auto r=record(localRow);CombatTarget c,h;
    if(r.valid){const auto l=layout(r.layout);
@@ -303,7 +322,7 @@ inline void tick(uintptr_t world,uint32_t local){
       if(!block(r.data+l.selectedOffset+uintptr_t(r.row)*types.selectedBytes+slot*targetInfoBytes,info.data(),info.size()))return;
       t.valid=true;std::memcpy(t.position.data(),info.data(),24);std::memcpy(t.offset.data(),info.data()+0x38,40);std::memcpy(&t.entity,info.data()+0x64,4);
       std::memcpy(&t.counter,info.data()+0x80,2);t.flags=info[0x82];t.ms=now;};
-     readSlot(0,c);if(types.selectedBytes>=(hardLockCandidateSlot+1)*targetInfoBytes)readSlot(hardLockCandidateSlot,h);
+     readSlot(0,c);if(types.selectedBytes>=(hardLockCandidateSlot+1)*targetInfoBytes)readSlot(hardLockCandidateSlot,h);selectedRead=true;
      CombatTarget pick;double pickMetres=40.;
      if(l.relevant){std::array<uint8_t,relevantCountAt+1> enemies{};
       if(block(r.data+l.relevantOffset+uintptr_t(r.row)*types.relevantBytes,enemies.data(),enemies.size()))
@@ -311,6 +330,7 @@ inline void tick(uintptr_t world,uint32_t local){
         for(auto* t:{&c,&h}){if(!t->valid||!t->entity||who!=t->entity||t->relevant)continue;
          t->relevant=true;std::memcpy(t->relevantPosition.data(),e+8,24);std::memcpy(&t->height,e+0x48,4);t->boxValid=e[0x4c]!=0;t->current=e[0x4f]!=0;}
         if(!who)continue;
+        if(relevantCount<relevantSeen.size()){Quick s;s.entity=who;std::memcpy(s.position.data(),e+8,24);relevantSeen[relevantCount++]=s;}
         CombatTarget q;q.valid=true;q.entity=who;q.ms=now;q.relevant=true;std::memcpy(q.relevantPosition.data(),e+8,24);q.position=q.relevantPosition;
         std::memcpy(&q.height,e+0x48,4);q.boxValid=e[0x4c]!=0;q.current=e[0x4f]!=0;
         const double m=metres(q.position,origin);
@@ -332,9 +352,20 @@ inline void tick(uintptr_t world,uint32_t local){
      o<<"]";logFile->event("combat_target",o.str());}}
    combat=c;
   }
+  // The creatures named this tick (Quick above): the combat target, the candidate, the relevant enemies, within 15 m.
+  {quickCount=0;
+   const auto add=[&](uint32_t entity,const std::array<int64_t,3>& position){
+    if(!entity||entity==local||quickCount>=quick.size()||metres(position,origin)>15.)return;
+    for(size_t k=0;k<quickCount;++k)if(quick[k].entity==entity)return;
+    quick[quickCount].entity=entity;quick[quickCount].position=position;++quickCount;};
+   if(selectedRead){if(combat.valid)add(combat.entity,combat.position);if(candidate.valid)add(candidate.entity,candidate.position);}
+   for(size_t k=0;k<relevantCount;++k)add(relevantSeen[k].entity,relevantSeen[k].position);
+   quickTick=now;}
   lastTick=now;
   if(now-lastLog>=5000){lastLog=now;
-   std::ostringstream o;o<<std::setprecision(4)<<"\"cached\":"<<cache.size()<<",\"full_scans\":"<<fullScans<<",\"ticks\":"<<ticks.load()<<",\"map_capacity\":"<<capacity<<",\"adopted\":"<<adopted.load()<<",\"dropped\":"<<dropped.load()<<",\"failures\":"<<failures.load()<<",\"nearest\":[";
+   std::ostringstream o;o<<std::setprecision(4)<<"\"cached\":"<<cache.size()<<",\"full_scans\":"<<fullScans<<",\"ticks\":"<<ticks.load()<<",\"map_capacity\":"<<capacity<<",\"adopted\":"<<adopted.load()<<",\"dropped\":"<<dropped.load()<<",\"failures\":"<<failures.load()<<",\"quick\":"<<quickCount<<",\"quick_reached\":"<<quickReached.load()<<",\"slots_read\":"<<slotsRead<<",\"scan_ticks\":"<<scanTicks<<",\"no_root\":"<<noRoot<<",\"relearns\":"<<relearns
+     <<",\"whole_failed\":"<<wholeFailed<<",\"tick_ms_mean\":"<<(scanTicks?tickSeconds*1000/double(scanTicks):0.)<<",\"tick_ms_max\":"<<tickSecondsMax*1000<<",\"nearest\":[";
+   slotsRead=scanTicks=noRoot=relearns=wholeFailed=0;tickSeconds=tickSecondsMax=0;
    std::vector<const Cached*> order;for(const auto& c:cache)order.push_back(&c);
    std::sort(order.begin(),order.end(),[&](const Cached* a,const Cached* b){return metres(a->target.position,origin)<metres(b->target.position,origin);});
    for(size_t i=0;i<order.size()&&i<6;++i)o<<(i?",":"")<<"{\"entity\":"<<order[i]->target.entity<<",\"metres\":"<<metres(order[i]->target.position,origin)<<",\"character\":"<<(order[i]->target.character?"true":"false")<<(order[i]->target.object?",\"object\":true":"")<<'}';
@@ -355,13 +386,46 @@ inline Contact contact(const evr::motion::LiveMeleeWeapon& weapon,uint64_t now){
   seen.aheadFrom=evr::motion::bladeAhead(weapon.bladeFrom,seen.from,elapsed,leadMs*.001);seen.aheadTo=evr::motion::bladeAhead(weapon.bladeTo,seen.to,elapsed,leadMs*.001);
   seen.ahead=leadMs&&(seen.aheadFrom!=weapon.bladeFrom||seen.aheadTo!=weapon.bladeTo);seen.from=weapon.bladeFrom;seen.to=weapon.bladeTo;seen.at=time;
  }else if(std::chrono::duration<double>(time-seen.at).count()>.12)seen.ahead=false;   // the blade has not moved for a while
- for(const auto& c:cache){
-  float distance=evr::motion::bladeDistance(weapon.bladeFrom,weapon.bladeTo,c.target,reach);bool touches=evr::motion::bladeNear(weapon.bladeFrom,weapon.bladeTo,c.target,reach),later=false;
-  if(!touches&&seen.ahead&&evr::motion::bladeNear(seen.aheadFrom,seen.aheadTo,c.target,reach)){touches=later=true;distance=evr::motion::bladeDistance(seen.aheadFrom,seen.aheadTo,c.target,reach);}
-  if(touches&&distance<best){best=distance;out.reached=true;out.entity=c.target.entity;out.distance=distance;out.ahead=later;}
+ const auto test=[&](const evr::motion::LiveTarget& target){
+  float distance=evr::motion::bladeDistance(weapon.bladeFrom,weapon.bladeTo,target,reach);bool touches=evr::motion::bladeNear(weapon.bladeFrom,weapon.bladeTo,target,reach),later=false;
+  if(!touches&&seen.ahead&&evr::motion::bladeNear(seen.aheadFrom,seen.aheadTo,target,reach)){touches=later=true;distance=evr::motion::bladeDistance(seen.aheadFrom,seen.aheadTo,target,reach);}
+  if(touches&&distance<best){best=distance;out.reached=true;out.entity=target.entity;out.distance=distance;out.ahead=later;return true;}
   if(std::isfinite(distance)&&(out.nearest<0||distance<out.nearest))out.nearest=distance;
+  return false;};
+ for(const auto& c:cache)test(c.target);
+ // The creatures the game names this tick that the list does not hold yet (Quick above).
+ if(quickTick&&now>=quickTick&&now-quickTick<=1000)for(size_t k=0;k<quickCount;++k){
+  const auto& q=quick[k];if(std::any_of(cache.begin(),cache.end(),[&](const Cached& c){return c.target.entity==q.entity;}))continue;
+  evr::motion::LiveTarget t;t.entity=q.entity;t.position=q.position;t.character=true;
+  if(test(t)){out.quick=true;++quickReached;}
  }
  return out;
+}
+// Any thread, for the hit stop (2026-10-20, controller_ui_fixture.hpp hitWatch): the kept things whose axis is within
+// `radius` m of the blade, with their state now (stateNow below).
+inline int32_t stateLocked(const Cached& c);
+inline size_t watchNear(const evr::motion::LiveMeleeWeapon& weapon,float radius,uint32_t* entities,int32_t* states,size_t maximum){
+ std::lock_guard<std::mutex> lock(mutex);size_t n=0;
+ if(!requested||!types.usable||!weapon.blade)return 0;const evr::motion::LiveTargetReach reach;
+ for(const auto& c:cache){if(n>=maximum)break;const float d=evr::motion::bladeDistance(weapon.bladeFrom,weapon.bladeTo,c.target,reach);
+  if(std::isfinite(d)&&d<=radius){entities[n]=c.target.entity;states[n]=stateLocked(c);++n;}}
+ return n;
+}
+// The state of a kept thing: its health, -1 kept without a readable health (a pot, a tree not yet struck), -2 not kept
+// (gone: broken, or its components changed - a tree gets its Health when first struck).
+inline int32_t stateLocked(const Cached& c){
+ const auto found=layouts.find(c.layout);if(found==layouts.end()||!found->second.health)return -1;
+ const auto bytes=types.healthBytes;if(bytes!=68&&bytes!=40)return -1;
+ std::array<uint8_t,256> h{};if(!block(c.data+found->second.healthOffset+uintptr_t(c.row)*bytes,h.data(),bytes))return -1;
+ int32_t health=-1;
+ if(bytes==68){uint32_t offset=0;std::memcpy(&offset,h.data()+8,4);if(!(h[16]&1)||offset!=36)return -1;std::memcpy(&health,h.data()+offset,4);}
+ else{if(!h[4]||h[4]>8)return -1;std::memcpy(&health,h.data()+8,4);}
+ return std::max(health,0);
+}
+inline int32_t stateNow(uint32_t entity){
+ std::lock_guard<std::mutex> lock(mutex);
+ const auto c=std::find_if(cache.begin(),cache.end(),[&](const Cached& x){return x.target.entity==entity;});
+ return c==cache.end()?-2:stateLocked(*c);
 }
 // Any thread: a fallen player within `within` metres of the local player's origin, seen in the last second and a half.
 inline bool downedNear(double within,uint64_t now,uint32_t& who,double& away){

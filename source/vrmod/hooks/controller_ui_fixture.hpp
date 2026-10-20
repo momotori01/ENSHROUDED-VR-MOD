@@ -11,6 +11,7 @@
 #include <evr/holster.hpp>
 #include <evr/room_sneak.hpp>
 #include <evr/swim_stroke.hpp>
+#include <evr/hit_stop.hpp>
 #include <evr/vr_settings_panel.hpp>
 #include <evr/equip_planner.hpp>
 #include <evr/motion_event_retime.hpp>
@@ -229,6 +230,20 @@ struct TargetNear {bool reached=true,gated=false;uint32_t entity=0;float distanc
 // creature's health at the press and 0.6 s later (live_melee_targets.hpp healthNow, -1 unknown), with how far the left
 // stick was pushed - live_melee_outcome in the record, to tell hits from misses on the headset.
 inline int32_t (*targetHealth)(uint32_t)=nullptr;
+// The hit stop (2026-10-20, user: "a hit stop for the ordinary melee attack, with the hit effect: one-hand sword 0.1 s,
+// two-hand 0.2 s, pickaxe and felling axe 0.3 s; then the hand chases to where it is; each time when hitting several").
+// A hit is seen as the game makes it: for 0.7 s after a stroke attacked, the kept things near the blade
+// (live_melee_targets.hpp watchNear, stateNow) are looked at every frame - a health that drops, a thing that breaks
+// (no longer kept), a tree that gets its health. Each such change stops the shown hand (include/evr/hit_stop.hpp, in
+// view_resource_probe.cpp): the hand that struck, both with a two-hand weapon. EVR_HIT_STOP=0 in the game's
+// environment: no stop. Mining the ground changes no thing's health: no stop there (yet).
+inline size_t (*hitWatchNear)(const evr::motion::LiveMeleeWeapon&,float,uint32_t*,int32_t*,size_t)=nullptr;
+inline int32_t (*hitWatchState)(uint32_t)=nullptr;
+struct HitWatch {uint64_t from=0,until=0;unsigned hands=0;double seconds=0;evr::motion::LiveMeleeWeapon weapon{};std::array<uint32_t,16> entities{};std::array<int32_t,16> states{};size_t count=0;};
+inline HitWatch hitWatch;
+// To the frame that shows the hands: the latest stop asked (serial), which hands (bit 0 left, bit 1 right), how long (ms).
+inline std::atomic<uint32_t> hitStopSerial{0},hitStopHands{0},hitStopMs{0};
+inline const bool hitStopWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_HIT_STOP",v,sizeof v);return !(n==1&&v[0]=='0');}();
 struct StrokeOutcome {uint32_t entity=0;int32_t before=-1;uint64_t at=0,frame=0;float stick=0,metres=0;bool ahead=false;unsigned serial=0;};
 inline StrokeOutcome strokeOutcome;
 inline bool liveMeleeTargetGate=false;inline TargetNear(*targetNear)(const evr::motion::LiveMeleeWeapon&,uint64_t)=nullptr;
@@ -599,9 +614,17 @@ inline DWORD WINAPI caps(DWORD user,DWORD flags,XINPUT_CAPABILITIES* output){
     output->Gamepad.sThumbLX=output->Gamepad.sThumbLY=output->Gamepad.sThumbRX=output->Gamepad.sThumbRY=32767;
     output->Vibration.wLeftMotorSpeed=output->Vibration.wRightMotorSpeed=65535;return ERROR_SUCCESS;
 }
+// The game's own vibration of the mod's pad (2026-10-20, for the hit stop: does the game shake the pad when a stroke
+// hits, and when): each change of the two motors, with the time (GetTickCount64), in the record; the latest kept.
+inline std::atomic<uint32_t> rumbleNow{0};inline std::atomic<uint64_t> rumbleChangedMs{0};inline std::atomic<unsigned> rumbleChanges{0};
 inline DWORD WINAPI rumble(DWORD user,XINPUT_VIBRATION* value){
     const Callback scope;
-    if(active.load()&&user==port){++rumbles;return connected.load()?ERROR_SUCCESS:ERROR_DEVICE_NOT_CONNECTED;}
+    if(active.load()&&user==port){++rumbles;
+        if(value){const uint32_t v=(uint32_t(value->wLeftMotorSpeed)<<16)|value->wRightMotorSpeed;
+            if(rumbleNow.exchange(v)!=v){const auto ms=GetTickCount64();rumbleChangedMs=ms;
+                if(rumbleChanges.fetch_add(1)<3000&&logFile)logFile->event("native_rumble","\"left\":"+std::to_string(value->wLeftMotorSpeed)+",\"right\":"+std::to_string(value->wRightMotorSpeed)+
+                    ",\"milliseconds\":"+std::to_string(ms));}}
+        return connected.load()?ERROR_SUCCESS:ERROR_DEVICE_NOT_CONNECTED;}
     if(active.load()&&hidePhysicalPads)return ERROR_DEVICE_NOT_CONNECTED;   // a hidden real pad does not shake
     return nativeRumble(user,value);
 }
@@ -979,6 +1002,25 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         else if(airborneStroke&&airKind<0&&airDownHeavy&&liveHeavyHoldMs)heavyUntil=now+liveHeavyHoldMs;
                     }
                     if(heavyUntil){if(play&&now<heavyUntil)pad.buttons|=evr::motion::LivePadMapper::X;else heavyUntil=0;}
+                    // The hit stop's watch (hitWatch above): the things near the blade of the stroke, every frame for 0.7 s.
+                    if(hitStopWanted&&hitWatch.until&&hitWatchState){
+                        if(now>=hitWatch.until)hitWatch=HitWatch{};
+                        else{
+                            // things that came near the blade since (kept later): watched from their state now on
+                            if(hitWatchNear){std::array<uint32_t,16> e{};std::array<int32_t,16> st{};
+                                const auto n=hitWatchNear(hitWatch.weapon,2.5f,e.data(),st.data(),e.size());
+                                for(size_t k=0;k<n;++k){bool known=false;for(size_t j=0;j<hitWatch.count;++j)if(hitWatch.entities[j]==e[k]){known=true;break;}
+                                    if(!known&&hitWatch.count<hitWatch.entities.size()){hitWatch.entities[hitWatch.count]=e[k];hitWatch.states[hitWatch.count]=st[k];++hitWatch.count;}}}
+                            for(size_t k=0;k<hitWatch.count;++k){
+                                const int32_t was=hitWatch.states[k];if(was==-2)continue;
+                                const int32_t is=hitWatchState(hitWatch.entities[k]);
+                                const bool hit=(was>=0&&is>=0&&is<was)||(was==-1&&is>=0)||is==-2;
+                                if(hit){hitStopHands=hitWatch.hands;hitStopMs=uint32_t(hitWatch.seconds*1000+.5);hitStopSerial.fetch_add(1);
+                                    static unsigned told=0;if(told++<400)logFile->event("hit_stop","\"entity\":"+std::to_string(hitWatch.entities[k])+",\"was\":"+std::to_string(was)+",\"is\":"+std::to_string(is)+
+                                        ",\"after_press_ms\":"+std::to_string(now-hitWatch.from)+",\"hands\":"+std::to_string(hitWatch.hands)+",\"seconds\":"+std::to_string(hitWatch.seconds)+",\"frame\":"+std::to_string(hands.frame));}
+                                hitWatch.states[k]=is;}
+                        }
+                    }
                     // the stroke before: its outcome 0.6 s after its press
                     if(strokeOutcome.at&&now>=strokeOutcome.at+600){
                         const int32_t after=targetHealth&&strokeOutcome.entity?targetHealth(strokeOutcome.entity):-1;static unsigned outcomes=0;
@@ -989,6 +1031,10 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         strokeOutcome={};}
                     if(swing.fired){
                         strokeMs.store(now);
+                        if(hitStopWanted&&hitWatchNear){   // the hit stop's watch from this stroke on
+                            hitWatch=HitWatch{};hitWatch.from=now;hitWatch.until=now+700;hitWatch.weapon=weapon;
+                            hitWatch.hands=weapon.twoHanded?3u:(leftStruck?1u:2u);hitWatch.seconds=evr::motion::hitStopSeconds(weapon.weaponType==255||!weapon.needsTarget,weapon.twoHanded);
+                            hitWatch.count=hitWatchNear(weapon,2.5f,hitWatch.entities.data(),hitWatch.states.data(),hitWatch.entities.size());}
                         {static unsigned serial=0;strokeOutcome.entity=target.entity;strokeOutcome.before=targetHealth&&target.entity?targetHealth(target.entity):-1;strokeOutcome.at=now;strokeOutcome.frame=hands.frame;
                          strokeOutcome.stick=std::hypot(pad.leftX/32767.f,pad.leftY/32767.f);strokeOutcome.metres=target.distance;strokeOutcome.ahead=target.ahead;strokeOutcome.serial=++serial;}   // the hit volume's sweep starts here (motion_collider_apply.hpp replayCurrent)
                         if(observeMeleeNative){const auto running=observeMeleeNative();std::lock_guard<std::mutex> lock(livePressMutex);

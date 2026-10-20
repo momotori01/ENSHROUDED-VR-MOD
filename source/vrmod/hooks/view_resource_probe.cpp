@@ -39,6 +39,7 @@
 #include <evr/live_swing_cast.hpp>
 #include <evr/status_rim.hpp>
 #include <evr/pose_smoothing.hpp>
+#include <evr/hit_stop.hpp>
 #include <evr/vfx_decal_rebase.hpp>
 #include <evr/live_secondary.hpp>
 #include <evr/throwable_catalog.hpp>
@@ -357,6 +358,7 @@ diagnostic::NativeXrFrame liveFrame;
 // the body reads these; strokes, aim, gestures and the pointer read liveFrame.hands as tracked.
 // EVR_HAND_SMOOTHING=0 shows the hands as tracked; another number is the cutoff in Hz (default 4; lower is smoother).
 evr::motion::HandFrame shownHands;evr::motion::HandSmoothing handSmoothing;bool handSmoothingRead=false;
+evr::motion::HitStop hitStop;   // the shown hands stopped a moment when a stroke hits (include/evr/hit_stop.hpp)
 // A hand whose tracking drops stays where it was shown (include/evr/pose_smoothing.hpp HandHold; VHVR keeps the hands
 // where SteamVR last put them). EVR_HAND_HOLD=0 in the game's environment: as before, hands and body go while a hand
 // is not tracked.
@@ -1345,6 +1347,12 @@ bool beginLiveFrame(uintptr_t view,uint32_t eyes=3){
             if(n&&n<sizeof value&&value[0]=='0')handHoldWanted=false;
             ++handHoldLogs;logFile->event("hand_tracking_hold","\"enabled\":"+std::string(handHoldWanted?"true":"false")+",\"only_what_is_shown\":true");}
         shownHands=handSmoothing.update(handHoldWanted?handHold.update(liveFrame.hands):liveFrame.hands);
+        // The hit stop (include/evr/hit_stop.hpp; asked by controller_ui_fixture.hpp when a stroke's hit is seen).
+        {static uint32_t seenSerial=0;const auto serial=controllerUiFixture::hitStopSerial.load();
+         if(serial!=seenSerial){seenSerial=serial;hitStop.stop(controllerUiFixture::hitStopHands.load(),controllerUiFixture::hitStopMs.load()/1000.);}
+         // Never the frame's failure (2026-10-20 14:10: a refused vibration once ended VR): a fault shows the hands as they come.
+         try{shownHands=hitStop.apply(shownHands,std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());}
+         catch(const std::exception& e){hitStop.reset();static unsigned told=0;if(told++<5)logFile->event("hit_stop_failure","\"reason\":"+jsonString(e.what()));}}
         if(handHoldWanted)for(unsigned h=0;h<2;h++)if(handHold.state[h]!=handHoldSeen[h]){handHoldSeen[h]=handHold.state[h];
             static const char* const names[]{"none","tracked","estimated","held"};
             if(handHoldLogs++<400)logFile->event("hand_tracking_hold","\"frame\":"+std::to_string(liveFrame.frame)+",\"hand\":"+std::to_string(h)+",\"state\":\""+names[unsigned(handHold.state[h])]+
@@ -3433,6 +3441,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             aimMark::reachOf=&liveTargets::aimReach;   // the ground of the feet always; creatures when their list is kept
             if(targetGate){controllerUiFixture::liveMeleeTargetGate=true;liveTargets::requested=true;targetMark::install();
                 controllerUiFixture::targetHealth=&liveTargets::healthNow;
+                controllerUiFixture::hitWatchNear=&liveTargets::watchNear;controllerUiFixture::hitWatchState=&liveTargets::stateNow;
                 controllerUiFixture::targetNear=[](const evr::motion::LiveMeleeWeapon& weapon,uint64_t now){const auto n=liveTargets::contact(weapon,now);return controllerUiFixture::TargetNear{n.reached,n.gated,n.entity,n.distance,n.cached,n.ahead,n.nearest};};
                 // The actor's Grounded bit (0) off within the last half second: a stroke in the air attacks without a target.
                 controllerUiFixture::actorAirborne=[](uint64_t now){std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;
