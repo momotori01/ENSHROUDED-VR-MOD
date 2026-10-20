@@ -2575,8 +2575,15 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
                 motion::Feedback feedback;{std::lock_guard<std::mutex> lock(controllerUiFixture::handMutex);feedback=controllerUiFixture::handFeedback;}
                 auto command=controllerUiFixture::gestureFeedback.update(liveFrame.hands,gesture,feedback,GetTickCount64());
                 if(controllerUiFixture::bowDrawRequested||controllerUiFixture::liveMeleeRequested||motionVisual::twoHandWieldRequested)controllerUiFixture::applyBowHaptic(command,liveFrame.hands,GetTickCount64());
-                if(command.fresh&&nativeGestureHaptic(liveFrame.frame,liveFrame.sessionGeneration,command.amplitude.data(),command.duration.data()))
-                    throw std::runtime_error("native gesture feedback rejected frame");
+                // The layer takes 0 < duration <= 100 ms and amplitudes 0..1 only, and a rejection fails the frame's motion
+                // visuals (VR back to the flat plate - 2026-10-20 13:43/13:48, a 150 ms pulse at the fish's bite): kept in range here.
+                for(unsigned h=0;h<2;h++){
+                    if(!std::isfinite(command.amplitude[h])||command.amplitude[h]<0)command.amplitude[h]=0;else if(command.amplitude[h]>1)command.amplitude[h]=1;
+                    if(command.amplitude[h]>0){if(command.duration[h]<=0)command.duration[h]=10000000;else if(command.duration[h]>100000000)command.duration[h]=100000000;}}
+                // A rejected vibration is written down, not a failure of the frame (2026-10-20: it used to end VR for the session).
+                if(command.fresh){const int rejected=nativeGestureHaptic(liveFrame.frame,liveFrame.sessionGeneration,command.amplitude.data(),command.duration.data());
+                    static unsigned told=0;if(rejected&&told++<20)logFile->event("native_gesture_feedback_rejected","\"frame\":"+std::to_string(liveFrame.frame)+",\"result\":"+std::to_string(rejected)+
+                        ",\"amplitude\":["+std::to_string(command.amplitude[0])+","+std::to_string(command.amplitude[1])+"],\"duration_ns\":["+std::to_string(command.duration[0])+","+std::to_string(command.duration[1])+"]");}
             }
             if(controllerUiFixture::motionGuardRequested){
                 const bool ready=motionVisual::poseReady&&motionHandVisual::ready&&motionVisual::updatedFrame==liveFrame.frame&&motionHandVisual::frame==liveFrame.frame;

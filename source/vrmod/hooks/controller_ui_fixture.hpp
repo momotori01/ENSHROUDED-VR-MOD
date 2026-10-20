@@ -297,7 +297,9 @@ inline void applyBowHaptic(evr::motion::GestureFeedbackResult& command,const evr
    else if(bite&&s==21){pulseUntil=now+150;pulseAmplitude=.6f;}}
   else if(bite&&s==18&&now>=nextPeck){pulseUntil=now+40;pulseAmplitude=.25f;nextPeck=now+3000;}
   if(pulseUntil>now&&hands.focused&&hands.hands[1].tracked()){
-   if(!command.amplitude[1])command.duration[1]=XrDuration(pulseUntil-now)*1000000;
+   // at most 100 ms a frame (the layer rejects longer - evrNativeGestureHaptic; 13:43 and 13:48 the 150 ms of state 21
+   // were rejected, the frame's motion visuals failed and VR fell back to the flat plate: "the view went third person")
+   if(!command.amplitude[1])command.duration[1]=XrDuration(std::min<uint64_t>(pulseUntil-now,100))*1000000;
    command.amplitude[1]=std::max(command.amplitude[1],pulseAmplitude);}}
  const auto tiring=fishGainHapticUntil.load();
  if(tiring>now&&hands.focused&&hands.hands[1].tracked()){
