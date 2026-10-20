@@ -87,9 +87,12 @@ inline std::atomic<uint32_t> playerFlags{0};inline std::atomic<uint64_t> playerF
 inline bool uiCover(uint64_t now){const auto at=playerFlagsMs.load();return at&&now>=at&&now-at<=500&&(playerFlags.load()&((1u<<1)|(1u<<2)))!=0;}
 // For the pad that is sent (controller_ui_fixture.hpp): the right trigger and B are the mouse's buttons just now.
 inline std::atomic<bool> trigger{false},secondary{false};
-// The right A and the left A are the mouse's left and right buttons while the ray is on the screen (2026-10-20, user: "the
-// left click on the right A, the right click on the left A - most VR games confirm with the right A and cancel with the
-// left A"); the pad's A and B (the left A's in menus, include/evr/live_pad.hpp) are not sent then.
+// The buttons keep their roles with the ray on the screen or not (2026-10-20 17:20, user: "the role of a button changes with
+// the pointer on the screen or not - make it the same: the trigger drags; the right A opens the menu of a stack (split
+// and the like) with the pointer too"): the trigger is the mouse's left button (pick up, drag, choose), the right A its
+// right button - an item's menu (equip, split, delete; Mock game200550), as the pad's A opens it - and the left A stays
+// the pad's B (back). The pad's A is not sent while the ray is on the screen. (12:30 to 17:20: the right A the left click,
+// the left A the right click.)
 inline std::atomic<bool> primary{false};
 using CursorFn=int(*)(float,float,int);
 inline CursorFn showCursor=nullptr;
@@ -179,7 +182,8 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
         if(!spot.on&&overlayButtonAt)overlayButtonAt(-1.f,-1.f,open);   // off the plate: nothing of the mod's is pointed at
         const auto& leftHand=f.hands[0];
         const bool rightA=hand.primaryActive&&hand.primaryPressed,leftA=leftHand.primaryActive&&leftHand.primaryPressed;
-        const bool ray=gameMouse?spot.on:onButton,pull=(hand.triggerActive&&hand.trigger>.5f)||rightA,face=gameMouse&&leftA;   // B (the right B): the pad's
+        (void)leftA;   // the left A: the pad's B (primary above)
+        const bool ray=gameMouse?spot.on:onButton,pull=hand.triggerActive&&hand.trigger>.5f,face=gameMouse&&rightA;   // B (the right B): the pad's
         const auto change=buttons.update(ray,pull,face);
         const auto keys=[&]{return WPARAM((buttons.left?MK_LBUTTON:0)|(buttons.right?MK_RBUTTON:0));};
         const bool held=buttons.left||buttons.right;
@@ -226,7 +230,7 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
                 PostMessageW(h,WM_RBUTTONUP,keys(),place);++clicks;postedAt=now;
                 if(!buttons.left){mouseHeld=false;wantMouse=false;}}
         }
-        trigger=buttons.takesTrigger();primary=buttons.takesTrigger();secondary=gameMouse&&buttons.takesSecondary();
+        trigger=buttons.takesTrigger();primary=gameMouse&&buttons.takesSecondary();secondary=false;
         // The dot: where the cursor is (a held click keeps its place), larger and green while a button is down. Only
         // where it can press something - on the mod's own buttons (user 2026-10-18 12:40: "if the pointer cannot work the
         // menu, do not show it - it is confusing"; 11:00 to 12:40 it showed over the whole plate).

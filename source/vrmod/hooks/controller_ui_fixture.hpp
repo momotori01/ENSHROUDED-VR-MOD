@@ -232,14 +232,21 @@ struct TargetNear {bool reached=true,gated=false;uint32_t entity=0;float distanc
 inline int32_t (*targetHealth)(uint32_t)=nullptr;
 // The hit stop (2026-10-20, user: "a hit stop for the ordinary melee attack, with the hit effect: one-hand sword 0.1 s,
 // two-hand 0.2 s, pickaxe and felling axe 0.3 s; then the hand chases to where it is; each time when hitting several").
-// A hit is seen as the game makes it: for 0.7 s after a stroke attacked, the kept things near the blade
-// (live_melee_targets.hpp watchNear, stateNow) are looked at every frame - a health that drops, a thing that breaks
-// (no longer kept), a tree that gets its health. Each such change stops the shown hand (include/evr/hit_stop.hpp, in
-// view_resource_probe.cpp): the hand that struck, both with a two-hand weapon. EVR_HIT_STOP=0 in the game's
-// environment: no stop. Mining the ground changes no thing's health: no stop there (yet).
-inline size_t (*hitWatchNear)(const evr::motion::LiveMeleeWeapon&,float,uint32_t*,int32_t*,size_t)=nullptr;
+// Where it stops (17:20, user after the headset run 20261020-165058: "the stop comes after the blade has passed through
+// the enemy model; stop it the moment it touches - the hit effect then comes while it stands"; the game's hit came 109 ms
+// after the press there, median of 27): for 0.7 s after a stroke attacked, the blade of the hand that struck is measured
+// every frame against the kept things and the creatures the game names (live_melee_targets.hpp nearBlade). It stops when
+// the blade comes within the body of one (a creature 0.5 m from its axis, a pot 0.4, a tree 0.55), or when it has come
+// near one (within 0.25 m of that) and turns away from it. Each thing once a stroke. A thing whose health drops or that
+// breaks (no longer kept) without having been touched so - a tool's stroke at a big tree - stops it then, as the game's
+// hit comes. The hand that struck stops, both with a two-hand weapon (include/evr/hit_stop.hpp, in
+// view_resource_probe.cpp). EVR_HIT_STOP=0 in the game's environment: no stop. Mining the ground touches no thing: no
+// stop there (the game does not shake the pad either - native_rumble, none in that run).
+struct HitNear {uint32_t entity=0;float distance=0,body=0,reach=0;int32_t state=-1;bool character=false;};
+inline size_t (*hitWatchNear)(const evr::motion::LiveMeleeWeapon&,float,HitNear*,size_t,uint64_t)=nullptr;
 inline int32_t (*hitWatchState)(uint32_t)=nullptr;
-struct HitWatch {uint64_t from=0,until=0;unsigned hands=0;double seconds=0;evr::motion::LiveMeleeWeapon weapon{};std::array<uint32_t,16> entities{};std::array<int32_t,16> states{};size_t count=0;};
+struct HitWatch {uint64_t from=0,until=0;unsigned hands=0;double seconds=0;bool left=false;uint64_t binding=0;
+ struct Item {uint32_t entity=0;int32_t state=-1;float last=-1,closest=-1;bool touched=false;};std::array<Item,16> items{};size_t count=0;};
 inline HitWatch hitWatch;
 // To the frame that shows the hands: the latest stop asked (serial), which hands (bit 0 left, bit 1 right), how long (ms).
 inline std::atomic<uint32_t> hitStopSerial{0},hitStopHands{0},hitStopMs{0};
@@ -304,13 +311,17 @@ inline void applyBowHaptic(evr::motion::GestureFeedbackResult& command,const evr
  // a stronger, longer one. Each peck is not in the state (guess: they fall in 18). The rod's hand (the right).
  // EVR_FISH_BITE_HAPTIC=0: off.
  {static const bool bite=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_BITE_HAPTIC",v,sizeof v);return !(n==1&&v[0]=='0');}();
-  static int lastState=-1;static uint64_t stateSince=0,pulseUntil=0;static float pulseAmplitude=0;static uint64_t nextPeck=0;
+  // 17:20 (user after the headset run 20261020-165058: "the vibration while it is only pecked at does not seem to come"):
+  // 18 lasted 1.0 s there (17 for 20 s before it, then 21), and one pulse of 40 ms at 0.25 was not felt - now a double tap,
+  // 50 ms at 0.45 twice 150 ms apart, as a peck, when 18 begins and every 3 s in it.
+  static int lastState=-1;static uint64_t stateSince=0,pulseUntil=0;static float pulseAmplitude=0;static uint64_t nextPeck=0,secondTap=0;
   const int state=fishingState.load();const auto at=fishingStateMs.load();const bool current=at&&now>=at&&now-at<=500;
   const int s=current?state:-1;
-  if(s!=lastState){lastState=s;stateSince=now;
-   if(bite&&s==18){pulseUntil=now+40;pulseAmplitude=.25f;nextPeck=now+3000;}
+  if(s!=lastState){lastState=s;stateSince=now;secondTap=0;
+   if(bite&&s==18){pulseUntil=now+50;pulseAmplitude=.45f;secondTap=now+150;nextPeck=now+3000;}
    else if(bite&&s==21){pulseUntil=now+150;pulseAmplitude=.6f;}}
-  else if(bite&&s==18&&now>=nextPeck){pulseUntil=now+40;pulseAmplitude=.25f;nextPeck=now+3000;}
+  else if(bite&&s==18&&now>=nextPeck){pulseUntil=now+50;pulseAmplitude=.45f;secondTap=now+150;nextPeck=now+3000;}
+  if(bite&&s==18&&secondTap&&now>=secondTap){pulseUntil=now+50;pulseAmplitude=.45f;secondTap=0;}
   if(pulseUntil>now&&hands.focused&&hands.hands[1].tracked()){
    // at most 100 ms a frame (the layer rejects longer - evrNativeGestureHaptic; 13:43 and 13:48 the 150 ms of state 21
    // were rejected, the frame's motion visuals failed and VR fell back to the flat plate: "the view went third person")
@@ -1002,23 +1013,37 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         else if(airborneStroke&&airKind<0&&airDownHeavy&&liveHeavyHoldMs)heavyUntil=now+liveHeavyHoldMs;
                     }
                     if(heavyUntil){if(play&&now<heavyUntil)pad.buttons|=evr::motion::LivePadMapper::X;else heavyUntil=0;}
-                    // The hit stop's watch (hitWatch above): the things near the blade of the stroke, every frame for 0.7 s.
-                    if(hitStopWanted&&hitWatch.until&&hitWatchState){
+                    // The hit stop's watch (hitWatch above): the blade of the stroke against what is near it, every frame for 0.7 s.
+                    if(hitStopWanted&&hitWatch.until&&hitWatchState&&hitWatchNear){
                         if(now>=hitWatch.until)hitWatch=HitWatch{};
                         else{
-                            // things that came near the blade since (kept later): watched from their state now on
-                            if(hitWatchNear){std::array<uint32_t,16> e{};std::array<int32_t,16> st{};
-                                const auto n=hitWatchNear(hitWatch.weapon,2.5f,e.data(),st.data(),e.size());
-                                for(size_t k=0;k<n;++k){bool known=false;for(size_t j=0;j<hitWatch.count;++j)if(hitWatch.entities[j]==e[k]){known=true;break;}
-                                    if(!known&&hitWatch.count<hitWatch.entities.size()){hitWatch.entities[hitWatch.count]=e[k];hitWatch.states[hitWatch.count]=st[k];++hitWatch.count;}}}
-                            for(size_t k=0;k<hitWatch.count;++k){
-                                const int32_t was=hitWatch.states[k];if(was==-2)continue;
-                                const int32_t is=hitWatchState(hitWatch.entities[k]);
-                                const bool hit=(was>=0&&is>=0&&is<was)||(was==-1&&is>=0)||is==-2;
-                                if(hit){hitStopHands=hitWatch.hands;hitStopMs=uint32_t(hitWatch.seconds*1000+.5);hitStopSerial.fetch_add(1);
-                                    static unsigned told=0;if(told++<400)logFile->event("hit_stop","\"entity\":"+std::to_string(hitWatch.entities[k])+",\"was\":"+std::to_string(was)+",\"is\":"+std::to_string(is)+
-                                        ",\"after_press_ms\":"+std::to_string(now-hitWatch.from)+",\"hands\":"+std::to_string(hitWatch.hands)+",\"seconds\":"+std::to_string(hitWatch.seconds)+",\"frame\":"+std::to_string(hands.frame));}
-                                hitWatch.states[k]=is;}
+                            const auto stop=[&](const HitWatch::Item& it,const char* by,float distance,int32_t is){
+                                hitStopHands=hitWatch.hands;hitStopMs=uint32_t(hitWatch.seconds*1000+.5);hitStopSerial.fetch_add(1);
+                                static unsigned told=0;if(told++<400){std::ostringstream o;o<<std::setprecision(3)<<"\"entity\":"<<it.entity<<",\"by\":\""<<by<<"\",\"metres\":"<<distance
+                                    <<",\"closest\":"<<it.closest<<",\"was\":"<<it.state<<",\"is\":"<<is<<",\"after_press_ms\":"<<(now-hitWatch.from)<<",\"hands\":"<<hitWatch.hands
+                                    <<",\"seconds\":"<<hitWatch.seconds<<",\"frame\":"<<hands.frame;logFile->event("hit_stop",o.str());}};
+                            // the blade of the hand that struck, as it is on this frame
+                            const auto& carried=hitWatch.left?leftWeapon:rightWeapon;
+                            const bool fresh=carried.binding==hitWatch.binding&&(hitWatch.left?offhandFrame:weaponFrame)==hands.frame;
+                            if(fresh){std::array<HitNear,16> nearby{};const auto n=hitWatchNear(carried,2.5f,nearby.data(),nearby.size(),now);
+                                for(size_t k=0;k<n;++k){const auto& x=nearby[k];
+                                    size_t at=hitWatch.count;for(size_t j=0;j<hitWatch.count;++j)if(hitWatch.items[j].entity==x.entity){at=j;break;}
+                                    if(at==hitWatch.count){if(hitWatch.count>=hitWatch.items.size())continue;at=hitWatch.count++;hitWatch.items[at].entity=x.entity;hitWatch.items[at].state=x.state;}
+                                    auto* it=&hitWatch.items[at];
+                                    if(!it->touched){
+                                        const bool inside=x.distance<=x.body;
+                                        const bool turned=it->last>=0&&it->last<=x.reach&&x.distance>it->last+.01f&&it->closest>=0&&it->closest<=x.body+.25f;
+                                        if(it->closest<0||x.distance<it->closest)it->closest=x.distance;
+                                        if(inside||turned){it->touched=true;stop(*it,inside?"touch":"closest",x.distance,x.state);}
+                                    }
+                                    it->last=x.distance;}}
+                            // the game's own hit on what the blade was not seen to touch
+                            for(size_t k=0;k<hitWatch.count;++k){auto& it=hitWatch.items[k];
+                                if(it.state==-2)continue;
+                                const int32_t is=hitWatchState(it.entity);
+                                const bool hit=(it.state>=0&&is>=0&&is<it.state)||is==-2;
+                                if(hit&&!it.touched){it.touched=true;stop(it,is==-2?"gone":"health",it.last,is);}
+                                if(is!=-1||it.state==-1)it.state=is;}
                         }
                     }
                     // the stroke before: its outcome 0.6 s after its press
@@ -1031,10 +1056,9 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         strokeOutcome={};}
                     if(swing.fired){
                         strokeMs.store(now);
-                        if(hitStopWanted&&hitWatchNear){   // the hit stop's watch from this stroke on
-                            hitWatch=HitWatch{};hitWatch.from=now;hitWatch.until=now+700;hitWatch.weapon=weapon;
-                            hitWatch.hands=weapon.twoHanded?3u:(leftStruck?1u:2u);hitWatch.seconds=evr::motion::hitStopSeconds(weapon.weaponType==255||!weapon.needsTarget,weapon.twoHanded);
-                            hitWatch.count=hitWatchNear(weapon,2.5f,hitWatch.entities.data(),hitWatch.states.data(),hitWatch.entities.size());}
+                        if(hitStopWanted&&hitWatchNear){   // the hit stop's watch from this stroke on (it looks from the next frame)
+                            hitWatch=HitWatch{};hitWatch.from=now;hitWatch.until=now+700;hitWatch.left=leftStruck;hitWatch.binding=weapon.binding;
+                            hitWatch.hands=weapon.twoHanded?3u:(leftStruck?1u:2u);hitWatch.seconds=evr::motion::hitStopSeconds(weapon.weaponType==255||!weapon.needsTarget,weapon.twoHanded);}
                         {static unsigned serial=0;strokeOutcome.entity=target.entity;strokeOutcome.before=targetHealth&&target.entity?targetHealth(target.entity):-1;strokeOutcome.at=now;strokeOutcome.frame=hands.frame;
                          strokeOutcome.stick=std::hypot(pad.leftX/32767.f,pad.leftY/32767.f);strokeOutcome.metres=target.distance;strokeOutcome.ahead=target.ahead;strokeOutcome.serial=++serial;}   // the hit volume's sweep starts here (motion_collider_apply.hpp replayCurrent)
                         if(observeMeleeNative){const auto running=observeMeleeNative();std::lock_guard<std::mutex> lock(livePressMutex);
@@ -1484,8 +1508,22 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // The hand with the menu pointer: while the ray is on a menu its trigger is the mouse's left button and
                 // its B the right one (VHVR; B is the pad's "back" again when the hand points away from the menu).
                 if(menuPointer::trigger.load())pad.rightTrigger=0;
-                if(menuPointer::secondary.load())pad.buttons&=~evr::motion::LivePadMapper::B;   // the left A: the right click
-                if(menuPointer::primary.load())pad.buttons&=~evr::motion::LivePadMapper::A;     // the right A: the left click
+                if(menuPointer::secondary.load())pad.buttons&=~evr::motion::LivePadMapper::B;   // (not taken since 17:20: the left A is the pad's B)
+                if(menuPointer::primary.load())pad.buttons&=~evr::motion::LivePadMapper::A;     // the right A: the right click (the item's menu)
+                // In menus the right trigger drags with the ray off the plate too: the pad's X, which picks up and drops an item
+                // as the left B did (2026-10-20 17:20, user: "the buttons change their role with the pointer on the screen or
+                // not - make them the same: if the trigger drags, it drags with the pointer off too"). A pull held into the
+                // menu waits for its release. EVR_MENU_TRIGGER_X=0: the game's RT as before.
+                {static const bool triggerX=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_TRIGGER_X",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                 static bool held=false,wait=true;static evr::motion::LiveScreen was=evr::motion::LiveScreen::Unavailable;
+                 const auto& r=hands.hands[1];const float t=r.triggerActive&&std::isfinite(r.trigger)?r.trigger:0.f;
+                 if(screenKind!=was){was=screenKind;held=false;wait=t>=.4f;}
+                 if(triggerX&&screenKind==evr::motion::LiveScreen::Ui&&!menuPointer::trigger.load()){
+                    if(wait){if(t<.4f)wait=false;}
+                    else held=held?t>=.4f:t>=.6f;
+                    if(held)pad.buttons|=evr::motion::LivePadMapper::X;
+                    pad.rightTrigger=0;}
+                 else{held=false;if(screenKind==evr::motion::LiveScreen::Ui&&menuPointer::trigger.load())wait=false;}}
                 if(auto stickUntil=airAttackStickUntil.load()){
                     static unsigned pushes=0;
                     if(now<stickUntil&&screenKind==evr::motion::LiveScreen::Gameplay&&std::abs(int(pad.leftX))<8000&&std::abs(int(pad.leftY))<8000){

@@ -96,13 +96,16 @@ inline std::mutex mutex;inline std::vector<Cached> cache;inline Types types;inli
 // The health of a kept creature now, read from its row as the pass reads it (-1: not kept, no Health, or not readable).
 // For the record of what a stroke did (controller_ui_fixture.hpp live_melee_outcome, 2026-10-20).
 inline bool block(uintptr_t address,void* out,size_t bytes);
+inline Layout layout(uintptr_t address);
 inline int32_t healthNow(uint32_t entity){
  std::lock_guard<std::mutex> lock(mutex);
  const auto c=std::find_if(cache.begin(),cache.end(),[&](const Cached& x){return x.target.entity==entity;});
  if(c==cache.end())return -1;
- const auto found=layouts.find(c->layout);if(found==layouts.end()||!found->second.health)return -1;
+ // layout(), not the kept layouts alone: those are emptied at each pass of the map (2026-10-20 17:15, headset run
+ // 20261020-165058: 70 of 132 hit stops came from "no health" turning into a health at a pass, not from a hit).
+ const auto l=layout(c->layout);if(!l.health)return -1;
  const auto bytes=types.healthBytes;if(bytes!=68&&bytes!=40)return -1;
- std::array<uint8_t,256> h{};if(!block(c->data+found->second.healthOffset+uintptr_t(c->row)*bytes,h.data(),bytes))return -1;
+ std::array<uint8_t,256> h{};if(!block(c->data+l.healthOffset+uintptr_t(c->row)*bytes,h.data(),bytes))return -1;
  int32_t health=-1;
  if(bytes==68){uint32_t offset=0;std::memcpy(&offset,h.data()+8,4);if(!(h[16]&1)||offset!=36)return -1;std::memcpy(&health,h.data()+offset,4);}
  else{if(!h[4]||h[4]>8)return -1;std::memcpy(&health,h.data()+8,4);}
@@ -401,22 +404,33 @@ inline Contact contact(const evr::motion::LiveMeleeWeapon& weapon,uint64_t now){
  }
  return out;
 }
-// Any thread, for the hit stop (2026-10-20, controller_ui_fixture.hpp hitWatch): the kept things whose axis is within
-// `radius` m of the blade, with their state now (stateNow below).
+// Any thread, for the hit stop (2026-10-20, controller_ui_fixture.hpp hitWatch): the kept things and the creatures the game
+// names this tick (Quick) whose axis is within `radius` m of the blade: the blade's distance to the axis now, the radius of
+// the body there - where the blade touches it - and the state (stateNow below; -1 for a named creature not kept yet).
+// The bodies (2026-10-20 17:20, user: "the stop comes after the blade has passed through the enemy - stop it the moment it
+// touches the model, and let the hit effect come while it stands"; the game's hit came 109 ms after the press, median of
+// 27 in the headset run 20261020-165058): a creature 0.5 m from its axis (the strokes the game took were 0.26..0.60 m from
+// it, headset run 20261014-124515), a thing without health (a pot) 0.4, anything else (a tree) 0.55.
+struct NearBlade {uint32_t entity=0;float distance=0,body=0,reach=0;int32_t state=-1;bool character=false;};
 inline int32_t stateLocked(const Cached& c);
-inline size_t watchNear(const evr::motion::LiveMeleeWeapon& weapon,float radius,uint32_t* entities,int32_t* states,size_t maximum){
+inline size_t nearBlade(const evr::motion::LiveMeleeWeapon& weapon,float radius,NearBlade* out,size_t maximum,uint64_t now){
  std::lock_guard<std::mutex> lock(mutex);size_t n=0;
  if(!requested||!types.usable||!weapon.blade)return 0;const evr::motion::LiveTargetReach reach;
- for(const auto& c:cache){if(n>=maximum)break;const float d=evr::motion::bladeDistance(weapon.bladeFrom,weapon.bladeTo,c.target,reach);
-  if(std::isfinite(d)&&d<=radius){entities[n]=c.target.entity;states[n]=stateLocked(c);++n;}}
+ const auto add=[&](const evr::motion::LiveTarget& t,int32_t state){
+  if(n>=maximum)return;const float d=evr::motion::bladeDistance(weapon.bladeFrom,weapon.bladeTo,t,reach);if(!std::isfinite(d)||d>radius)return;
+  out[n]={t.entity,d,t.character?.5f:t.object?.4f:.55f,t.character?reach.characterStrike:t.object?reach.objectRadius:reach.otherRadius,state,t.character};++n;};
+ for(const auto& c:cache)add(c.target,stateLocked(c));
+ if(quickTick&&now>=quickTick&&now-quickTick<=1000)for(size_t k=0;k<quickCount;++k){
+  const auto& q=quick[k];if(std::any_of(cache.begin(),cache.end(),[&](const Cached& c){return c.target.entity==q.entity;}))continue;
+  evr::motion::LiveTarget t;t.entity=q.entity;t.position=q.position;t.character=true;add(t,-1);}
  return n;
 }
 // The state of a kept thing: its health, -1 kept without a readable health (a pot, a tree not yet struck), -2 not kept
 // (gone: broken, or its components changed - a tree gets its Health when first struck).
 inline int32_t stateLocked(const Cached& c){
- const auto found=layouts.find(c.layout);if(found==layouts.end()||!found->second.health)return -1;
+ const auto l=layout(c.layout);if(!l.health)return -1;   // (healthNow above: not the kept layouts alone)
  const auto bytes=types.healthBytes;if(bytes!=68&&bytes!=40)return -1;
- std::array<uint8_t,256> h{};if(!block(c.data+found->second.healthOffset+uintptr_t(c.row)*bytes,h.data(),bytes))return -1;
+ std::array<uint8_t,256> h{};if(!block(c.data+l.healthOffset+uintptr_t(c.row)*bytes,h.data(),bytes))return -1;
  int32_t health=-1;
  if(bytes==68){uint32_t offset=0;std::memcpy(&offset,h.data()+8,4);if(!(h[16]&1)||offset!=36)return -1;std::memcpy(&health,h.data()+offset,4);}
  else{if(!h[4]||h[4]>8)return -1;std::memcpy(&health,h.data()+8,4);}

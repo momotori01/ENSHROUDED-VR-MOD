@@ -3441,7 +3441,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             aimMark::reachOf=&liveTargets::aimReach;   // the ground of the feet always; creatures when their list is kept
             if(targetGate){controllerUiFixture::liveMeleeTargetGate=true;liveTargets::requested=true;targetMark::install();
                 controllerUiFixture::targetHealth=&liveTargets::healthNow;
-                controllerUiFixture::hitWatchNear=&liveTargets::watchNear;controllerUiFixture::hitWatchState=&liveTargets::stateNow;
+                controllerUiFixture::hitWatchNear=[](const evr::motion::LiveMeleeWeapon& w,float radius,controllerUiFixture::HitNear* out,size_t maximum,uint64_t now){
+                    std::array<liveTargets::NearBlade,16> nearby{};const auto n=liveTargets::nearBlade(w,radius,nearby.data(),std::min(maximum,nearby.size()),now);
+                    for(size_t k=0;k<n;++k)out[k]={nearby[k].entity,nearby[k].distance,nearby[k].body,nearby[k].reach,nearby[k].state,nearby[k].character};
+                    return n;};
+                controllerUiFixture::hitWatchState=&liveTargets::stateNow;
                 controllerUiFixture::targetNear=[](const evr::motion::LiveMeleeWeapon& weapon,uint64_t now){const auto n=liveTargets::contact(weapon,now);return controllerUiFixture::TargetNear{n.reached,n.gated,n.entity,n.distance,n.cached,n.ahead,n.nearest};};
                 // The actor's Grounded bit (0) off within the last half second: a stroke in the air attacks without a target.
                 controllerUiFixture::actorAirborne=[](uint64_t now){std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;
