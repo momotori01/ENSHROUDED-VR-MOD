@@ -28,6 +28,7 @@
 using namespace evr;
 #include "shadow_receiver_shader.hpp"
 #include "gi_probe_shader.hpp"
+#include "ssr_edge_shader.hpp"
 namespace
 {
 struct InstanceDispatch
@@ -823,6 +824,18 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateShaderModule(VkDevice d, const VkShaderM
                 ",\"bytes\":"+std::to_string(changed.codeSize)+",\"scope\":\"reviewed GI empty-probe fallback, all views\"");
         }
     }catch(const std::exception& e){note("gi_probe_shader_failed","\"reason\":"+jsonString(e.what()));}
+    // The water reflection's screen-edge band, narrowed (ssr_edge_shader.hpp; EVR_SSR_EDGE_PERCENT=100 keeps the game's).
+    if(!replaced)try{
+        const auto code=ssrEdge::patch(*info);
+        if(!code.empty()){
+            auto changed=*info;changed.pCode=code.data();changed.codeSize=code.size()*4;
+            r=fn(d,&changed,a,module);
+            if(r!=VK_SUCCESS)throw std::runtime_error("SSR edge shader module creation failed");
+            replaced=true;
+            note("ssr_edge_shader_patched","\"source_sha256\":"+jsonString(ssrEdge::sourceSha)+",\"percent\":"+std::to_string(ssrEdge::percent())+
+                ",\"bytes\":"+std::to_string(changed.codeSize));
+        }
+    }catch(const std::exception& e){note("ssr_edge_shader_failed","\"reason\":"+jsonString(e.what()));}
     const char* headOptIn=std::getenv("EVR_HEAD_VISIBILITY_SHADER");
     if(headOptIn&&std::strcmp(headOptIn,"1")==0&&info->codeSize==head::sourceBytes){
         try{
