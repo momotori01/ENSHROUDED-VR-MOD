@@ -225,6 +225,12 @@ inline std::atomic<bool> liveScreenGameplay{false};inline std::atomic<uint64_t> 
 // VHVR: a stroke attacks only when the weapon reaches a target. targetNear (live_melee_targets.hpp, set by the policy
 // word "targets") says whether the blade is near something that has Health; a tool needs no target.
 struct TargetNear {bool reached=true,gated=false;uint32_t entity=0;float distance=0;unsigned cached=0;bool ahead=false;float nearest=-1;bool airborne=false;};
+// What a stroke did (2026-10-20, user: "swinging the sword while moving, the first stroke often misses"): the struck
+// creature's health at the press and 0.6 s later (live_melee_targets.hpp healthNow, -1 unknown), with how far the left
+// stick was pushed - live_melee_outcome in the record, to tell hits from misses on the headset.
+inline int32_t (*targetHealth)(uint32_t)=nullptr;
+struct StrokeOutcome {uint32_t entity=0;int32_t before=-1;uint64_t at=0,frame=0;float stick=0,metres=0;bool ahead=false;unsigned serial=0;};
+inline StrokeOutcome strokeOutcome;
 inline bool liveMeleeTargetGate=false;inline TargetNear(*targetNear)(const evr::motion::LiveMeleeWeapon&,uint64_t)=nullptr;
 // A stroke in the air (jumping, falling) attacks without reaching a target (2026-10-15, user: "a swing of the sword while
 // jumping gives no attack"; Mock game-20261015-040910: the game starts the attack in the air as on the ground, so what
@@ -276,6 +282,23 @@ inline void applyBowHaptic(evr::motion::GestureFeedbackResult& command,const evr
   if(!command.amplitude[h])command.duration[h]=XrDuration(std::min<uint64_t>(cooling-now,100))*1000000;
   command.amplitude[h]=std::max(command.amplitude[h],cooldownHapticAmplitude);
  }
+ // The bite (2026-10-20, user: "before the strike, a small short vibration when the float is pecked at; if it can be told
+ // apart, a little stronger one when it sinks and the strike can be made"; then: "every 3 s"). keen::FishingState (1.0,
+ // the executable's table at 0x199e450): 18 WaitForFishHooked - the fish at the float, about 1.6..1.9 s in the run
+ // 20261020-132416 - a small one when it begins and every 3 s in it; 21 WaitHookInput - the float down, the strike now -
+ // a stronger, longer one. Each peck is not in the state (guess: they fall in 18). The rod's hand (the right).
+ // EVR_FISH_BITE_HAPTIC=0: off.
+ {static const bool bite=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_BITE_HAPTIC",v,sizeof v);return !(n==1&&v[0]=='0');}();
+  static int lastState=-1;static uint64_t stateSince=0,pulseUntil=0;static float pulseAmplitude=0;static uint64_t nextPeck=0;
+  const int state=fishingState.load();const auto at=fishingStateMs.load();const bool current=at&&now>=at&&now-at<=500;
+  const int s=current?state:-1;
+  if(s!=lastState){lastState=s;stateSince=now;
+   if(bite&&s==18){pulseUntil=now+40;pulseAmplitude=.25f;nextPeck=now+3000;}
+   else if(bite&&s==21){pulseUntil=now+150;pulseAmplitude=.6f;}}
+  else if(bite&&s==18&&now>=nextPeck){pulseUntil=now+40;pulseAmplitude=.25f;nextPeck=now+3000;}
+  if(pulseUntil>now&&hands.focused&&hands.hands[1].tracked()){
+   if(!command.amplitude[1])command.duration[1]=XrDuration(pulseUntil-now)*1000000;
+   command.amplitude[1]=std::max(command.amplitude[1],pulseAmplitude);}}
  const auto tiring=fishGainHapticUntil.load();
  if(tiring>now&&hands.focused&&hands.hands[1].tracked()){
   if(const auto left=fishPulseLeft(now)){
@@ -954,8 +977,18 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         else if(airborneStroke&&airKind<0&&airDownHeavy&&liveHeavyHoldMs)heavyUntil=now+liveHeavyHoldMs;
                     }
                     if(heavyUntil){if(play&&now<heavyUntil)pad.buttons|=evr::motion::LivePadMapper::X;else heavyUntil=0;}
+                    // the stroke before: its outcome 0.6 s after its press
+                    if(strokeOutcome.at&&now>=strokeOutcome.at+600){
+                        const int32_t after=targetHealth&&strokeOutcome.entity?targetHealth(strokeOutcome.entity):-1;static unsigned outcomes=0;
+                        if(outcomes++<400){std::ostringstream o;o<<std::setprecision(3)<<"\"frame\":"<<strokeOutcome.frame<<",\"entity\":"<<strokeOutcome.entity<<",\"health_before\":"<<strokeOutcome.before<<",\"health_after\":"<<after
+                            <<",\"hit\":"<<(strokeOutcome.before>=0&&after>=0?(after<strokeOutcome.before?"true":"false"):"null")<<",\"left_stick\":"<<strokeOutcome.stick<<",\"moving\":"<<(strokeOutcome.stick>=.3f?"true":"false")
+                            <<",\"target_metres\":"<<strokeOutcome.metres<<",\"ahead\":"<<(strokeOutcome.ahead?"true":"false")<<",\"stroke\":"<<strokeOutcome.serial;
+                         logFile->event("live_melee_outcome",o.str());}
+                        strokeOutcome={};}
                     if(swing.fired){
-                        strokeMs.store(now);   // the hit volume's sweep starts here (motion_collider_apply.hpp replayCurrent)
+                        strokeMs.store(now);
+                        {static unsigned serial=0;strokeOutcome.entity=target.entity;strokeOutcome.before=targetHealth&&target.entity?targetHealth(target.entity):-1;strokeOutcome.at=now;strokeOutcome.frame=hands.frame;
+                         strokeOutcome.stick=std::hypot(pad.leftX/32767.f,pad.leftY/32767.f);strokeOutcome.metres=target.distance;strokeOutcome.ahead=target.ahead;strokeOutcome.serial=++serial;}   // the hit volume's sweep starts here (motion_collider_apply.hpp replayCurrent)
                         if(observeMeleeNative){const auto running=observeMeleeNative();std::lock_guard<std::mutex> lock(livePressMutex);
                             liveAttackPress={running.valid?running.entity:0u,uint32_t(weapon.binding>>32),running.triggerTime,now,liveAttackPress.serial+1};
                             if(cooldown)liveCooldown.expect(liveAttackPress.serial,heavyUntil?liveHeavyHoldMs:0);}
@@ -1238,7 +1271,11 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // equipment_tools.md 5.3): the trigger of the main hand builds; the right grip is the modifier (the game's
                 // RT), and while it is held the right stick turns and moves the piece instead of turning the player; the
                 // upper right button opens the piece menu. Everything else keeps the menu meaning it has on that screen.
-                if(liveHandUseRequested&&fresh&&mapped.valid&&valid&&screen==buildingScreen&&!nativeBlocked&&!value.active){
+                // Also while the head gesture holds a hand at the temple (2026-10-20, user: "with the building quick slot open, a
+                // hand to the temple to switch the key map sets off a dodge"): before, the gesture stopped all of this, and a
+                // right B that held the piece menu went to the game as its B - a dodge in building mode too (guess from the
+                // run 20261020-132416: the menu was mostly held by the right B). Its stick is the gesture's d-pad then.
+                if(liveHandUseRequested&&fresh&&mapped.valid&&valid&&screen==buildingScreen&&!nativeBlocked){
                     const auto& r=hands.hands[1];static bool buildPressed=false;static unsigned buildLogged=~0u;
                     if(r.triggerActive&&std::isfinite(r.trigger)){if(r.trigger>=.8f)buildPressed=true;else if(r.trigger<=.2f)buildPressed=false;}else buildPressed=false;
                     pad.rightTrigger=0;

@@ -3425,6 +3425,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             // kept on the ticks of the event selection hook, which the early Impact (world-live-melee-contact.txt) installs.
             aimMark::reachOf=&liveTargets::aimReach;   // the ground of the feet always; creatures when their list is kept
             if(targetGate){controllerUiFixture::liveMeleeTargetGate=true;liveTargets::requested=true;targetMark::install();
+                controllerUiFixture::targetHealth=&liveTargets::healthNow;
                 controllerUiFixture::targetNear=[](const evr::motion::LiveMeleeWeapon& weapon,uint64_t now){const auto n=liveTargets::contact(weapon,now);return controllerUiFixture::TargetNear{n.reached,n.gated,n.entity,n.distance,n.cached,n.ahead,n.nearest};};
                 // The actor's Grounded bit (0) off within the last half second: a stroke in the air attacks without a target.
                 controllerUiFixture::actorAirborne=[](uint64_t now){std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;

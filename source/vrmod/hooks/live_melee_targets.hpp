@@ -86,6 +86,21 @@ inline unsigned leadMs=150;
 struct BladeSeen {uint64_t binding=0;std::array<int64_t,3> from{},to{},aheadFrom{},aheadTo{};std::chrono::steady_clock::time_point at{};bool ahead=false,configured=false;};
 inline std::array<BladeSeen,2> blades; // guarded by mutex
 inline std::mutex mutex;inline std::vector<Cached> cache;inline Types types;inline std::map<uintptr_t,Layout> layouts;
+// The health of a kept creature now, read from its row as the pass reads it (-1: not kept, no Health, or not readable).
+// For the record of what a stroke did (controller_ui_fixture.hpp live_melee_outcome, 2026-10-20).
+inline bool block(uintptr_t address,void* out,size_t bytes);
+inline int32_t healthNow(uint32_t entity){
+ std::lock_guard<std::mutex> lock(mutex);
+ const auto c=std::find_if(cache.begin(),cache.end(),[&](const Cached& x){return x.target.entity==entity;});
+ if(c==cache.end())return -1;
+ const auto found=layouts.find(c->layout);if(found==layouts.end()||!found->second.health)return -1;
+ const auto bytes=types.healthBytes;if(bytes!=68&&bytes!=40)return -1;
+ std::array<uint8_t,256> h{};if(!block(c->data+found->second.healthOffset+uintptr_t(c->row)*bytes,h.data(),bytes))return -1;
+ int32_t health=-1;
+ if(bytes==68){uint32_t offset=0;std::memcpy(&offset,h.data()+8,4);if(!(h[16]&1)||offset!=36)return -1;std::memcpy(&health,h.data()+offset,4);}
+ else{if(!h[4]||h[4]>8)return -1;std::memcpy(&health,h.data()+8,4);}
+ return health;
+}
 inline uint64_t cursor=0,lastTick=0,lastLog=0,fullScans=0;inline std::atomic<unsigned> ticks{0},failures{0},adopted{0},dropped{0};
 // 4096 of the map's 131072 slots a tick: the whole map about twice a second. A blade reaches 2.3 m from the player and
 // a target counts from 1.3 m, so 10 m leaves a running creature a second to be noticed. Measured cost: none visible
