@@ -92,6 +92,9 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   ck(a.equipBegan&&entity==0x12345678&&out[inputEquipAction+4]==3&&out[inputEquipAction+13]==0&&out[inputEquipAction+12]==15);
   ClientInputBytes menu=wheel;menu[inputEquipAction+8]=7;out=menu;a=s.apply(r,menu,out);ck(out==menu&&a.equipEnded);   // the inventory screen's own change
   out=wheel;out[0x100]^=1;ck(!onlyHolsterAndCameraChanged(wheel,out));out=wheel;out[inputDigital]^=1;ck(!onlyHolsterAndCameraChanged(wheel,out));
+  // AreaLoot (bit 8) for a short while from the left trigger's pull (2026-10-20): set until areaLootUntilMs, allowed by the check
+  {auto o=wheel;areaLootUntilMs=1000;ck(applyAreaLoot(o,999)&&!applyAreaLoot(o,1000));uint64_t d=0;std::memcpy(&d,o.data()+inputDigital,8);
+   ck((d&inputAreaLoot)&&inputAreaLootBit==8&&onlyHolsterAndCameraChanged(wheel,o));o[inputDigital+1]^=2;ck(!onlyHolsterAndCameraChanged(wheel,o));areaLootUntilMs=0;}
   out=wheel;out[inputDigital+5]^=0x40;ck(!onlyHolsterAndCameraChanged(wheel,out));
   r.serial=6;r.equip=-1;r.arm=true;out=wheel;s.apply(r,wheel,out);s.reset();out=wheel;a=s.apply(r,wheel,out);ck(out==wheel&&!a.arm);}
  std::cout<<"holster "<<n<<" PASS\n";return 0;}

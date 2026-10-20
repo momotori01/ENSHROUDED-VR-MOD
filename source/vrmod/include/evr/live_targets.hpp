@@ -31,7 +31,10 @@ struct LiveTargetReach {
     float characterStrike=.85f;
     float otherRadius=1.3f;    // trees and objects: the big trees by the home are hit 1.1 m from their axis (game161403)
     float height=2.2f;         // the axis is taken this high from the origin
-    float objectRadius=.75f,objectHeight=1.2f;   // a table, a pot, a crate: about a metre across and up to a metre high
+    // A table, a pot, a crate. (Headset run 20261020-100726, user: "strokes at pots miss easily": the strokes were pressed
+    // with the blade 0.6..0.8 m from a pot's axis, and the hit volume came 80 ms later, after the blade had passed - the
+    // hit volume now sweeps from the press on, motion_collider_apply.hpp sweepFromPress; the reach stays.)
+    float objectRadius=.75f,objectHeight=1.2f;   // about a metre across and up to a metre high
 };
 // Shortest distance between the segments a..b and c..d.
 inline float segmentDistance(Vec3 a,Vec3 b,Vec3 c,Vec3 d) {

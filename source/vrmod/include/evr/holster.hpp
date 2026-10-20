@@ -3,6 +3,7 @@
 #include <evr/motion_actions.hpp>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 namespace evr::motion {
@@ -129,6 +130,17 @@ constexpr size_t inputBarAction=0x60,inputEquipAction=clientEquipAction,inputDig
 // 1.0 (2026-10-16): keen::ecs::PlayerInputType gained AreaLoot 8, DropItem 12 and BuildingModeFly 39 - RangedCombatArm is 50
 // (47; 47 is CombatTargetSelect2dRight now), Block 30 (28).
 constexpr unsigned inputRangedCombatArmBit=50;constexpr uint64_t inputRangedCombatArm=1ull<<inputRangedCombatArmBit;
+// AreaLoot (bit 8 in 1.0): what the game sends after the interaction is held a while (headset run 20261020-100726: one long
+// hold of Y gave ContextualAction_Hold and AreaLoot) - it takes all that lies around, and a killed enemy's loot, which the
+// interaction alone does not (user, 2026-10-20: "the left trigger picks up dropped items but not the items from an enemy's
+// body - make the trigger the picking-up"). The mod sends it for a short while when the left trigger is pulled
+// (controller_ui_fixture.hpp, include/evr/live_pad.hpp leftInteract): until areaLootUntilMs (GetTickCount64).
+constexpr unsigned inputAreaLootBit=8;constexpr uint64_t inputAreaLoot=1ull<<inputAreaLootBit;
+inline std::atomic<uint64_t> areaLootUntilMs{0};
+inline bool applyAreaLoot(ClientInputBytes& output,uint64_t now){
+    if(now>=areaLootUntilMs.load())return false;
+    uint64_t digital=0;std::memcpy(&digital,output.data()+inputDigital,8);digital|=inputAreaLoot;std::memcpy(output.data()+inputDigital,&digital,8);return true;
+}
 constexpr uint8_t equipmentSlotShield=15,equipmentSlotInvalid=27;
 struct HolsterRequest {
     uint64_t serial=0;bool arm=false;
@@ -165,12 +177,13 @@ public:
         a.arm=arm_;a.barOn=barOn_;a.equipOn=equipOn_;a.bar=bar_;a.equip=equip_;return a;
     }
 };
-// Nothing but the head camera, the two actions and the ranged-combat bit differs.
+// Nothing but the head camera, the two actions, the ranged-combat bit and the AreaLoot bit differs.
 inline bool onlyHolsterAndCameraChanged(const ClientInputBytes& a,const ClientInputBytes& b){
     for(size_t i=0;i<a.size();++i){
         if(a[i]==b[i]||(i>=0x20&&i<0x4c)||(i>=inputBarAction&&i<inputBarAction+8)||(i>=inputEquipAction&&i<inputEquipAction+16))continue;
         // the ranged-combat bit only (bit 50 in 1.0: byte 6, 0x04; June bit 47: byte 5, 0x80)
         if(i==inputDigital+inputRangedCombatArmBit/8&&((a[i]^b[i])&~uint8_t(1u<<(inputRangedCombatArmBit%8)))==0)continue;
+        if(i==inputDigital+inputAreaLootBit/8&&((a[i]^b[i])&~uint8_t(1u<<(inputAreaLootBit%8)))==0)continue;
         return false;}
     return true;
 }

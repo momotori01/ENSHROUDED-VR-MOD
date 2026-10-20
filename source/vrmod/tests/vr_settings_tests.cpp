@@ -30,6 +30,10 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
  // Sneaking by crouching: on at 30 % unless [Body] says otherwise; a threshold out of 10 .. 50 % gives 30 (2026-10-18).
  ck(read(ini).realCrouch&&read(ini).crouchDrop==30&&!read(set(ini,"Body","RealCrouch","0")).realCrouch&&read(set(ini,"Body","CrouchDrop","25")).crouchDrop==25&&
     read(set(ini,"Body","CrouchDrop","60")).crouchDrop==30&&read(set(ini,"Body","CrouchDrop","5")).crouchDrop==30&&read(set(ini,"Body","RealCrouch","x")).realCrouch);
+ // The stroke's speed (50 .. 150 %, steps of 5) and swimming by the arms: 100 % and on unless set (2026-10-20).
+ ck(read(ini).swingSpeed==100&&read(ini).armSwim&&read(set(ini,"Melee","SwingSpeed","80")).swingSpeed==80&&read(set(ini,"Melee","SwingSpeed","83")).swingSpeed==85&&
+    read(set(ini,"Melee","SwingSpeed","200")).swingSpeed==100&&read(set(ini,"Melee","SwingSpeed","45")).swingSpeed==100&&read(set(ini,"Melee","SwingSpeed","x")).swingSpeed==100&&
+    !read(set(ini,"Body","ArmSwim","0")).armSwim&&clampSwingSpeed(149)==150&&clampSwingSpeed(10)==50);
  // A whole section, in the file's order ([Environment] of the loader).
  {const auto e=entries("[Mode]\r\nVR=1\r\n[Environment]\r\n; a comment\r\nEVR_GRIP_TRIM=\r\nXR_RUNTIME_JSON = C:\\x y\\mock.json   ; test\r\n[Other]\r\nA=1\r\n","environment");
   ck(e.size()==2&&e[0].first=="EVR_GRIP_TRIM"&&e[0].second.empty()&&e[1].first=="XR_RUNTIME_JSON"&&e[1].second=="C:\\x y\\mock.json"&&entries(ini,"Nothing").empty());}

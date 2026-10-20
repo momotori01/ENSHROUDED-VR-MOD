@@ -12,6 +12,19 @@ inline std::atomic<bool> eventBlocked{false};
 inline void authorize(const motion::EventAuthority& a){std::lock_guard<std::mutex> lock(mutex);authority=a;}
 inline motion::EventAuthority authorized(){std::lock_guard<std::mutex> lock(mutex);return authority;}
 inline void invalidate(){if(requested)frames.invalidate();}
-inline void publish(const motion::ColliderPose& p,const motion::HandFrame& h,uint64_t ms){if(requested)frames.publish(p,h,ms);}
+// The shown weapon's poses of the last second (2026-10-20, for the sweep from the press - motion_collider_apply.hpp
+// sweepFromPress).
+inline std::array<motion::ColliderPose,96> past{};inline size_t pastNext=0;   // guarded by mutex
+inline void publish(const motion::ColliderPose& p,const motion::HandFrame& h,uint64_t ms){
+    if(!requested)return;
+    frames.publish(p,h,ms);
+    if(p.valid&&p.item){std::lock_guard<std::mutex> lock(mutex);past[pastNext++%past.size()]=p;}
+}
+// The first pose of `item` shown at or after `ms` (within 60 ms of it).
+inline bool pastAt(uint64_t ms,uint32_t item,motion::ColliderPose& out){
+    std::lock_guard<std::mutex> lock(mutex);bool found=false;
+    for(const auto& p:past)if(p.valid&&p.item==item&&p.milliseconds>=ms&&p.milliseconds<=ms+60&&(!found||p.milliseconds<out.milliseconds)){out=p;found=true;}
+    return found;
+}
 inline motion::ColliderFrameSnapshot snapshotFrame(){return frames.snapshot();}
 }

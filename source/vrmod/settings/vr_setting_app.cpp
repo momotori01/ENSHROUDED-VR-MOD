@@ -34,7 +34,9 @@ bool g_running=false,g_loading=false,g_zipping=false,g_installed=false,g_updatin
 void refreshUpdateButton();
 std::vector<HWND> g_controls;                // disabled while the game runs
 HWND g_rbVr,g_rbFlat,g_coSize,g_coDlss,g_coSharp,g_coEyes,g_btZip,g_btDefaults,g_status,g_last,g_stZip,g_btUpdate,g_stUpdate;
-enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE};
+// The stroke's speed (a slider, 5 % a step) and swimming by the arms (2026-10-20; also in the game's start menu).
+HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff;
+enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF};
 constexpr UINT WM_APP_ZIP_DONE=WM_APP+1;     // wParam: exit code, lParam: new std::wstring (the zip's path)
 constexpr UINT WM_APP_LATEST=WM_APP+2;       // lParam: new std::wstring (the newest release's version, or "" when it could not be checked)
 constexpr UINT WM_APP_UPDATE_LINE=WM_APP+3;  // lParam: new std::wstring (a line the updater wrote)
@@ -112,7 +114,9 @@ void show(){
     pick(g_coSize,kSizes,std::size(kSizes),text(v.renderScale),1);pick(g_coDlss,kDlss,std::size(kDlss),v.dlss,0);
     pick(g_coSharp,kSharp,std::size(kSharp),text(v.sharpness),1);
     pick(g_coEyes,kEyes,std::size(kEyes),v.alternateEyes?(v.eyeWarp==2?"2":"1"):"0",0);
-    for(HWND h:{g_coSize,g_coDlss,g_coSharp,g_coEyes})EnableWindow(h,!g_running&&v.vr);
+    SendMessageW(g_tbSwing,TBM_SETPOS,TRUE,v.swingSpeed/swingSpeedStep);SetWindowTextW(g_stSwing,(std::to_wstring(v.swingSpeed)+L" %").c_str());
+    check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);
+    for(HWND h:{g_coSize,g_coDlss,g_coSharp,g_coEyes,g_tbSwing,g_rbSwimOn,g_rbSwimOff})EnableWindow(h,!g_running&&v.vr);
     g_loading=false;
 }
 void refreshRunning(bool force=false){
@@ -306,7 +310,7 @@ void gatherReport(const std::wstring& folder,const std::string& title,size_t new
     std::string ini;if(!readFile(iniPath(),ini))ini=g_ini;   // as it is on disk (the window-less runs have not read it)
     const auto v=read(ini);
     info+="Mod version: "+(trim(version).empty()?std::string("unknown"):trim(version))+"\r\n";
-    info+="Settings: VR="+std::to_string(int(v.vr))+" Sync="+std::to_string(int(v.online))+" RenderScale="+text(v.renderScale)+" Dlss="+v.dlss+" Sharpness="+text(v.sharpness)+" AlternateEyes="+std::to_string(int(v.alternateEyes))+" EyeWarp="+std::to_string(v.eyeWarp)+"\r\n";
+    info+="Settings: VR="+std::to_string(int(v.vr))+" Sync="+std::to_string(int(v.online))+" RenderScale="+text(v.renderScale)+" Dlss="+v.dlss+" Sharpness="+text(v.sharpness)+" AlternateEyes="+std::to_string(int(v.alternateEyes))+" EyeWarp="+std::to_string(v.eyeWarp)+" SwingSpeed="+std::to_string(v.swingSpeed)+" ArmSwim="+std::to_string(int(v.armSwim))+"\r\n";
     // (a game that crashed can stay in the process list a while: a program holding its handle - Steam, a launcher)
     info+="Game running: "+std::string(g_gameStopped?"no (it stopped before the 30 seconds ended)":gameRunning()?"yes":"no")+"\r\nLast start: "+trim(last)+"\r\n";
     const wchar_t* windows=L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
@@ -640,6 +644,15 @@ void build(){
     row(L"DLSS / FSR3 (VR)",L"How the picture is made from a smaller one.\nCards without DLSS (AMD) use FSR 3 the same way.");g_coDlss=combo(ID_DLSS,kDlss,std::size(kDlss));g_y+=kRowHeight-16;
     row(L"Sharpening (VR)",L"Makes edges crisper.");g_coSharp=combo(ID_SHARP,kSharp,std::size(kSharp));g_y+=kRowHeight-16;
     row(L"Frame mode (VR)",L"One eye a frame: the other shows its last picture, or is made from the drawn one.\n片目ずつ交互に描く（試験中・速い）。PureDark 方式は描いた目からもう片方を作る");g_coEyes=combo(ID_EYES,kEyes,std::size(kEyes));g_y+=kRowHeight-8;
+    row(L"Swing speed to attack (VR)",L"How fast a swing must be to attack. Lower: a lighter swing attacks.\n攻撃に要る振りの速さ（低いほど軽い振りで攻撃）");
+    g_tbSwing=control(part(TRACKBAR_CLASSW,L"",TBS_HORZ|TBS_AUTOTICKS|WS_TABSTOP|WS_GROUP,kRight,g_y+4,250,30,ID_SWING));
+    SendMessageW(g_tbSwing,TBM_SETRANGE,TRUE,MAKELPARAM(swingSpeedLow/swingSpeedStep,swingSpeedHigh/swingSpeedStep));SendMessageW(g_tbSwing,TBM_SETTICFREQ,2,0);
+    SendMessageW(g_tbSwing,TBM_SETLINESIZE,0,1);SendMessageW(g_tbSwing,TBM_SETPAGESIZE,0,2);
+    g_stSwing=part(L"STATIC",L"100 %",SS_LEFT,kRight+258,g_y+10,80,20);g_y+=kRowHeight-16;
+    row(L"Swim with your arms (VR)",L"In water, stroke with open hands to swim, as in VHVR.\n水の中で手を開いて水をかくと泳ぐ");
+    g_rbSwimOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_SWIM_ON));
+    g_rbSwimOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_SWIM_OFF));
+    g_y+=kRowHeight-16;
     row(L"Problem report",L"The logs in one zip, next to this program.\nAlso finishes a VR bug report a crash cut.\n報告用zip。途切れたVRバグ報告も仕上げます");
     g_btZip=part(L"BUTTON",L"Make zip",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,120,30,ID_ZIP);
     g_stZip=part(L"STATIC",L"",SS_LEFT,kRight+134,g_y+4,kWidth-kRight-134-kLeft,56);
@@ -654,6 +667,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
     case WM_COMMAND:{const int id=LOWORD(wParam),code=HIWORD(wParam);
         if(code==BN_CLICKED)switch(id){
             case ID_VR:store("Mode","VR","1");break;case ID_FLAT:store("Mode","VR","0");break;
+            case ID_SWIM_ON:store("Body","ArmSwim","1");break;case ID_SWIM_OFF:store("Body","ArmSwim","0");break;
             case ID_ZIP:startZip();break;
             case ID_UPDATE:startUpdate();break;
             case ID_DEFAULTS:if(!gameRunning()&&MessageBoxW(hwnd,L"Put all settings back to how they came?",L"Enshrouded VR setting",MB_YESNO|MB_ICONQUESTION)==IDYES){
@@ -664,6 +678,12 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
             if(id==ID_SHARP&&at<std::size(kSharp))store("Picture","Sharpness",kSharp[at].value);
             if(id==ID_EYES&&at<std::size(kEyes)){store("Picture","AlternateEyes",at?"1":"0");store("Picture","EyeWarp",at==2?"2":"0");}}
         return 0;}
+    case WM_HSCROLL:if(reinterpret_cast<HWND>(lParam)==g_tbSwing){
+        const int percent=clampSwingSpeed(int(SendMessageW(g_tbSwing,TBM_GETPOS,0,0))*swingSpeedStep);
+        SetWindowTextW(g_stSwing,(std::to_wstring(percent)+L" %").c_str());
+        if(LOWORD(wParam)!=TB_THUMBTRACK)store("Melee","SwingSpeed",std::to_string(percent));   // written when the thumb is let go
+        return 0;}
+        break;
     case WM_APP_ZIP_DONE:{
         std::unique_ptr<std::wstring> zip(reinterpret_cast<std::wstring*>(lParam));g_zipping=false;EnableWindow(g_btZip,TRUE);
         if(wParam==0&&exists(*zip)){SetWindowTextW(g_stZip,(L"Saved in the game folder:\n"+zip->substr(zip->find_last_of(L'\\')+1)).c_str());
@@ -682,7 +702,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
     g_instance=instance;
-    INITCOMMONCONTROLSEX controls{sizeof controls,ICC_STANDARD_CLASSES};InitCommonControlsEx(&controls);
+    INITCOMMONCONTROLSEX controls{sizeof controls,ICC_STANDARD_CLASSES|ICC_BAR_CLASSES};InitCommonControlsEx(&controls);
     wchar_t self[MAX_PATH]{};GetModuleFileNameW(nullptr,self,MAX_PATH);g_folder=self;g_folder.erase(g_folder.find_last_of(L'\\'));
     // "--bug-report <folder> <start> <end>" (hooks/bug_report.hpp): the VR bug report's zip, without a window.
     {int argc=0;LPWSTR* argv=CommandLineToArgvW(GetCommandLineW(),&argc);

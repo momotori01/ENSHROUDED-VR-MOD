@@ -10,6 +10,7 @@
 #include <evr/grip_router.hpp>
 #include <evr/holster.hpp>
 #include <evr/room_sneak.hpp>
+#include <evr/swim_stroke.hpp>
 #include <evr/vr_settings_panel.hpp>
 #include <evr/equip_planner.hpp>
 #include <evr/motion_event_retime.hpp>
@@ -192,6 +193,12 @@ inline bool roomSneakRequested=false,recenterPoseRequested=false;
 // Real crouching on / off and its threshold (percent of the standing eye height the headset comes down), changed by the
 // VR settings in the start menu while the game runs (hooks/bug_report.hpp; 2026-10-18).
 inline std::atomic<bool> roomSneakOn{true};inline std::atomic<int> crouchDrop{30};
+// The speed a stroke needs to attack, percent of the mod's own (include/evr/vr_settings.hpp swingSpeed), and swimming by
+// the arms on / off (include/evr/swim_stroke.hpp); both changed in the start menu's VR settings too (2026-10-20).
+inline std::atomic<int> swingPercent{100};inline std::atomic<bool> armSwimOn{true};
+// When the last stroke pressed the attack (GetTickCount64; motion_collider_apply.hpp sweepFromPress, 2026-10-20).
+inline std::atomic<uint64_t> strokeMs{0};
+inline evr::motion::SwimStroke swimStroke;
 inline std::atomic<uint64_t> recenterRequests{0},originEpoch{0};inline std::atomic<float> originHeadY{0},originReference{1.65f};
 inline void publishOrigin(float headY,float reference,uint64_t epoch){originHeadY.store(headY);originReference.store(reference);originEpoch.store(epoch);}
 inline bool (*sneakState)(uint64_t now,bool& sneaking,bool& toggle,bool& allowed)=nullptr;
@@ -765,6 +772,12 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // The stick mapper checks age/identity itself and resets on stale or unavailable input.
                 const auto mapped=verticalMapper.update(now,received,ownerSerial,fresh?evr::motion::liveStickMode(screenKind):evr::motion::VerticalStickMode::Unavailable,hands,value);
                 auto pad=liveMapper.update(fresh?screenKind:evr::motion::LiveScreen::Unavailable,mapped,hands,wieldGrip&&!value.active);
+                // The left trigger's pull also sends AreaLoot for 150 ms (include/evr/holster.hpp): a killed enemy's loot is
+                // taken too. EVR_LT_AREA_LOOT=0: the interaction only.
+                {static const bool areaLoot=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_LT_AREA_LOOT",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                 static bool was=false;const bool on=liveMapper.leftInteract();
+                 if(areaLoot&&on&&!was){evr::game::areaLootUntilMs.store(now+150);static unsigned lines=0;if(lines++<200)logFile->event("left_trigger_area_loot","\"milliseconds\":"+std::to_string(now));}
+                 was=on;}
                 if(rangedSurveyRequested&&fresh&&screenKind==evr::motion::LiveScreen::Gameplay&&hands.hands[0].primaryActive&&hands.hands[0].primaryPressed)pad.buttons|=evr::motion::LivePadMapper::X;
                 if(quickSlotRequested){
                     evr::motion::GestureHead quickHead;{std::lock_guard<std::mutex> lock(gestureMutex);quickHead=gestureHead;}
@@ -861,7 +874,10 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     // easily - lifting the sword for a downward blow sets it off"). EVR_AIR_UP_FACTOR=<1..3>: another factor.
                     static const float airUpFactor=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_AIR_UP_FACTOR",v,sizeof v);const float f=n&&n<sizeof v?float(std::atof(v)):1.25f;return f>=1.f&&f<=3.f?f:1.25f;}();
                     const float upFactor=airborneNow(now)?airUpFactor:1.f;
-                    auto swing=liveMelee.update(hands,weapon,allowed,now,target.reached,cooldown,target.ahead,upFactor);   // ahead: reached by the look-ahead only - the blade is still coming
+                    // The player's own share of the speed a stroke needs (VR settings, [Melee] SwingSpeed; 2026-10-20).
+                    const float swingScale=float(evr::settings::clampSwingSpeed(swingPercent.load()))/100.f;
+                    const auto scaled=[swingScale](evr::motion::LiveMeleeWeapon w){w.speedFactor=std::clamp(w.speedFactor*swingScale,.05f,2.f);return w;};
+                    auto swing=liveMelee.update(hands,scaled(weapon),allowed,now,target.reached,cooldown,target.ahead,upFactor);   // ahead: reached by the look-ahead only - the blade is still coming
                     if(swing.fired&&cooldown)liveCooldown.start(now);
                     bool cooledStroke=swing.cooling;
                     // The other weapon of a pair (VHVR: either hand strikes). Its stroke presses the same attack button.
@@ -869,7 +885,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     {const bool offhandAllowed=(offhand.fist?play&&clenched(0):allowed)&&offhand.binding&&offhand.hand==0&&offhandFrame==hands.frame&&offhandMs&&now>=offhandMs&&now-offhandMs<=200;
                      TargetNear leftTarget;if(offhandAllowed&&liveMeleeTargetGate&&offhand.needsTarget&&targetNear)leftTarget=targetNear(offhand,now);
                      if(leftTarget.gated&&!leftTarget.reached&&airborneNow(now)){leftTarget.reached=true;leftTarget.airborne=true;}
-                     const auto left=liveMeleeLeft.update(hands,offhand,offhandAllowed,now,leftTarget.reached,cooldown,leftTarget.ahead,upFactor);
+                     const auto left=liveMeleeLeft.update(hands,scaled(offhand),offhandAllowed,now,leftTarget.reached,cooldown,leftTarget.ahead,upFactor);
                      if(left.fired&&cooldown)liveCooldown.start(now);
                      cooledStroke=cooledStroke||left.cooling;
                      if(left.fired){leftStruck=true;target=leftTarget;const bool press=swing.press||left.press;swing=left;swing.press=press;weapon=offhand;liveStrikeLeftMs.store(now);}
@@ -925,6 +941,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     }
                     if(heavyUntil){if(play&&now<heavyUntil)pad.buttons|=evr::motion::LivePadMapper::X;else heavyUntil=0;}
                     if(swing.fired){
+                        strokeMs.store(now);   // the hit volume's sweep starts here (motion_collider_apply.hpp sweepFromPress)
                         if(observeMeleeNative){const auto running=observeMeleeNative();std::lock_guard<std::mutex> lock(livePressMutex);
                             liveAttackPress={running.valid?running.entity:0u,uint32_t(weapon.binding>>32),running.triggerTime,now,liveAttackPress.serial+1};
                             if(cooldown)liveCooldown.expect(liveAttackPress.serial,heavyUntil?liveHeavyHoldMs:0);}
@@ -1409,6 +1426,22 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                             logFile->event("room_sneak",s.str());}
                     }
                 }
+                // Swimming by the arms (include/evr/swim_stroke.hpp; VR settings, [Body] ArmSwim): the strokes' velocity is
+                // added to the left stick while the character is in the water.
+                {static uint64_t swimFrame=0;static evr::motion::SwimStrokeResult swim;static bool wasMoving=false;static unsigned lines=0,strokeFrames=0;
+                 const bool inWater=armSwimOn.load()&&actorSwimming&&actorSwimming(now)&&fresh&&mapped.valid&&screenKind==evr::motion::LiveScreen::Gameplay&&!value.active;
+                 if(hands.frame!=swimFrame||!inWater){swimFrame=hands.frame;
+                    evr::motion::GestureHead swimHead;{std::lock_guard<std::mutex> lock(gestureMutex);swimHead=gestureHead;}
+                    swim=swimStroke.update(hands,swimHead.pose,inWater&&(swimHead.flags&15)==15);}
+                 if(swim.moving){
+                    pad.leftX=int16_t(std::clamp<long>(long(pad.leftX)+std::lround(swim.stickX*32767),-32767,32767));
+                    pad.leftY=int16_t(std::clamp<long>(long(pad.leftY)+std::lround(swim.stickY*32767),-32767,32767));}
+                 const bool sample=swim.stroking&&strokeFrames++%30==0;
+                 if((swim.moving!=wasMoving||sample)&&lines<600){++lines;
+                    std::ostringstream s;s<<std::setprecision(3)<<"\"frame\":"<<hands.frame<<",\"moving\":"<<(swim.moving?"true":"false")<<",\"stroking\":"<<(swim.stroking?"true":"false")
+                     <<",\"hands\":["<<swim.counted[0]<<','<<swim.counted[1]<<"],\"velocity\":["<<swim.velocity.x<<','<<swim.velocity.z<<"],\"wanted\":["<<swim.wanted.x<<','<<swim.wanted.z<<"],\"stick\":["<<swim.stickX<<','<<swim.stickY<<']';
+                    logFile->event("swim_stroke",s.str());}
+                 wasMoving=swim.moving;}
                 publishLive(pad);
                 liveWieldBusy.store(!fresh||screenKind!=evr::motion::LiveScreen::Gameplay||value.active||bool(pad.buttons&evr::motion::LivePadMapper::RB));
                 static uint64_t lastScope=0;if(!fresh&&lastScope&&now>lastScope)liveStaleMs+=std::min<uint64_t>(now-lastScope,1000);lastScope=now;

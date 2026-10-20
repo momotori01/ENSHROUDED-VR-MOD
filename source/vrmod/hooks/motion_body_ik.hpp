@@ -60,17 +60,30 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
            scale.x>.1f&&scale.x<10.f&&scale.y>.1f&&scale.y<10.f&&scale.z>.1f&&scale.z<10.f){
             const int axis=extent.z>=extent.x&&extent.z>=extent.y?2:extent.x>=extent.y?0:1;
             const float e[3]{extent.x,extent.y,extent.z},l[3]{lo.x,lo.y,lo.z},h[3]{hi.x,hi.y,hi.z};float tail[3]{(l[0]+h[0])*.5f,(l[1]+h[1])*.5f,(l[2]+h[2])*.5f};
-            // Which end is the head: where the fish swam during the fight (attachment_observer.hpp swim: its moves along its own
-            // axes, head first), when it swam 0.5 m or more and mostly along this axis; else the guess above (the maximum).
-            const float swum=m.swimMetres,along=m.swim[size_t(axis)];const bool bySwim=swum>=.5f&&std::abs(along)>=.3f*swum;
-            const bool headAtMaximum=bySwim?along>0:true;
+            // Which end is the head (2026-10-20, headset run 20261020-100726, report 100946): the fish swam 41 m toward its
+            // axis's maximum during the fight, and hung with its tail fin down - held by the head: it is reeled in tail first
+            // (it pulls away), so the swim does not tell the head. The head is at the long axis's minimum (that fish; the
+            // swim is still recorded). EVR_FISH_HEAD_AT_MAX=1: the other end.
+            const float swum=m.swimMetres,along=m.swim[size_t(axis)];const bool bySwim=false;
+            static const bool headAtMax=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_HEAD_AT_MAX",v,sizeof v);return n==1&&v[0]=='1';}();
+            const bool headAtMaximum=headAtMax;
             tail[axis]=headAtMaximum?l[axis]+.08f*e[axis]:h[axis]-.08f*e[axis];
             Vec3 lengthwise{0,0,0},up{0,1,0};(axis==0?lengthwise.x:axis==1?lengthwise.y:lengthwise.z)=headAtMaximum?1.f:-1.f;if(axis==1)up={0,0,1};
             // The palm (the left socket) in the world, and the character's forward there.
             const auto palm=rotate(modelQ,Vec3{gs[socket].position.x*modelScale.x,gs[socket].position.y*modelScale.y,gs[socket].position.z*modelScale.z});
+            // Fixed in the hand (2026-10-20, user: "can its angle follow the hand too"): the head out of the fist's little-finger
+            // side - the socket is the controller's grip (include/evr/body_ik.hpp puts it on the target), whose -Z a held
+            // sword's blade follows - and its back toward the grip's +Y; the fish turns with the hand. EVR_FISH_HANG=1: it
+            // hangs straight down from the palm, its back toward the character's forward (before).
+            static const bool hang=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_HANG",v,sizeof v);return n==1&&v[0]=='1';}();
+            const auto handQ=normalized(multiply(modelQ,gs[socket].orientation));
             const Vec3 down{0,-1,0};const auto forward=rotate(modelQ,Vec3{0,0,1});
-            const auto first=motion::alignDirections(lengthwise,down);
-            const auto upNow=rotate(first,up);Vec3 a{upNow.x,0,upNow.z},b{forward.x,0,forward.z};
+            const auto towardHead=hang?down:rotate(handQ,Vec3{0,0,1}),backToward=hang?forward:rotate(handQ,Vec3{0,1,0});
+            const auto first=motion::alignDirections(lengthwise,towardHead);
+            // then about that line, the back toward its side (both taken square to the line)
+            const auto upNow=rotate(first,up);
+            const auto square=[&](Vec3 v){return v-towardHead*dot(v,towardHead);};
+            Vec3 a=square(upNow),b=square(backToward);
             Quat o=first;
             if(length(a)>.05f&&length(b)>.05f)o=normalized(multiply(motion::alignDirections(a*(1/length(a)),b*(1/length(b))),first));
             const Vec3 tailScaled{tail[0]*scale.x,tail[1]*scale.y,tail[2]*scale.z};
@@ -83,7 +96,7 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
                 {std::lock_guard<std::mutex> lock(attachmentObserver::followMutex);if(auto* f=attachmentObserver::fishModelOf(fish,false))f->written=pose;}
                 static unsigned tailLogs=0;if(tailLogs++<8||tailLogs%600==0)logFile->event("fishing_fish_tail_grip","\"fish\":"+std::to_string(fish)+",\"character\":"+std::to_string(character)+
                     ",\"bounds_min\":["+std::to_string(lo.x)+","+std::to_string(lo.y)+","+std::to_string(lo.z)+"],\"bounds_max\":["+std::to_string(hi.x)+","+std::to_string(hi.y)+","+std::to_string(hi.z)+
-                    "],\"scale\":["+std::to_string(scale.x)+","+std::to_string(scale.y)+","+std::to_string(scale.z)+"],\"long_axis\":"+std::to_string(axis)+",\"tail_at_minimum\":"+(headAtMaximum?"true":"false")+",\"head_by\":\""+(bySwim?"swim":"guess")+"\",\"swum_m\":"+std::to_string(swum)+",\"swum_along_axis_m\":"+std::to_string(along)+",\"holds\":"+std::to_string(tailLogs));
+                    "],\"scale\":["+std::to_string(scale.x)+","+std::to_string(scale.y)+","+std::to_string(scale.z)+"],\"long_axis\":"+std::to_string(axis)+",\"tail_at_minimum\":"+(headAtMaximum?"true":"false")+",\"head_by\":\""+(hang?"hang":bySwim?"swim":"model")+"\",\"swum_m\":"+std::to_string(swum)+",\"swum_along_axis_m\":"+std::to_string(along)+",\"holds\":"+std::to_string(tailLogs));
                 return true;}
         }
     }catch(const std::exception&){}

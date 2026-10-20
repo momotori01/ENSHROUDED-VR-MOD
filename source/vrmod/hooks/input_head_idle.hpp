@@ -255,6 +255,7 @@ inline void patch(const game::ClientInputBytes& source,game::ClientInputBytes& o
         logFile->event(walkingRequested?"input_head_walking_sample":"input_head_idle_sample",out.str());
     }
     holsterInput::apply(source,output,tick);
+    if(holsterInput::requested)game::applyAreaLoot(output,GetTickCount64());
     // A watch on "the stick is pushed and the player does not move" (headset run game-20261013-105615: after the second
     // respawn the player could not walk for the rest of the run, while guard and quick slot worked; the samples above
     // had run out long before, so the record could not tell whether the stick reached the game). Read-only: the left

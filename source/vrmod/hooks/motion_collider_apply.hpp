@@ -45,6 +45,37 @@ inline void sweepFromTip(const motion::ColliderPose& pose,const std::array<uint8
  std::memcpy(previous.data(),&start,24);std::memcpy(previous.data()+24,current.data()+24,16);
  lastTipSweepMetres=tipWay;++tipSweeps;
 }
+// The sweep from the press (2026-10-20, user: "strokes at pots miss although I swung close - like the fix for the enemies,
+// can't everything breakable the blade passed during the attack be hit?"). Headset run 20261020-100726: the game's hit
+// volume came 80 ms after a stroke's press and lasted 150 ms; its first update stood at the blade without a sweep (the
+// previous transform the same as the current), so where the blade went in those 80 ms - with a fast stroke 0.4..0.8 m,
+// past a pot 0.5 m across - was never in the volume. The first two updates of a hit volume now sweep from where the tip
+// was when the stroke pressed the attack (the shown weapon's pose then, motionColliderChannel::past) to where it is,
+// as sweepFromTip does between two updates: what the blade passed from the press on is in the sweep. At most 300 ms
+// back and 2 m. EVR_MELEE_CATCH_UP=0: off.
+inline const bool catchUp=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MELEE_CATCH_UP",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline motion::ColliderKey catchKey{};inline unsigned catchUpdates=0;inline double lastCatchUpMetres=0;inline uint64_t lastCatchUpMs=0;inline std::atomic<unsigned> catchUps{0};
+inline void sweepFromPress(const motion::ColliderPose& pose,const motion::ColliderKey& key,bool continuous,const std::array<uint8_t,56>& native,const std::array<uint8_t,56>& current,std::array<uint8_t,72>& previous){
+ lastCatchUpMetres=0;lastCatchUpMs=0;
+ if(!continuous){catchKey=key;catchUpdates=0;}else if(catchKey==key)++catchUpdates;else return;
+ if(!catchUp||catchUpdates>1||!(pose.tipY>.2f&&pose.tipY<4.f))return;
+ const auto stroke=controllerUiFixture::strokeMs.load();
+ if(!stroke||pose.milliseconds<stroke||pose.milliseconds-stroke>300)return;
+ motion::ColliderPose then;if(!motionColliderChannel::pastAt(stroke>10?stroke-10:stroke,pose.item,then)||then.milliseconds>=pose.milliseconds)return;
+ const auto was=motion::colliderTransform(then,native);
+ WorldPositionQ32 cp,pp;Quat cq,pq;std::memcpy(&cp,current.data(),24);std::memcpy(&cq,current.data()+24,16);std::memcpy(&pp,was.data(),24);std::memcpy(&pq,was.data()+24,16);
+ {const float a=cq.x*cq.x+cq.y*cq.y+cq.z*cq.z+cq.w*cq.w,b=pq.x*pq.x+pq.y*pq.y+pq.z*pq.z+pq.w*pq.w;if(!(a>.5f&&a<1.5f&&b>.5f&&b<1.5f))return;}
+ const Vec3 tip{0,pose.tipY,0};const Vec3 ct=rotate(normalized(cq),tip),pt=rotate(normalized(pq),tip);
+ const Vec3 grip{float(relativeQ32(pp.x,cp.x)),float(relativeQ32(pp.y,cp.y)),float(relativeQ32(pp.z,cp.z))};
+ const Vec3 shift=grip+pt-ct;const float way=length(shift);   // the tip then - the tip now
+ if(!std::isfinite(way)||way>2.f||way<.05f)return;
+ // only when it reaches further back than the sweep the update has already
+ WorldPositionQ32 ps;std::memcpy(&ps,previous.data(),24);const Vec3 had{float(relativeQ32(ps.x,cp.x)),float(relativeQ32(ps.y,cp.y)),float(relativeQ32(ps.z,cp.z))};
+ if(length(had)>=way)return;
+ WorldPositionQ32 start=cp;start.x+=int64_t(double(shift.x)*4294967296.);start.y+=int64_t(double(shift.y)*4294967296.);start.z+=int64_t(double(shift.z)*4294967296.);
+ std::memcpy(previous.data(),&start,24);std::memcpy(previous.data()+24,current.data()+24,16);
+ lastCatchUpMetres=way;lastCatchUpMs=pose.milliseconds-then.milliseconds;++catchUps;
+}
 struct PoseSeen {uint32_t item=0;uint64_t serial=0;int64_t predictedTime=0;WorldPositionQ32 position{};bool valid=false;};
 inline PoseSeen poseSeen;inline double lastLeadMetres=0;inline std::atomic<unsigned> leadApplied{0};
 inline void leadPosition(const motion::ColliderPose& pose,std::array<uint8_t,56>& current){
@@ -112,12 +143,13 @@ inline void begin(uintptr_t world,uint32_t entity,void* query,unsigned sample,co
   impactLifetime::tracked(world,entity,key.event);
   sourceQuery=q;scopeKey=key;cancelScope=false;lookupSeen=false;readySample=sample;
   // The game sweeps from the previous transform: the tracked weapon's own previous pose, or no sweep on the first update.
-  auto previous=sourcePrevious;if(q[3]){std::memcpy(previous.data(),decision.previous.data(),52);if(decision.continuous&&!remote)sweepFromTip(pose,current,previous);}
+  auto previous=sourcePrevious;if(q[3]){std::memcpy(previous.data(),decision.previous.data(),52);if(decision.continuous&&!remote)sweepFromTip(pose,current,previous);
+   if(!remote)sweepFromPress(pose,key,decision.continuous,sourceCurrent,current,previous);}
   borrow.open(q,current,previous);activeScope=true;++outstanding;++opened;++applied;if(decision.continuous)++liveContinuous;
   if(liveLogged.fetch_add(1)<400||!(liveLogged.load()%20))logFile->event("motion_collider_apply_begin","\"ready_sample\":"+std::to_string(sample)+",\"entity\":"+std::to_string(entity)+",\"frame\":"+std::to_string(pose.frame)+",\"collider_before\":"+std::to_string(id)+
    ",\"original_current\":"+jsonString(nativeImpactComponents::asHex(sourceCurrent))+",\"applied_current\":"+jsonString(nativeImpactComponents::asHex(current))+
    ",\"original_previous\":"+jsonString(nativeImpactComponents::asHex(sourcePrevious))+",\"applied_previous\":"+jsonString(nativeImpactComponents::asHex(previous))+
-   ",\"previous_present\":"+(q[3]?"true":"false")+",\"live\":true,\"continuous\":"+(decision.continuous?"true":"false")+",\"item\":"+std::to_string(pose.item)+",\"hit_scale\":"+std::to_string(hitScale)+",\"tip_y\":"+std::to_string(pose.tipY)+",\"tip_sweep_metres\":"+std::to_string(lastTipSweepMetres)+",\"lead_ms\":"+std::to_string(colliderLeadMs)+",\"lead_metres\":"+std::to_string(remote?0.:lastLeadMetres)+",\"remote\":"+(remote?"true":"false")+",\"ecs_written_by_mod\":false");
+   ",\"previous_present\":"+(q[3]?"true":"false")+",\"live\":true,\"continuous\":"+(decision.continuous?"true":"false")+",\"item\":"+std::to_string(pose.item)+",\"hit_scale\":"+std::to_string(hitScale)+",\"tip_y\":"+std::to_string(pose.tipY)+",\"tip_sweep_metres\":"+std::to_string(lastTipSweepMetres)+",\"from_press_metres\":"+std::to_string(remote?0.:lastCatchUpMetres)+",\"from_press_ms\":"+std::to_string(remote?0:lastCatchUpMs)+",\"lead_ms\":"+std::to_string(colliderLeadMs)+",\"lead_metres\":"+std::to_string(remote?0.:lastLeadMetres)+",\"remote\":"+(remote?"true":"false")+",\"ecs_written_by_mod\":false");
   return;
  }
  const bool forced=cancelAfter&&applied.load()>=cancelAfter;

@@ -294,7 +294,7 @@ void begin(){
     if(!readFile(g.ini,g.iniText))say("settings: "+narrow(g.ini)+" is not there; the defaults are used (VR off)");
     g.values=evr::settings::read(g.iniText);
     say("settings: VR="+std::to_string(int(g.values.vr))+" Sync="+std::to_string(int(g.values.online))+" RenderScale="+evr::settings::text(g.values.renderScale)+" Dlss="+g.values.dlss+
-        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+(given?" (from EVR_AUTO_INI)":""));
+        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+(given?" (from EVR_AUTO_INI)":""));
     if(!supportedBuild()){restoreRenderSettings();status("Off: this version of the game is not the one the mod was made for (the game was updated?); the game runs without the mod");return;}
     const bool hooks=exists(g.paths.bin+L"\\evr_hooks.dll");
     const bool runtime=onSearchPath(L"vcruntime140.dll")&&onSearchPath(L"vcruntime140_1.dll")&&onSearchPath(L"msvcp140.dll");
@@ -327,6 +327,8 @@ void begin(){
         for(const auto& variable:start::vrEnvironment(g.paths,shaders,g.values.online,g.values.renderScale,g.values.alternateEyes,g.values.eyeWarp))setEnvironment(variable.first,variable.second);
         // Real crouching (2026-10-18): how it begins, and the file the game's start menu (VR settings) writes its changes into.
         setEnvironment(L"EVR_ROOM_SNEAK",g.values.realCrouch?L"":L"0");setEnvironment(L"EVR_CROUCH_DROP",std::to_wstring(g.values.crouchDrop));setEnvironment(L"EVR_SETTINGS_INI",g.ini);
+        // The stroke's speed and swimming by the arms (2026-10-20), changeable there too.
+        setEnvironment(L"EVR_SWING_SPEED",std::to_wstring(g.values.swingSpeed));setEnvironment(L"EVR_ARM_SWIM",g.values.armSwim?L"":L"0");
         // The mod's Vulkan layer prepares OpenXR only with the runtime named by an absolute path (layer/xr_preflight.hpp).
         // Without XR_RUNTIME_JSON it is the PC's own active runtime, named here. First headset start from Steam,
         // 2026-10-14 12:39: "preflight requires explicit absolute runtime/loader paths" - the Mock tests had always

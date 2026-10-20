@@ -72,6 +72,8 @@ private:
  static int16_t axis(float v){return int16_t(std::lround(std::clamp(v,-1.f,1.f)*32767));}
  static uint8_t trigger(float v){return uint8_t(std::lround(std::clamp(v,0.f,1.f)*255));}
 public:
+ // The left trigger is interacting (pulled past 85 %, until under 50 %).
+ bool leftInteract()const{return leftInteract_;}
  // Mapping and frame identity come from VerticalStickMapping; invalid means a neutral pad.
  LivePadState update(LiveScreen screen,const VerticalStickResult& mapped,const HandFrame& hands,bool wieldGrip=false){
   LivePadState out;
