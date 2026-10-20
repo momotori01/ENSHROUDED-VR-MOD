@@ -69,8 +69,13 @@ inline std::atomic<bool> mouseHeld{false};          // a pull is being given to 
 inline bool mouseFirst=true;
 inline std::atomic<bool> wantMouse{false};
 inline std::atomic<unsigned> mouseModeSet{0};
-inline unsigned downIn=0;                           // frames until the pull's button is posted (the place goes first)
-inline unsigned rightDownIn=0;                      // the same for the right button (the left A, 2026-10-20)
+// A button's way to the game (keepPad): the place first, the button down after the lead frames, up at least
+// minimumDownFrames after its down (2026-10-20 17:40, user: "with the pointer the stack's menu needs several presses -
+// unsteady"; headset run 20261020-172049: the right A was held 130..160 ms, under the 6 lead frames at the menu's ~35
+// frames a second, so its down and its up went in one frame - a whole click, which the game often did not take).
+constexpr unsigned minimumDownFrames=3;
+struct Posted {unsigned downIn=0,upIn=0,sinceDown=0;bool upLater=false,down=false;bool busy()const{return downIn||upIn||upLater||down;}};
+inline Posted leftPosted,rightPosted;
 // 6 frames (headset run 13:30: items of the backpack took no click or drag with 2 - guess: the game turns to its mouse mode and
 // moves its focus under the cursor a frame or two after the first move)
 inline unsigned leadFrames=6;
@@ -197,7 +202,7 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
         if(ray){
             shown=slack.filter(spot,buttons.left);
             lastClient={shown.pixelX,shown.pixelY};
-            if(gameMouse&&(!keepPad||buttons.left||downIn)){PostMessageW(h,WM_MOUSEMOVE,downIn?0:keys(),MAKELPARAM(lastClient.x,lastClient.y));++moves;postedAt=now;}   // before the button: no button in the move
+            if(gameMouse&&(!keepPad||buttons.left||leftPosted.downIn)){PostMessageW(h,WM_MOUSEMOVE,leftPosted.downIn?0:keys(),MAKELPARAM(lastClient.x,lastClient.y));++moves;postedAt=now;}   // before the button: no button in the move
         }else slack.filter(spot,false);
         const bool onOverlay=ray&&overlayButtonAt&&client.right>0&&client.bottom>0&&overlayButtonAt(float(shown.pixelX)/float(client.right),float(shown.pixelY)/float(client.bottom),open);
         if(change.leftDown&&onOverlay){overlayPress=true;if(overlayButtonPress)overlayButtonPress();logFile->event("menu_pointer_overlay_press","\"screen\":"+std::to_string(unsigned(open))+",\"frame\":"+std::to_string(f.frame));}
@@ -208,27 +213,28 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
         else if(h&&lastClient.x>=0){
             const auto place=MAKELPARAM(lastClient.x,lastClient.y);
             if(change.any()&&!ray){PostMessageW(h,WM_MOUSEMOVE,keys(),place);++moves;} // a release after the ray has gone
-            // keepPad: the place goes first (posted above while the pull waits), the button two frames later
-            if(change.leftDown&&!overlayPress){
-                if(keepPad){if(!ray){PostMessageW(h,WM_MOUSEMOVE,0,place);++moves;}downIn=leadFrames;mouseHeld=true;wantMouse=mouseFirst;postedAt=now;}
-                else{PostMessageW(h,WM_LBUTTONDOWN,keys(),place);++clicks;postedAt=now;}}
-            else if(downIn&&--downIn==0){PostMessageW(h,WM_LBUTTONDOWN,MK_LBUTTON,place);++clicks;postedAt=now;}
-            if(change.leftUp){if(overlayPress)overlayPress=false;else{
-                if(downIn){downIn=0;PostMessageW(h,WM_LBUTTONDOWN,MK_LBUTTON,place);++clicks;}   // let go before its button went: a whole click
-                PostMessageW(h,WM_LBUTTONUP,keys(),place);++clicks;postedAt=now;}
-                mouseHeld=false;wantMouse=false;}
-            // The right button (the left A since 2026-10-20) goes as the left one: the place first and the game's mouse mode,
-            // held while it is down, and the pad's mode back 0.25 s after it (input_ui_observer.hpp waits on postedAt and
-            // mouseHeld). Headset run 20261020-125439: posted alone, it left the game in its mouse mode for the rest of the
-            // run - the keyboard's prompts in play and the pad's menu actions (splitting a stack) not taken.
-            if(change.rightDown){
-                if(keepPad){PostMessageW(h,WM_MOUSEMOVE,0,place);++moves;rightDownIn=leadFrames;mouseHeld=true;wantMouse=mouseFirst;postedAt=now;}
-                else{PostMessageW(h,WM_RBUTTONDOWN,keys(),place);++clicks;postedAt=now;}}
-            else if(rightDownIn&&--rightDownIn==0){PostMessageW(h,WM_RBUTTONDOWN,MK_RBUTTON,place);++clicks;postedAt=now;}
-            if(change.rightUp){
-                if(rightDownIn){rightDownIn=0;PostMessageW(h,WM_RBUTTONDOWN,MK_RBUTTON,place);++clicks;}
-                PostMessageW(h,WM_RBUTTONUP,keys(),place);++clicks;postedAt=now;
-                if(!buttons.left){mouseHeld=false;wantMouse=false;}}
+            // keepPad: the place goes first (posted above while the pull waits), the button after the lead frames, and its up
+            // at least minimumDownFrames after its down (Posted above). The left button is the trigger, the right one the
+            // right A (17:20).
+            const auto run=[&](Posted& b,bool pressed,bool released,UINT downMessage,UINT upMessage,WPARAM mask){
+                bool upNow=false;
+                if(b.upIn&&--b.upIn==0)upNow=true;
+                if(pressed){b=Posted{};
+                    if(keepPad){PostMessageW(h,WM_MOUSEMOVE,0,place);++moves;b.downIn=leadFrames;mouseHeld=true;wantMouse=mouseFirst;postedAt=now;}
+                    else{PostMessageW(h,downMessage,keys()|mask,place);++clicks;b.down=true;postedAt=now;}}
+                else if(b.downIn){if(--b.downIn==0){PostMessageW(h,downMessage,keys()|mask,place);++clicks;b.down=true;b.sinceDown=0;postedAt=now;
+                    if(b.upLater){b.upLater=false;b.upIn=minimumDownFrames;}}}
+                else if(b.down&&b.sinceDown<1000)++b.sinceDown;
+                if(released){if(b.downIn)b.upLater=true;else if(b.down&&b.sinceDown<minimumDownFrames)b.upIn=minimumDownFrames-b.sinceDown;else upNow=true;}
+                if(upNow&&b.down){PostMessageW(h,upMessage,keys()&~mask,place);++clicks;b=Posted{};postedAt=now;
+                    if(!leftPosted.busy()&&!rightPosted.busy()&&!buttons.left&&!buttons.right){mouseHeld=false;wantMouse=false;}}
+            };
+            const bool leftPress=change.leftDown&&!onOverlay&&!overlayPress;
+            if(change.leftDown&&onOverlay)leftPosted=Posted{};
+            bool leftRelease=change.leftUp;if(change.leftUp&&overlayPress){overlayPress=false;leftRelease=false;}
+            run(leftPosted,leftPress,leftRelease,WM_LBUTTONDOWN,WM_LBUTTONUP,MK_LBUTTON);
+            run(rightPosted,change.rightDown,change.rightUp,WM_RBUTTONDOWN,WM_RBUTTONUP,MK_RBUTTON);
+            if(change.leftUp&&!leftPosted.busy()&&!rightPosted.busy()&&!buttons.right){mouseHeld=false;wantMouse=false;}
         }
         trigger=buttons.takesTrigger();primary=gameMouse&&buttons.takesSecondary();secondary=false;
         // The dot: where the cursor is (a held click keeps its place), larger and green while a button is down. Only

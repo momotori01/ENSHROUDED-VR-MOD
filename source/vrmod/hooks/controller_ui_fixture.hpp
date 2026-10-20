@@ -240,7 +240,7 @@ inline int32_t (*targetHealth)(uint32_t)=nullptr;
 // near one (within 0.25 m of that) and turns away from it. Each thing once a stroke. A thing whose health drops or that
 // breaks (no longer kept) without having been touched so - a tool's stroke at a big tree - stops it then, as the game's
 // hit comes. The hand that struck stops, both with a two-hand weapon (include/evr/hit_stop.hpp, in
-// view_resource_probe.cpp). EVR_HIT_STOP=0 in the game's environment: no stop. Mining the ground touches no thing: no
+// view_resource_probe.cpp). EVR_HIT_STOP=0 in the game's environment (or the VR settings, [Melee] HitStop): no stop. Mining the ground touches no thing: no
 // stop there (the game does not shake the pad either - native_rumble, none in that run).
 struct HitNear {uint32_t entity=0;float distance=0,body=0,reach=0;int32_t state=-1;bool character=false;};
 inline size_t (*hitWatchNear)(const evr::motion::LiveMeleeWeapon&,float,HitNear*,size_t,uint64_t)=nullptr;
@@ -250,7 +250,8 @@ struct HitWatch {uint64_t from=0,until=0;unsigned hands=0;double seconds=0;bool 
 inline HitWatch hitWatch;
 // To the frame that shows the hands: the latest stop asked (serial), which hands (bit 0 left, bit 1 right), how long (ms).
 inline std::atomic<uint32_t> hitStopSerial{0},hitStopHands{0},hitStopMs{0};
-inline const bool hitStopWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_HIT_STOP",v,sizeof v);return !(n==1&&v[0]=='0');}();
+// On or off: the VR settings ([Melee] HitStop, EVR_HIT_STOP=0 from the loader; changed in the game's start menu, 17:40).
+inline std::atomic<bool> hitStopOn{true};
 struct StrokeOutcome {uint32_t entity=0;int32_t before=-1;uint64_t at=0,frame=0;float stick=0,metres=0;bool ahead=false;unsigned serial=0;};
 inline StrokeOutcome strokeOutcome;
 inline bool liveMeleeTargetGate=false;inline TargetNear(*targetNear)(const evr::motion::LiveMeleeWeapon&,uint64_t)=nullptr;
@@ -314,14 +315,20 @@ inline void applyBowHaptic(evr::motion::GestureFeedbackResult& command,const evr
   // 17:20 (user after the headset run 20261020-165058: "the vibration while it is only pecked at does not seem to come"):
   // 18 lasted 1.0 s there (17 for 20 s before it, then 21), and one pulse of 40 ms at 0.25 was not felt - now a double tap,
   // 50 ms at 0.45 twice 150 ms apart, as a peck, when 18 begins and every 3 s in it.
+  // 17:40 (user: "I could not tell the vibration - did it come in the log?"; run 20261020-172049: 18 came three times, 2.0,
+  // 0.6 and 5.1 s, and the layer's record of the vibrations sent had stopped at its 300th long before): as strong as the
+  // strike's (0.6, which was felt), 80 ms twice 200 ms apart; each pulse on record (fishing_bite_haptic).
   static int lastState=-1;static uint64_t stateSince=0,pulseUntil=0;static float pulseAmplitude=0;static uint64_t nextPeck=0,secondTap=0;
   const int state=fishingState.load();const auto at=fishingStateMs.load();const bool current=at&&now>=at&&now-at<=500;
   const int s=current?state:-1;
+  const auto pulse=[&](uint64_t ms,float amplitude,const char* what){pulseUntil=now+ms;pulseAmplitude=amplitude;
+   static unsigned told=0;if(told++<300&&logFile)logFile->event("fishing_bite_haptic","\"state\":"+std::to_string(s)+",\"what\":\""+what+"\",\"ms\":"+std::to_string(ms)+",\"amplitude\":"+std::to_string(amplitude)+
+    ",\"hand_tracked\":"+(hands.focused&&hands.hands[1].tracked()?"true":"false")+",\"milliseconds\":"+std::to_string(now));};
   if(s!=lastState){lastState=s;stateSince=now;secondTap=0;
-   if(bite&&s==18){pulseUntil=now+50;pulseAmplitude=.45f;secondTap=now+150;nextPeck=now+3000;}
-   else if(bite&&s==21){pulseUntil=now+150;pulseAmplitude=.6f;}}
-  else if(bite&&s==18&&now>=nextPeck){pulseUntil=now+50;pulseAmplitude=.45f;secondTap=now+150;nextPeck=now+3000;}
-  if(bite&&s==18&&secondTap&&now>=secondTap){pulseUntil=now+50;pulseAmplitude=.45f;secondTap=0;}
+   if(bite&&s==18){pulse(80,.6f,"peck");secondTap=now+200;nextPeck=now+3000;}
+   else if(bite&&s==21){pulse(150,.6f,"strike");}}
+  else if(bite&&s==18&&now>=nextPeck){pulse(80,.6f,"peck");secondTap=now+200;nextPeck=now+3000;}
+  if(bite&&s==18&&secondTap&&now>=secondTap){pulse(80,.6f,"peck_second");secondTap=0;}
   if(pulseUntil>now&&hands.focused&&hands.hands[1].tracked()){
    // at most 100 ms a frame (the layer rejects longer - evrNativeGestureHaptic; 13:43 and 13:48 the 150 ms of state 21
    // were rejected, the frame's motion visuals failed and VR fell back to the flat plate: "the view went third person")
@@ -1014,7 +1021,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     }
                     if(heavyUntil){if(play&&now<heavyUntil)pad.buttons|=evr::motion::LivePadMapper::X;else heavyUntil=0;}
                     // The hit stop's watch (hitWatch above): the blade of the stroke against what is near it, every frame for 0.7 s.
-                    if(hitStopWanted&&hitWatch.until&&hitWatchState&&hitWatchNear){
+                    if(hitStopOn.load()&&hitWatch.until&&hitWatchState&&hitWatchNear){
                         if(now>=hitWatch.until)hitWatch=HitWatch{};
                         else{
                             const auto stop=[&](const HitWatch::Item& it,const char* by,float distance,int32_t is){
@@ -1056,7 +1063,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         strokeOutcome={};}
                     if(swing.fired){
                         strokeMs.store(now);
-                        if(hitStopWanted&&hitWatchNear){   // the hit stop's watch from this stroke on (it looks from the next frame)
+                        if(hitStopOn.load()&&hitWatchNear){   // the hit stop's watch from this stroke on (it looks from the next frame)
                             hitWatch=HitWatch{};hitWatch.from=now;hitWatch.until=now+700;hitWatch.left=leftStruck;hitWatch.binding=weapon.binding;
                             hitWatch.hands=weapon.twoHanded?3u:(leftStruck?1u:2u);hitWatch.seconds=evr::motion::hitStopSeconds(weapon.weaponType==255||!weapon.needsTarget,weapon.twoHanded);}
                         {static unsigned serial=0;strokeOutcome.entity=target.entity;strokeOutcome.before=targetHealth&&target.entity?targetHealth(target.entity):-1;strokeOutcome.at=now;strokeOutcome.frame=hands.frame;

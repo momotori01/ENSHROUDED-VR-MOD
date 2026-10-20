@@ -45,7 +45,7 @@ inline std::mutex mutex;
 inline std::string language;inline evr::bugreport::Texts texts;
 // The panel over the start menu: its place on the UI image and its picture's size (the picture is drawn at about
 // the UI's pixel size of 1920 x 1080); the button is its top part.
-constexpr float panelU0=.30f,panelV0=.47f;constexpr uint32_t panelW=1200,panelH=450,buttonW=640,buttonH=84;   // wide: the note's lines as written, none wrapped
+constexpr float panelU0=.30f,panelV0=.47f;constexpr uint32_t panelW=1200,panelH=510,buttonW=640,buttonH=84;   // wide: the note's lines as written, none wrapped
 constexpr float panelU1=panelU0+panelW/1920.f,panelV1=panelV0+panelH/1080.f,buttonU1=panelU0+buttonW/1920.f,buttonV1=panelV0+buttonH/1080.f;
 // The line on the plate while recording / making / done.
 constexpr float lineU0=.015f,lineV0=.012f;constexpr uint32_t lineW=760,lineH=52;
@@ -123,11 +123,11 @@ inline std::vector<uint8_t> render(uint32_t w,uint32_t h,const std::vector<Block
 // What the panel shows, as one number: a change of any part draws it again.
 inline uint64_t look(int kind){
     return uint64_t(kind&3)|uint64_t(hoverHit.load()&15)<<2|uint64_t(settingsOpen.load()?1:0)<<6|uint64_t(controllerUiFixture::roomSneakOn.load()?1:0)<<7|uint64_t(controllerUiFixture::crouchDrop.load()&255)<<8|
-        uint64_t(sliderHeld.load()&15)<<16|uint64_t(noticeOn()?1:0)<<21|uint64_t(controllerUiFixture::swingPercent.load()&255)<<22|uint64_t(controllerUiFixture::armSwimOn.load()?1:0)<<30;
+        uint64_t(sliderHeld.load()&15)<<16|uint64_t(noticeOn()?1:0)<<21|uint64_t(controllerUiFixture::swingPercent.load()&255)<<22|uint64_t(controllerUiFixture::armSwimOn.load()?1:0)<<30|uint64_t(controllerUiFixture::hitStopOn.load()?1:0)<<31;
 }
 // The VR settings' values now.
 inline evr::vrpanel::Body currentBody(){
-    return {controllerUiFixture::roomSneakOn.load(),controllerUiFixture::crouchDrop.load(),controllerUiFixture::swingPercent.load(),controllerUiFixture::armSwimOn.load()};
+    return {controllerUiFixture::roomSneakOn.load(),controllerUiFixture::crouchDrop.load(),controllerUiFixture::swingPercent.load(),controllerUiFixture::armSwimOn.load(),controllerUiFixture::hitStopOn.load()};
 }
 inline RECT rectOf(const evr::vrpanel::Box& b){return {LONG(b.x0),LONG(b.y0),LONG(b.x1),LONG(b.y1)};}
 // kind 0 the button with its note, 1 armed; the VR settings' button beside it, and its rows instead of the note while open
@@ -151,7 +151,7 @@ inline void drawPanel(int kind){
         auto label=[&](int row,const std::wstring& text,bool dim){const auto cut=text.find(L'\n');const LONG y=LONG(rowY(row));
             b.push_back({{LONG(labelX0),y+2,LONG(labelX1),y+30},text.substr(0,cut),23,FW_SEMIBOLD,dim?RGB(118,112,102):RGB(230,222,206),0,0,0,0,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS,1});
             if(cut!=std::wstring::npos)b.push_back({{LONG(labelX0),y+30,LONG(labelX1),y+LONG(rowHeight)},text.substr(cut+1),17,FW_NORMAL,dim?RGB(100,95,88):RGB(150,142,128),0,0,0,0,DT_LEFT|DT_VCENTER|DT_SINGLELINE|DT_END_ELLIPSIS,1});
-            if(row<3)b.push_back({{LONG(labelX0),y+LONG(rowStep)-5,LONG(panelW)-30,y+LONG(rowStep)-4},L"",0,0,0,RGB(50,45,39),255,0,0,0});};
+            if(row<rows-1)b.push_back({{LONG(labelX0),y+LONG(rowStep)-5,LONG(panelW)-30,y+LONG(rowStep)-4},L"",0,0,0,RGB(50,45,39),255,0,0,0});};
         // on / off: two small pills, the chosen one filled
         auto pill=[&](const Box& box,const wchar_t* text,bool selected){const bool pointed=hit==box.hit;
             b.push_back({rectOf(box),text,19,selected?FW_BOLD:FW_SEMIBOLD,selected?RGB(26,21,16):pointed?RGB(246,238,220):RGB(168,160,146),selected?gold:pointed?RGB(52,46,38):RGB(26,22,19),uint8_t(selected?240:215),
@@ -168,10 +168,11 @@ inline void drawPanel(int kind){
         label(1,depth,!body.realCrouch);slider(dropSlider,sliderX(body.crouchDrop),body.realCrouch);
         label(2,swing,false);slider(swingSlider,swingX(body.swingSpeed),true);
         label(3,panelTexts.swim,false);pill(swimOn,panelTexts.on,body.armSwim);pill(swimOff,panelTexts.off,!body.armSwim);
+        label(4,panelTexts.hitStop,false);pill(hitStopOn,panelTexts.on,body.hitStop);pill(hitStopOff,panelTexts.off,!body.hitStop);
         std::wstring note=panelTexts.note;if(settingsIni.empty())note+=std::wstring(L"\n")+panelTexts.unsaved;
         b.push_back({{LONG(labelX0),LONG(noteTop),LONG(panelW)-30,LONG(panelH)-6},note,17,FW_NORMAL,RGB(140,133,120),0,0,0,0,DT_LEFT|DT_WORDBREAK|DT_EDITCONTROL});
     }
-    else if(kind==0)b.push_back({{0,LONG(buttonH)+10,LONG(panelW),LONG(panelH)},texts.description,26,FW_NORMAL,RGB(214,206,192),dark,190,0,0,DT_LEFT|DT_WORDBREAK|DT_EDITCONTROL});
+    else if(kind==0)b.push_back({{0,LONG(buttonH)+10,LONG(panelW),450},texts.description,26,FW_NORMAL,RGB(214,206,192),dark,190,0,0,DT_LEFT|DT_WORDBREAK|DT_EDITCONTROL});
     else b.push_back({{0,LONG(buttonH)+10,LONG(panelW),LONG(buttonH)+10+120},texts.armed,28,FW_SEMIBOLD,RGB(150,186,132),dark,200,0,0,DT_LEFT|DT_WORDBREAK|DT_EDITCONTROL});
     panel=render(panelW,panelH,b);drawnKind=kind;drawnLook=look(kind);
 }
@@ -198,11 +199,11 @@ inline bool saveBody(const evr::vrpanel::Body& body,std::string& why){
 // The values now (live at once), into the settings file when `save`, and on record (a slider's drag: up to 300).
 inline void changeBody(const evr::vrpanel::Body& before,const evr::vrpanel::Body& after,const char* press,const char* by,bool save){
     controllerUiFixture::roomSneakOn=after.realCrouch;controllerUiFixture::crouchDrop=after.crouchDrop;
-    controllerUiFixture::swingPercent=evr::settings::clampSwingSpeed(after.swingSpeed);controllerUiFixture::armSwimOn=after.armSwim;
+    controllerUiFixture::swingPercent=evr::settings::clampSwingSpeed(after.swingSpeed);controllerUiFixture::armSwimOn=after.armSwim;controllerUiFixture::hitStopOn=after.hitStop;
     std::string why;const bool saved=save&&saveBody(after,why);
     static unsigned drags=0;if(!save&&drags++>=300)return;
     logFile->event("vr_settings_changed","\"press\":\""+std::string(press)+"\",\"by\":\""+by+"\",\"real_crouch\":"+(after.realCrouch?"true":"false")+",\"crouch_drop_percent\":"+std::to_string(after.crouchDrop)+
-        ",\"before_percent\":"+std::to_string(before.crouchDrop)+",\"swing_speed_percent\":"+std::to_string(after.swingSpeed)+",\"swing_before_percent\":"+std::to_string(before.swingSpeed)+",\"arm_swim\":"+(after.armSwim?"true":"false")+",\"enter_ratio\":"+std::to_string(evr::vrpanel::enterRatio(after.crouchDrop))+",\"saved\":"+(saved?"true":"false")+(why.empty()?"":",\"not_saved\":"+jsonString(why))+
+        ",\"before_percent\":"+std::to_string(before.crouchDrop)+",\"swing_speed_percent\":"+std::to_string(after.swingSpeed)+",\"swing_before_percent\":"+std::to_string(before.swingSpeed)+",\"arm_swim\":"+(after.armSwim?"true":"false")+",\"hit_stop\":"+(after.hitStop?"true":"false")+",\"enter_ratio\":"+std::to_string(evr::vrpanel::enterRatio(after.crouchDrop))+",\"saved\":"+(saved?"true":"false")+(why.empty()?"":",\"not_saved\":"+jsonString(why))+
         ",\"frame\":"+std::to_string(liveFrame.frame));
 }
 // A press on the panel (the mutex held). testValue: the slider's value of a Mock's press (-1 from the pointer).

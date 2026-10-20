@@ -10,7 +10,10 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(apply(b,Hit::Settings).crouchDrop==30&&apply(b,Hit::BugReport).realCrouch&&apply(b,Hit::DropSlider).crouchDrop==30);
   // swimming by the arms and the stroke's speed (2026-10-20): on, 100 %
   ck(b.armSwim&&b.swingSpeed==100&&!apply(b,Hit::SwimOff).armSwim&&apply(apply(b,Hit::SwimOff),Hit::SwimOn).armSwim&&apply(b,Hit::SwingSlider).swingSpeed==100);
-  ck(isSlider(Hit::DropSlider)&&isSlider(Hit::SwingSlider)&&!isSlider(Hit::SwimOn)&&!isSlider(Hit::None));}
+  ck(isSlider(Hit::DropSlider)&&isSlider(Hit::SwingSlider)&&!isSlider(Hit::SwimOn)&&!isSlider(Hit::None));
+  // the hit stop (17:40): on unless switched off
+  ck(b.hitStop&&!apply(b,Hit::HitStopOff).hitStop&&apply(apply(b,Hit::HitStopOff),Hit::HitStopOn).hitStop&&!isSlider(Hit::HitStopOn));
+  ck(hitNamed("hit_stop_on")==Hit::HitStopOn&&hitNamed("hit_stop_off")==Hit::HitStopOff);}
  // The slider: the track's ends are 10 and 50 %, past them the same; every percent between can be reached and comes back.
  {ck(sliderDrop(trackX0)==10&&sliderDrop(trackX1)==50&&sliderDrop(dropSlider.x0)==10&&sliderDrop(dropSlider.x1)==50&&sliderDrop(-500)==10&&sliderDrop(5000)==50);
   ck(sliderDrop((trackX0+trackX1)/2)==30);
@@ -27,13 +30,17 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   const auto again=store(out,{true,43});ck(again.size()==out.size()&&evr::settings::read(again).realCrouch&&evr::settings::read(again).crouchDrop==43);
   const auto swim=store(again,{true,43,80,false});const auto w=evr::settings::read(swim);ck(w.swingSpeed==80&&!w.armSwim&&w.crouchDrop==43&&swim.size()==again.size()-1);
   ck(evr::settings::read(store(again,{true,43,147,true})).swingSpeed==145&&evr::settings::read(store(again,{true,43,999,true})).swingSpeed==150);
-  ck(hitNamed("lock_off")==Hit::None);}   // the lock-on row went with the option (2026-10-19 18:10)
+  ck(hitNamed("lock_off")==Hit::None);
+  // the hit stop into [Melee] HitStop and back (on unless set)
+  {Body off{true,43};off.hitStop=false;const auto h=store(again,off);ck(!evr::settings::read(h).hitStop&&h.find("HitStop=0")!=std::string::npos&&evr::settings::read(again).hitStop&&evr::settings::read(ini).hitStop);}}   // the lock-on row went with the option (2026-10-19 18:10)
  // The places: the two buttons always, the rows only while the settings are open.
  {ck(hitAt(10,10,false)==Hit::BugReport&&hitAt(700,40,false)==Hit::Settings&&hitAt(650,40,true)==Hit::None);
   // the slim rows (2026-10-20): crouch on / off, its depth, the stroke's speed, swimming on / off; the labels' side is no button
   ck(hitAt(1000,rowY(0)+26,false)==Hit::None&&hitAt(1000,rowY(0)+26,true)==Hit::CrouchOn&&hitAt(1100,rowY(0)+26,true)==Hit::CrouchOff&&hitAt(1068,rowY(0)+26,true)==Hit::None);
   ck(hitAt(720,rowY(1)+26,true)==Hit::DropSlider&&hitAt(1160,rowY(1)+26,true)==Hit::DropSlider&&hitAt(900,rowY(2)+26,true)==Hit::SwingSlider);
-  ck(hitAt(1000,rowY(3)+26,true)==Hit::SwimOn&&hitAt(1100,rowY(3)+26,true)==Hit::SwimOff&&hitAt(300,rowY(2)+26,true)==Hit::None&&hitAt(1000,rowY(4)+26,true)==Hit::None);
+  ck(hitAt(1000,rowY(3)+26,true)==Hit::SwimOn&&hitAt(1100,rowY(3)+26,true)==Hit::SwimOff&&hitAt(300,rowY(2)+26,true)==Hit::None&&hitAt(1000,rowY(5)+26,true)==Hit::None);
+  // the hit stop on / off (17:40), the fifth row
+  ck(hitAt(1000,rowY(4)+26,true)==Hit::HitStopOn&&hitAt(1100,rowY(4)+26,true)==Hit::HitStopOff&&hitAt(1000,rowY(4)+26,false)==Hit::None);
   ck(settingsButton.y1-settingsButton.y0<buttonHeight&&settingsButton.x1-settingsButton.x0<bugButton.x1-bugButton.x0);   // only the bug report's button stands out
   {const auto all=boxes(true);for(size_t i=0;i<all.size();++i)for(size_t j=i+1;j<all.size();++j){const auto& a=all[i];const auto& b=all[j];ck(a.x1<=b.x0||b.x1<=a.x0||a.y1<=b.y0||b.y1<=a.y0);}}   // no two overlap
   for(const auto& b:boxes(true))ck(b.y1<=noteTop);
@@ -41,7 +48,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   for(const auto& b:boxes(true))ck(b.x0>=0&&b.y0>=0&&b.x1<=width&&b.y1<=height&&b.x0<b.x1&&b.y0<b.y1);}
  // Every language of the bug report's button has its own texts (2026-10-19), each with the depth's one number.
  for(const char* l:{"japanese","german","french","spanish","latam","italian","polish","brazilian","portuguese","russian","ukrainian","schinese","tchinese","koreana","turkish","english","klingon"}){
-  const auto x=texts(l);ck(x.button&&x.crouch&&x.on&&x.off&&x.drop&&x.note&&x.unsaved&&x.swing&&x.swim&&std::wcschr(x.crouch,L'\n')&&std::wcschr(x.swing,L'\n')&&std::wcschr(x.swim,L'\n'));
+  const auto x=texts(l);ck(x.button&&x.crouch&&x.on&&x.off&&x.drop&&x.note&&x.unsaved&&x.swing&&x.swim&&x.hitStop&&std::wcschr(x.hitStop,L'\n')&&std::wcschr(x.crouch,L'\n')&&std::wcschr(x.swing,L'\n')&&std::wcschr(x.swim,L'\n'));
   wchar_t b[256]{};ck(std::swprintf(b,256,x.drop,42)>0&&std::wcsstr(b,L"42")!=nullptr);
   wchar_t c[256]{};ck(std::swprintf(c,256,x.swing,135)>0&&std::wcsstr(c,L"135")!=nullptr&&std::wcschr(c,L'%')!=nullptr);
   if(std::string(l)!="english"&&std::string(l)!="klingon")ck(std::wcscmp(x.button,texts("english").button)!=0);}

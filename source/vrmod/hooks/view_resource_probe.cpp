@@ -3587,7 +3587,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                 {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_CROUCH_DROP",v,sizeof v);if(m&&m<sizeof v){const int d=std::atoi(v);if(d>=evr::vrpanel::dropLow&&d<=evr::vrpanel::dropHigh)controllerUiFixture::crouchDrop=d;}}
                 // The stroke's speed and swimming by the arms (2026-10-20; [Melee] SwingSpeed, [Body] ArmSwim), changeable there too.
                 {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_SWING_SPEED",v,sizeof v);if(m&&m<sizeof v){const int d=std::atoi(v);if(d>=evr::settings::swingSpeedLow&&d<=evr::settings::swingSpeedHigh)controllerUiFixture::swingPercent=evr::settings::clampSwingSpeed(d);}}
-                controllerUiFixture::armSwimOn=on("EVR_ARM_SWIM");
+                controllerUiFixture::armSwimOn=on("EVR_ARM_SWIM");controllerUiFixture::hitStopOn=on("EVR_HIT_STOP");   // [Melee] HitStop (17:40)
                 // keen::actor::StateFlag InSneakMode (21); no sneak by crouching while Dead 7, Sitting 9, Sleeping 11, Climbing 34,
                 // ClimbingTransition 35, Attached 36, HangGliding 37, AttachedToHook 38, FloatingOnWater 43, UnderWater 44.
                 // Sneak is keen::ecs::PlayerInputType 55 in 1.0: its toggleConfig bit says whether a press switches it.
@@ -3600,7 +3600,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                     return true;};
                 motion::RoomCrouchSettings c;c.enter=evr::vrpanel::enterRatio(controllerUiFixture::crouchDrop.load());const motion::RecenterPoseSettings r;
                 std::ostringstream o;o<<std::setprecision(4)<<"\"room_sneak\":"<<(controllerUiFixture::roomSneakOn.load()?"true":"false")<<",\"crouch_drop_percent\":"<<controllerUiFixture::crouchDrop.load()
-                    <<",\"swing_speed_percent\":"<<controllerUiFixture::swingPercent.load()<<",\"arm_swim\":"<<(controllerUiFixture::armSwimOn.load()?"true":"false")<<",\"changeable_in_start_menu\":true,\"enter_ratio\":"<<c.enter<<",\"leave_ratio\":"<<c.enter*c.leave
+                    <<",\"swing_speed_percent\":"<<controllerUiFixture::swingPercent.load()<<",\"arm_swim\":"<<(controllerUiFixture::armSwimOn.load()?"true":"false")<<",\"hit_stop\":"<<(controllerUiFixture::hitStopOn.load()?"true":"false")<<",\"changeable_in_start_menu\":true,\"enter_ratio\":"<<c.enter<<",\"leave_ratio\":"<<c.enter*c.leave
                     <<",\"sneak_key\":\"L3\",\"recenter_pose\":"<<(controllerUiFixture::recenterPoseRequested?"true":"false")<<",\"pose_hands\":["<<r.side<<','<<r.ahead<<','<<r.radius<<"],\"pose_ms\":"<<r.hold
                     <<",\"runtime_reset\":true";
                 logFile->event("room_sneak_enabled",o.str());}}

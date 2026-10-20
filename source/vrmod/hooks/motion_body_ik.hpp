@@ -121,6 +121,44 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
                 return true;}
         }
     }catch(const std::exception&){}
+    // Not a fish - a boot in a net and the like (2026-10-20 17:40, user after the headset run 20261020-172049: "put the boot
+    // where the hand turns the reel's handle; check the model from the data - what is held is the net the boot is in, not
+    // the boot, and the boot and the water weeds hang down along gravity"; the game's hold put it 0.17..0.30 m from the
+    // palm, fishing_fish_held in_animated_hand_m): its top in the left fist - the socket, where a handle is held, as the
+    // reel's handle when reeling - and the rest hanging straight down, turned with the wrist. The model is taken as made
+    // hanging, +Y up (the boot's extent: Y -0.51 .. +0.26, its longest; Enshrouded's models stand on +Y), held a share of
+    // its height under its top (EVR_CATCH_GRIP_PERCENT=<0..45>, default 10). EVR_CATCH_HANG=0: the game's hold as before.
+    static const bool catchHang=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_CATCH_HANG",v,sizeof v);return !(n==1&&v[0]=='0');}();
+    if(catchHang&&!swamAsFish)try{
+        const auto resource=read<uintptr_t>(object+layout::modelResource);const auto descriptor=read<uintptr_t>(resource+layout::resourceDescriptor);
+        const auto lo=read<Vec3>(descriptor+16),hi=read<Vec3>(descriptor+32);Vec3 scale{1,1,1};std::memcpy(&scale,m.pose.data()+40,12);
+        const Vec3 extent=hi-lo;
+        if(finite(lo)&&finite(hi)&&finite(scale)&&extent.x>=0&&extent.y>.02f&&extent.z>=0&&std::max({extent.x,extent.y,extent.z})<4.f&&extent.y>=extent.x&&extent.y>=extent.z&&   // made standing: its height the longest
+           
+           scale.x>.1f&&scale.x<10.f&&scale.y>.1f&&scale.y<10.f&&scale.z>.1f&&scale.z<10.f){
+            static const float share=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_CATCH_GRIP_PERCENT",v,sizeof v);const float x=n&&n<sizeof v?float(std::atof(v)):10.f;return (x>=0.f&&x<=45.f?x:10.f)/100.f;}();
+            const Vec3 grip{(lo.x+hi.x)*.5f,hi.y-share*extent.y,(lo.z+hi.z)*.5f};
+            const Vec3 palm=rotate(modelQ,Vec3{gs[socket].position.x*modelScale.x,gs[socket].position.y*modelScale.y,gs[socket].position.z*modelScale.z});
+            // upright; its front (+Z) the way the fist points (the grip's -Z), level
+            const auto handQ=normalized(multiply(modelQ,gs[socket].orientation));
+            Vec3 ahead=rotate(handQ,Vec3{0,0,-1});ahead.y=0;
+            if(length(ahead)<.2f){ahead=rotate(modelQ,Vec3{0,0,1});ahead.y=0;}
+            const float yaw=std::atan2(ahead.x,ahead.z);
+            const Quat o=normalized(Quat{0,std::sin(yaw/2),0,std::cos(yaw/2)});
+            const Vec3 gripScaled{grip.x*scale.x,grip.y*scale.y,grip.z*scale.z};
+            const auto origin=palm-rotate(o,gripScaled);
+            if(finite(origin)&&length(origin)<4.f){
+                WorldPositionQ32 q{modelPosition.x+int64_t(double(origin.x)*4294967296.),modelPosition.y+int64_t(double(origin.y)*4294967296.),modelPosition.z+int64_t(double(origin.z)*4294967296.)};
+                auto pose=m.pose;std::memcpy(pose.data(),&q,24);std::memcpy(pose.data()+24,&o,16);
+                auto handle=m.handle;std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&handle),1},poses{reinterpret_cast<uintptr_t>(pose.data()),1};
+                motionVisual::change(reinterpret_cast<void*>(s),ids.data(),poses.data());
+                {std::lock_guard<std::mutex> lock(attachmentObserver::followMutex);if(auto* f=attachmentObserver::fishModelOf(fish,false))f->written=pose;}
+                static unsigned hangLogs=0;if(hangLogs++<8||hangLogs%600==0)logFile->event("fishing_catch_hung","\"fish\":"+std::to_string(fish)+",\"character\":"+std::to_string(character)+
+                    ",\"bounds_min\":["+std::to_string(lo.x)+","+std::to_string(lo.y)+","+std::to_string(lo.z)+"],\"bounds_max\":["+std::to_string(hi.x)+","+std::to_string(hi.y)+","+std::to_string(hi.z)+
+                    "],\"grip\":["+std::to_string(grip.x)+","+std::to_string(grip.y)+","+std::to_string(grip.z)+"],\"swum_m\":"+std::to_string(m.swimMetres)+",\"yaw_deg\":"+std::to_string(yaw*57.29578f)+",\"holds\":"+std::to_string(hangLogs));
+                return true;}
+        }
+    }catch(const std::exception&){}
     const auto held=compose(gs[socket],inHand);
     const auto worldOffset=rotate(modelQ,Vec3{held.position.x*modelScale.x,held.position.y*modelScale.y,held.position.z*modelScale.z});
     if(!finite(worldOffset))return false;

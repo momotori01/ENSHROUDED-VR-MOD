@@ -35,8 +35,8 @@ void refreshUpdateButton();
 std::vector<HWND> g_controls;                // disabled while the game runs
 HWND g_rbVr,g_rbFlat,g_coSize,g_coDlss,g_coSharp,g_coEyes,g_btZip,g_btDefaults,g_status,g_last,g_stZip,g_btUpdate,g_stUpdate;
 // The stroke's speed (a slider, 5 % a step) and swimming by the arms (2026-10-20; also in the game's start menu).
-HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff;
-enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF};
+HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff;
+enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF};
 constexpr UINT WM_APP_ZIP_DONE=WM_APP+1;     // wParam: exit code, lParam: new std::wstring (the zip's path)
 constexpr UINT WM_APP_LATEST=WM_APP+2;       // lParam: new std::wstring (the newest release's version, or "" when it could not be checked)
 constexpr UINT WM_APP_UPDATE_LINE=WM_APP+3;  // lParam: new std::wstring (a line the updater wrote)
@@ -115,8 +115,8 @@ void show(){
     pick(g_coSharp,kSharp,std::size(kSharp),text(v.sharpness),1);
     pick(g_coEyes,kEyes,std::size(kEyes),v.alternateEyes?(v.eyeWarp==2?"2":"1"):"0",0);
     SendMessageW(g_tbSwing,TBM_SETPOS,TRUE,v.swingSpeed/swingSpeedStep);SetWindowTextW(g_stSwing,(std::to_wstring(v.swingSpeed)+L" %").c_str());
-    check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);
-    for(HWND h:{g_coSize,g_coDlss,g_coSharp,g_coEyes,g_tbSwing,g_rbSwimOn,g_rbSwimOff})EnableWindow(h,!g_running&&v.vr);
+    check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);
+    for(HWND h:{g_coSize,g_coDlss,g_coSharp,g_coEyes,g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff})EnableWindow(h,!g_running&&v.vr);
     g_loading=false;
 }
 void refreshRunning(bool force=false){
@@ -653,6 +653,10 @@ void build(){
     g_rbSwimOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_SWIM_ON));
     g_rbSwimOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_SWIM_OFF));
     g_y+=kRowHeight-16;
+    row(L"Hit stop (VR)",L"When a melee stroke hits, your hand and weapon pause a moment.\n近接攻撃が当たった瞬間に手と武器が一瞬止まる");
+    g_rbHitStopOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_HITSTOP_ON));
+    g_rbHitStopOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_HITSTOP_OFF));
+    g_y+=kRowHeight-16;
     row(L"Problem report",L"The logs in one zip, next to this program.\nAlso finishes a VR bug report a crash cut.\n報告用zip。途切れたVRバグ報告も仕上げます");
     g_btZip=part(L"BUTTON",L"Make zip",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,120,30,ID_ZIP);
     g_stZip=part(L"STATIC",L"",SS_LEFT,kRight+134,g_y+4,kWidth-kRight-134-kLeft,56);
@@ -668,6 +672,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
         if(code==BN_CLICKED)switch(id){
             case ID_VR:store("Mode","VR","1");break;case ID_FLAT:store("Mode","VR","0");break;
             case ID_SWIM_ON:store("Body","ArmSwim","1");break;case ID_SWIM_OFF:store("Body","ArmSwim","0");break;
+            case ID_HITSTOP_ON:store("Melee","HitStop","1");break;case ID_HITSTOP_OFF:store("Melee","HitStop","0");break;
             case ID_ZIP:startZip();break;
             case ID_UPDATE:startUpdate();break;
             case ID_DEFAULTS:if(!gameRunning()&&MessageBoxW(hwnd,L"Put all settings back to how they came?",L"Enshrouded VR setting",MB_YESNO|MB_ICONQUESTION)==IDYES){

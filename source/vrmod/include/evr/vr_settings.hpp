@@ -95,8 +95,10 @@ inline std::vector<std::pair<std::string,std::string>> entries(const std::string
 // [Melee] SwingSpeed, 50..150 in steps of 5; 2026-10-20, user: "the threshold a normal attack needs - changeable with a
 // slider, in the game and in the exe"). armSwim: swimming by the arms' strokes, as VHVR's gestured locomotion
 // ([Body] ArmSwim; 2026-10-20, user: "add swimming by hand - VHVR had it; switchable in the settings"). On unless set.
+// hitStop: the hit stop of a melee stroke (include/evr/hit_stop.hpp; [Melee] HitStop; 2026-10-20, user: "make the hit stop
+// switchable in the game's settings"). On unless set.
 struct Values {bool vr=false,online=true;double renderScale=.8;std::string dlss="Quality";double sharpness=.2;int keepLogs=8;bool alternateEyes=false;std::string giQuality="High";int eyeWarp=0;
-    bool realCrouch=true;int crouchDrop=30;int swingSpeed=100;bool armSwim=true;};
+    bool realCrouch=true;int crouchDrop=30;int swingSpeed=100;bool armSwim=true;bool hitStop=true;};
 constexpr int swingSpeedLow=50,swingSpeedHigh=150,swingSpeedStep=5;
 inline int clampSwingSpeed(int percent){
     const int stepped=int(std::lround(double(percent)/swingSpeedStep))*swingSpeedStep;return std::clamp(stepped,swingSpeedLow,swingSpeedHigh);
@@ -112,7 +114,7 @@ inline Values read(const std::string& ini){
     out.renderScale=number("Picture","RenderScale",d.renderScale,.25,2.);out.sharpness=number("Picture","Sharpness",d.sharpness,0.,1.);
     out.keepLogs=int(number("Log","Keep",d.keepLogs,0.,100.));
     out.realCrouch=flag("Body","RealCrouch",d.realCrouch);out.crouchDrop=int(number("Body","CrouchDrop",d.crouchDrop,10.,50.));
-    out.armSwim=flag("Body","ArmSwim",d.armSwim);out.swingSpeed=clampSwingSpeed(int(number("Melee","SwingSpeed",d.swingSpeed,swingSpeedLow,swingSpeedHigh)));
+    out.armSwim=flag("Body","ArmSwim",d.armSwim);out.hitStop=flag("Melee","HitStop",d.hitStop);out.swingSpeed=clampSwingSpeed(int(number("Melee","SwingSpeed",d.swingSpeed,swingSpeedLow,swingSpeedHigh)));
     const auto mode=get(ini,"Picture","Dlss");for(const auto& known:dlssModes())if(sameText(known,mode))out.dlss=known;
     const auto gi=get(ini,"Picture","GiQuality");for(const auto& known:giModes())if(sameText(known,gi))out.giQuality=known;
     return out;
