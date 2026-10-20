@@ -52,7 +52,11 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
     // (guess: the game's models face +Z as the characters do - include/evr/body_ik.hpp levelHeading - so a fish's head is at
     // the maximum), at the tail fin's base (below). EVR_FISH_TAIL_GRIP=0: the animation's hold as before.
     static const bool tailGrip=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_TAIL_GRIP",v,sizeof v);return !(n==1&&v[0]=='0');}();
-    if(tailGrip)try{
+    // Only what swam (2026-10-20 14:20, user: "a boot was caught - where it is held is odd"): a boot swam 0 m during the
+    // fight (a fish 30..41 m), its long axis was its height, and it was held 20 % from one end as a fish by the tail. What
+    // did not swim half a metre keeps the game's own hold, on the tracked hand (below).
+    const bool swamAsFish=m.swimMetres>=.5f;
+    if(tailGrip&&swamAsFish)try{
         const auto resource=read<uintptr_t>(object+layout::modelResource);const auto descriptor=read<uintptr_t>(resource+layout::resourceDescriptor);
         const auto lo=read<Vec3>(descriptor+16),hi=read<Vec3>(descriptor+32);Vec3 scale{1,1,1};std::memcpy(&scale,m.pose.data()+40,12);
         const Vec3 extent=hi-lo;

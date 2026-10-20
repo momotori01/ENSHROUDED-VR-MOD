@@ -22,7 +22,9 @@ constexpr uint64_t windowMs=30000;   // "30 seconds" (the user): long enough to 
 // two pairs a second, half size), written when the button is pressed - the 10 seconds before it - and when the window
 // ends - its last 10 seconds. Until 2026-10-18 13:30 a single pair every 2.5 s (22 pairs, two of full size).
 struct CaptureStep {uint64_t atMs;uint32_t pairs;bool full;};
-constexpr std::array<CaptureStep,2> captureSteps{{{300,1,true},{1500,6,false}}};   // the late run of four went at 13:50: the last 10 s are written at the end
+// 2026-10-20 14:30: a single pair (with the UI image, layer/native_xr.hpp bugUiWanted) every 6 s as well - the UI was
+// written once, at the start, and what the game shows for a moment (a catch's name cut off, user) was never in a report.
+constexpr std::array<CaptureStep,6> captureSteps{{{300,1,true},{1500,6,false},{6000,1,false},{12000,1,false},{18000,1,false},{24000,1,false}}};   // the late run of four went at 13:50: the last 10 s are written at the end
 constexpr uint32_t plannedPairs(){uint32_t n=0;for(const auto& s:captureSteps)n+=s.pairs;return n;}
 
 struct Texts {const wchar_t* title;const wchar_t* description;const wchar_t* armed;const wchar_t* recording;const wchar_t* making;const wchar_t* saved;const wchar_t* font;};

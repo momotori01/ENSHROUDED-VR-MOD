@@ -29,6 +29,6 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   ck(std::wstring(t.recording).find(L"%d")!=std::wstring::npos);ck(std::wstring(t.saved).find(L"%ls")!=std::wstring::npos);ck(std::wstring(t.description).find(L".zip")!=std::wstring::npos);ck(std::wstring(t.description).find(L"<user>")!=std::wstring::npos);}
  ck(std::wstring(bugreport::texts("klingon").title)==L"! VR BUG REPORT !");ck(std::wstring(bugreport::texts("japanese").title)==L"！VRバグ報告ボタン！");
  // The capture plan stays inside the window, in order.
- {uint64_t last=0;for(const auto& s:bugreport::captureSteps){ck(s.atMs>=last&&s.atMs<bugreport::windowMs&&s.pairs>=1&&s.pairs<=32);last=s.atMs;}ck(bugreport::plannedPairs()==7);unsigned full=0;for(const auto& s:bugreport::captureSteps)full+=s.full?s.pairs:0;ck(full==1);}
+ {uint64_t last=0;for(const auto& s:bugreport::captureSteps){ck(s.atMs>=last&&s.atMs<bugreport::windowMs&&s.pairs>=1&&s.pairs<=32);last=s.atMs;}ck(bugreport::plannedPairs()==11);unsigned full=0;for(const auto& s:bugreport::captureSteps)full+=s.full?s.pairs:0;ck(full==1);}
  std::cout<<"bug report tests: "<<n<<" checks passed\n";return 0;}
  catch(const std::exception& e){std::cerr<<"bug report test failed at check "<<e.what()<<"\n";return 1;}}

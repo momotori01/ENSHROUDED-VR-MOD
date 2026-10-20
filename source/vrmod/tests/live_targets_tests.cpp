@@ -20,8 +20,8 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
  LiveTarget tree=person;tree.character=false;
  // A destructible thing without a health (2026-10-20: tables, pots): a smaller reach than a tree's, and a low axis.
  {LiveTarget pot=person;pot.character=false;pot.object=true;LiveTarget treeHere=pot;treeHere.object=false;
-  ck(bladeNear(at(.6,.5,-.2),at(.6,.5,.2),pot)&&!bladeNear(at(1,.5,-.2),at(1,.5,.2),pot)&&bladeNear(at(1,.5,-.2),at(1,.5,.2),treeHere));
-  ck(!bladeNear(at(0,2,-.2),at(0,2,.2),pot)&&bladeNear(at(0,2,-.2),at(0,2,.2),treeHere));}
+  ck(bladeNear(at(.8,.5,-.2),at(.8,.5,.2),pot)&&!bladeNear(at(1,.5,-.2),at(1,.5,.2),pot)&&bladeNear(at(1,.5,-.2),at(1,.5,.2),treeHere));
+  ck(bladeNear(at(.5,1.6,-.2),at(.5,1.6,.2),pot)&&!bladeNear(at(0,3.2,-.2),at(0,3.2,.2),pot));}   // a trunk struck at chest height (2026-10-20 14:20)
  ck(close(bladeDistance(at(.5,1.2,0),at(1.4,1.2,0),person),.5f));               // level blade pointing away, hilt half a metre off
  ck(bladeNear(at(.5,1.2,0),at(1.4,1.2,0),person));ck(bladeNear(at(.8,1.2,0),at(1.7,1.2,0),person));ck(!bladeNear(at(.9,1.2,0),at(1.8,1.2,0),person)); // a stroke reaches 0.85 m
  ck(bladeNear(at(1.2,1.2,0),at(2.1,1.2,0),tree));ck(!bladeNear(at(1.4,1.2,0),at(2.3,1.2,0),tree)); // a trunk is wider

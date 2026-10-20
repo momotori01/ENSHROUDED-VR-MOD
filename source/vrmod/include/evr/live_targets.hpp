@@ -34,7 +34,12 @@ struct LiveTargetReach {
     // A table, a pot, a crate. (Headset run 20261020-100726, user: "strokes at pots miss easily": the strokes were pressed
     // with the blade 0.6..0.8 m from a pot's axis, and the hit volume came 80 ms later, after the blade had passed - the
     // hit volume now sweeps from the press on, motion_collider_apply.hpp sweepFromPress; the reach stays.)
-    float objectRadius=.75f,objectHeight=1.2f;   // about a metre across and up to a metre high
+    // 2026-10-20 14:20 (user: "the first stroke often misses, once struck a thing is easy to hit"; run 20261020-135459): a
+    // tree is one of these until it is first struck - the same tree was pressed at 0.56 m as a thing without health and
+    // at 1.25 / 1.30 m with its health (267) after - so a stroke at a trunk at chest height was outside the 1.2 m that a
+    // pot is given. 2.2 m high as the others, and 0.85 m as a creature (the hit volume sweeps from the press on, so an
+    // early press at a pot still strikes it).
+    float objectRadius=.85f,objectHeight=2.2f;
 };
 // Shortest distance between the segments a..b and c..d.
 inline float segmentDistance(Vec3 a,Vec3 b,Vec3 c,Vec3 d) {
