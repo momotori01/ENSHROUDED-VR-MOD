@@ -40,6 +40,7 @@
 #include <evr/status_rim.hpp>
 #include <evr/pose_smoothing.hpp>
 #include <evr/hit_stop.hpp>
+#include <evr/gpu_info.hpp>
 #include <evr/vfx_decal_rebase.hpp>
 #include <evr/live_secondary.hpp>
 #include <evr/throwable_catalog.hpp>

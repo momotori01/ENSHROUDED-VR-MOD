@@ -16,6 +16,7 @@
 #include <windows.h>
 #include <shlobj.h>
 #include <evr/auto_start.hpp>
+#include <evr/recommended_graphics.hpp>
 #include <evr/game_build.hpp>
 #include <algorithm>
 #include <string>
@@ -129,6 +130,21 @@ void applyRenderSettings(){
     if(!writeFile(recordPath(),start::recordText(record))){say("render settings: the record could not be written, nothing changed");return;}
     if(out!=text&&!replaceFile(settingsPath(),out)){say("render settings: the game's settings file could not be written ("+lastError()+")");return;}
     say("render settings for VR:"+list+" (put back at the next start without VR)");
+}
+// The recommended graphics asked in the game's start menu (include/evr/recommended_graphics.hpp, 2026-10-20): written
+// into the game's settings here, before the game reads them, once. The card's video memory came with the request (no
+// DXGI here - this runs inside DllMain).
+void applyRecommendedGraphics(){
+    if(!evr::recommend::pending(g.iniText))return;
+    const auto r=evr::recommend::recommend(evr::recommend::pendingMachine(g.iniText));
+    std::string text;
+    if(!readFile(settingsPath(),text)){say("recommended graphics: the game's settings file is not there; asked again at the next start");return;}
+    evr::recommend::Applied applied;const auto out=evr::recommend::applyGame(text,r,applied);
+    if(out!=text&&!replaceFile(settingsPath(),out)){say("recommended graphics: the game's settings file could not be written ("+lastError()+"); asked again at the next start");return;}
+    const auto ini=evr::recommend::setPending(g.iniText,false);
+    if(writeFile(g.ini,ini))g.iniText=ini;else say("recommended graphics: the request could not be cleared in "+narrow(g.ini));
+    std::string list;for(const auto& c:applied.changed)list+=" "+c;for(const auto& m:applied.missing)list+=" (not in the file: "+m+")";
+    say("recommended graphics ("+r.tier+" of video memory) into the game's settings:"+(list.empty()?std::string(" already so"):list));
 }
 void restoreRenderSettings(){
     std::string recordBytes,text;start::RenderRecord record;
@@ -296,6 +312,7 @@ void begin(){
     say("settings: VR="+std::to_string(int(g.values.vr))+" Sync="+std::to_string(int(g.values.online))+" RenderScale="+evr::settings::text(g.values.renderScale)+" Dlss="+g.values.dlss+
         " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+(given?" (from EVR_AUTO_INI)":""));
     if(!supportedBuild()){restoreRenderSettings();status("Off: this version of the game is not the one the mod was made for (the game was updated?); the game runs without the mod");return;}
+    applyRecommendedGraphics();
     const bool hooks=exists(g.paths.bin+L"\\evr_hooks.dll");
     const bool runtime=onSearchPath(L"vcruntime140.dll")&&onSearchPath(L"vcruntime140_1.dll")&&onSearchPath(L"msvcp140.dll");
     g.vr=g.values.vr;std::string whyNot;

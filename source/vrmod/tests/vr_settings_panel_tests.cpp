@@ -38,9 +38,11 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   // the slim rows (2026-10-20): crouch on / off, its depth, the stroke's speed, swimming on / off; the labels' side is no button
   ck(hitAt(1000,rowY(0)+26,false)==Hit::None&&hitAt(1000,rowY(0)+26,true)==Hit::CrouchOn&&hitAt(1100,rowY(0)+26,true)==Hit::CrouchOff&&hitAt(1068,rowY(0)+26,true)==Hit::None);
   ck(hitAt(720,rowY(1)+26,true)==Hit::DropSlider&&hitAt(1160,rowY(1)+26,true)==Hit::DropSlider&&hitAt(900,rowY(2)+26,true)==Hit::SwingSlider);
-  ck(hitAt(1000,rowY(3)+26,true)==Hit::SwimOn&&hitAt(1100,rowY(3)+26,true)==Hit::SwimOff&&hitAt(300,rowY(2)+26,true)==Hit::None&&hitAt(1000,rowY(5)+26,true)==Hit::None);
+  ck(hitAt(1000,rowY(3)+26,true)==Hit::SwimOn&&hitAt(1100,rowY(3)+26,true)==Hit::SwimOff&&hitAt(300,rowY(2)+26,true)==Hit::None&&hitAt(1000,rowY(6)+26,true)==Hit::None);
   // the hit stop on / off (17:40), the fifth row
   ck(hitAt(1000,rowY(4)+26,true)==Hit::HitStopOn&&hitAt(1100,rowY(4)+26,true)==Hit::HitStopOff&&hitAt(1000,rowY(4)+26,false)==Hit::None);
+  // the recommended graphics (18:50), the sixth row: one button
+  ck(hitAt(1000,rowY(5)+26,true)==Hit::Recommend&&hitAt(1150,rowY(5)+26,true)==Hit::Recommend&&hitAt(1000,rowY(5)+26,false)==Hit::None&&hitNamed("recommend")==Hit::Recommend);
   ck(settingsButton.y1-settingsButton.y0<buttonHeight&&settingsButton.x1-settingsButton.x0<bugButton.x1-bugButton.x0);   // only the bug report's button stands out
   {const auto all=boxes(true);for(size_t i=0;i<all.size();++i)for(size_t j=i+1;j<all.size();++j){const auto& a=all[i];const auto& b=all[j];ck(a.x1<=b.x0||b.x1<=a.x0||a.y1<=b.y0||b.y1<=a.y0);}}   // no two overlap
   for(const auto& b:boxes(true))ck(b.y1<=noteTop);
@@ -48,7 +50,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   for(const auto& b:boxes(true))ck(b.x0>=0&&b.y0>=0&&b.x1<=width&&b.y1<=height&&b.x0<b.x1&&b.y0<b.y1);}
  // Every language of the bug report's button has its own texts (2026-10-19), each with the depth's one number.
  for(const char* l:{"japanese","german","french","spanish","latam","italian","polish","brazilian","portuguese","russian","ukrainian","schinese","tchinese","koreana","turkish","english","klingon"}){
-  const auto x=texts(l);ck(x.button&&x.crouch&&x.on&&x.off&&x.drop&&x.note&&x.unsaved&&x.swing&&x.swim&&x.hitStop&&std::wcschr(x.hitStop,L'\n')&&std::wcschr(x.crouch,L'\n')&&std::wcschr(x.swing,L'\n')&&std::wcschr(x.swim,L'\n'));
+  const auto x=texts(l);ck(x.button&&x.crouch&&x.on&&x.off&&x.drop&&x.note&&x.unsaved&&x.swing&&x.swim&&x.hitStop&&std::wcschr(x.hitStop,L'\n')&&x.recommend&&x.recommendSet&&x.recommendDone&&std::wcschr(x.recommend,L'\n')&&std::wcschr(x.crouch,L'\n')&&std::wcschr(x.swing,L'\n')&&std::wcschr(x.swim,L'\n'));
   wchar_t b[256]{};ck(std::swprintf(b,256,x.drop,42)>0&&std::wcsstr(b,L"42")!=nullptr);
   wchar_t c[256]{};ck(std::swprintf(c,256,x.swing,135)>0&&std::wcsstr(c,L"135")!=nullptr&&std::wcschr(c,L'%')!=nullptr);
   if(std::string(l)!="english"&&std::string(l)!="klingon")ck(std::wcscmp(x.button,texts("english").button)!=0);}

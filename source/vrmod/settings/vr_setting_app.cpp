@@ -16,6 +16,7 @@
 #include <cstring>
 #include <ctime>
 #include <evr/vr_settings.hpp>
+#include <evr/gpu_info.hpp>
 #include <algorithm>
 #include <fstream>
 #include <functional>
@@ -35,8 +36,9 @@ void refreshUpdateButton();
 std::vector<HWND> g_controls;                // disabled while the game runs
 HWND g_rbVr,g_rbFlat,g_coSize,g_coDlss,g_coSharp,g_coEyes,g_btZip,g_btDefaults,g_status,g_last,g_stZip,g_btUpdate,g_stUpdate;
 // The stroke's speed (a slider, 5 % a step) and swimming by the arms (2026-10-20; also in the game's start menu).
-HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff;
-enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF};
+HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_btRecommend,g_stRecommend;
+evr::recommend::Machine g_machine;   // the graphics card, read once at the start
+enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND};
 constexpr UINT WM_APP_ZIP_DONE=WM_APP+1;     // wParam: exit code, lParam: new std::wstring (the zip's path)
 constexpr UINT WM_APP_LATEST=WM_APP+2;       // lParam: new std::wstring (the newest release's version, or "" when it could not be checked)
 constexpr UINT WM_APP_UPDATE_LINE=WM_APP+3;  // lParam: new std::wstring (a line the updater wrote)
@@ -137,6 +139,41 @@ void store(const char* section,const char* key,const std::string& value){
     const auto changed=set(now,section,key,value);
     if(!writeFile(iniPath(),changed)){status(L"Could not write EnshroudedVR\\EnshroudedVR.ini.");return;}
     g_ini=changed;show();
+}
+
+// ---- The recommended graphics for VR on this PC (include/evr/recommended_graphics.hpp, 2026-10-20): the game's own
+// settings file (1.0: Saved Games\keen games\Enshrouded\local_settings.json; the game folder's enshrouded_local.json where
+// that is not there - as the loader) and the mod's [Picture] values, at once. The game must be closed. ----
+std::wstring gameSettingsPath(){
+    PWSTR saved=nullptr;std::wstring path;
+    if(SHGetKnownFolderPath(FOLDERID_SavedGames,0,nullptr,&saved)==S_OK&&saved)path=std::wstring(saved)+L"\\keen games\\Enshrouded\\local_settings.json";
+    CoTaskMemFree(saved);
+    if(!path.empty()&&exists(path))return path;
+    return g_folder+L"\\enshrouded_local.json";
+}
+std::wstring machineText(){
+    if(!g_machine.known)return L"Graphics card: not found";
+    wchar_t gb[32]{};swprintf(gb,32,L"%.0f GB",evr::recommend::gigabytes(g_machine.videoMemory));
+    return L"Graphics card: "+wide(g_machine.gpu)+L" ("+gb+L")";
+}
+void applyRecommended(HWND hwnd){
+    if(gameRunning()){refreshRunning();return;}
+    if(MessageBoxW(hwnd,(L"Change the game's graphics settings to the ones recommended for VR on this PC?\n"+machineText()+
+        L"\n\nゲームのグラフィック設定を、この PC の VR 向けの推奨に変えますか？").c_str(),L"Enshrouded VR setting",MB_YESNO|MB_ICONQUESTION)!=IDYES)return;
+    const auto r=evr::recommend::recommend(g_machine);
+    const auto path=gameSettingsPath();std::string text;
+    if(!readFile(path,text)){SetWindowTextW(g_stRecommend,L"The game's settings file is not there yet - start the game once, then press again.\nゲームを一度起動してから押してください。");return;}
+    evr::recommend::Applied applied;const auto out=evr::recommend::applyGame(text,r,applied);
+    if(out!=text){const std::wstring fresh=path+L".evr-new";
+        if(!writeFile(fresh,out)||!MoveFileExW(fresh.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING)){DeleteFileW(fresh.c_str());SetWindowTextW(g_stRecommend,L"Could not write the game's settings file.");return;}}
+    std::string now;if(!readFile(iniPath(),now))now=g_ini;
+    std::vector<std::string> iniChanged;auto ini=evr::recommend::applyIni(now,r,&iniChanged);ini=evr::recommend::setPending(ini,false);
+    if(!writeFile(iniPath(),ini)){SetWindowTextW(g_stRecommend,L"Could not write EnshroudedVR\\EnshroudedVR.ini.");return;}
+    g_ini=ini;show();
+    const auto count=applied.changed.size()+iniChanged.size();
+    std::wstring done=count?L"Done: "+std::to_wstring(count)+L" settings changed":L"Already as recommended";
+    done+=L" (picture "+wide(r.renderScale)+L", DLSS / FSR3 "+wide(r.dlss)+L", GI "+wide(r.giQuality)+L").\n変更しました。";
+    SetWindowTextW(g_stRecommend,done.c_str());
 }
 
 // ---- Problem report: every log and settings file a report needs, into one zip beside this program ----
@@ -657,6 +694,10 @@ void build(){
     g_rbHitStopOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_HITSTOP_ON));
     g_rbHitStopOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_HITSTOP_OFF));
     g_y+=kRowHeight-16;
+    row(L"Recommended graphics (VR)",L"The game's graphics set for VR on this PC.\n推奨グラフィック設定（この PC 向け）に変更");
+    g_btRecommend=control(part(L"BUTTON",L"Set recommended",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,140,30,ID_RECOMMEND));
+    g_stRecommend=part(L"STATIC",machineText().c_str(),SS_LEFT,kRight+154,g_y+4,kWidth-kRight-154-kLeft,56);
+    g_y+=kRowHeight-6;
     row(L"Problem report",L"The logs in one zip, next to this program.\nAlso finishes a VR bug report a crash cut.\n報告用zip。途切れたVRバグ報告も仕上げます");
     g_btZip=part(L"BUTTON",L"Make zip",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,120,30,ID_ZIP);
     g_stZip=part(L"STATIC",L"",SS_LEFT,kRight+134,g_y+4,kWidth-kRight-134-kLeft,56);
@@ -674,6 +715,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
             case ID_SWIM_ON:store("Body","ArmSwim","1");break;case ID_SWIM_OFF:store("Body","ArmSwim","0");break;
             case ID_HITSTOP_ON:store("Melee","HitStop","1");break;case ID_HITSTOP_OFF:store("Melee","HitStop","0");break;
             case ID_ZIP:startZip();break;
+            case ID_RECOMMEND:applyRecommended(hwnd);break;
             case ID_UPDATE:startUpdate();break;
             case ID_DEFAULTS:if(!gameRunning()&&MessageBoxW(hwnd,L"Put all settings back to how they came?",L"Enshrouded VR setting",MB_YESNO|MB_ICONQUESTION)==IDYES){
                 std::string defaults;if(readFile(defaultsPath(),defaults)&&writeFile(iniPath(),defaults)){g_ini=defaults;show();}else status(L"EnshroudedVR\\EnshroudedVR.defaults.ini is missing.");}break;}
@@ -728,6 +770,7 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
     const DWORD style=WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX;
     g_window=CreateWindowExW(WS_EX_CONTROLPARENT,windowClass.lpszClassName,L"Enshrouded VR setting",style,CW_USEDEFAULT,CW_USEDEFAULT,S(kWidth),S(600),nullptr,nullptr,instance,nullptr);
     if(!g_window)return 1;
+    g_machine=evr::recommend::detectMachine();   // for the recommended graphics (its row shows the card)
     build();
     RECT wanted{0,0,S(kWidth),S(g_y)};AdjustWindowRectEx(&wanted,style,FALSE,WS_EX_CONTROLPARENT);
     SetWindowPos(g_window,nullptr,0,0,wanted.right-wanted.left,wanted.bottom-wanted.top,SWP_NOMOVE|SWP_NOZORDER);

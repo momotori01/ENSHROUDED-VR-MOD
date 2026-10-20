@@ -45,7 +45,7 @@ inline std::mutex mutex;
 inline std::string language;inline evr::bugreport::Texts texts;
 // The panel over the start menu: its place on the UI image and its picture's size (the picture is drawn at about
 // the UI's pixel size of 1920 x 1080); the button is its top part.
-constexpr float panelU0=.30f,panelV0=.47f;constexpr uint32_t panelW=1200,panelH=510,buttonW=640,buttonH=84;   // wide: the note's lines as written, none wrapped
+constexpr float panelU0=.30f,panelV0=.47f;constexpr uint32_t panelW=1200,panelH=570,buttonW=640,buttonH=84;   // wide: the note's lines as written, none wrapped
 constexpr float panelU1=panelU0+panelW/1920.f,panelV1=panelV0+panelH/1080.f,buttonU1=panelU0+buttonW/1920.f,buttonV1=panelV0+buttonH/1080.f;
 // The line on the plate while recording / making / done.
 constexpr float lineU0=.015f,lineV0=.012f;constexpr uint32_t lineW=760,lineH=52;
@@ -57,6 +57,8 @@ inline std::atomic<int> hoverHit{int(Hit::None)},hoverX{-1};inline std::atomic<b
 // A slider (the crouch depth, user 2026-10-18: "set freely with a slider"; the stroke's speed, 2026-10-20): the one held
 // from its press until the trigger is let go (Hit::None: none).
 inline std::atomic<int> sliderHeld{int(Hit::None)};
+// The recommended graphics asked from this panel in this session (its button then says so; done at the next start).
+inline std::atomic<bool> recommendAsked{false};
 inline evr::vrpanel::Texts panelTexts;inline std::wstring settingsIni;inline std::vector<evr::vrpanel::TestPress> testPresses;inline size_t nextTestPress=0;
 static_assert(panelW==uint32_t(evr::vrpanel::width)&&panelH==uint32_t(evr::vrpanel::height)&&buttonW==uint32_t(evr::vrpanel::bugButton.x1)&&buttonH==uint32_t(evr::vrpanel::buttonHeight));
 inline std::vector<uint8_t> panel,line;
@@ -123,7 +125,7 @@ inline std::vector<uint8_t> render(uint32_t w,uint32_t h,const std::vector<Block
 // What the panel shows, as one number: a change of any part draws it again.
 inline uint64_t look(int kind){
     return uint64_t(kind&3)|uint64_t(hoverHit.load()&15)<<2|uint64_t(settingsOpen.load()?1:0)<<6|uint64_t(controllerUiFixture::roomSneakOn.load()?1:0)<<7|uint64_t(controllerUiFixture::crouchDrop.load()&255)<<8|
-        uint64_t(sliderHeld.load()&15)<<16|uint64_t(noticeOn()?1:0)<<21|uint64_t(controllerUiFixture::swingPercent.load()&255)<<22|uint64_t(controllerUiFixture::armSwimOn.load()?1:0)<<30|uint64_t(controllerUiFixture::hitStopOn.load()?1:0)<<31;
+        uint64_t(sliderHeld.load()&15)<<16|uint64_t(noticeOn()?1:0)<<21|uint64_t(controllerUiFixture::swingPercent.load()&255)<<22|uint64_t(controllerUiFixture::armSwimOn.load()?1:0)<<30|uint64_t(controllerUiFixture::hitStopOn.load()?1:0)<<31|uint64_t(recommendAsked.load()?1:0)<<32;
 }
 // The VR settings' values now.
 inline evr::vrpanel::Body currentBody(){
@@ -169,6 +171,7 @@ inline void drawPanel(int kind){
         label(2,swing,false);slider(swingSlider,swingX(body.swingSpeed),true);
         label(3,panelTexts.swim,false);pill(swimOn,panelTexts.on,body.armSwim);pill(swimOff,panelTexts.off,!body.armSwim);
         label(4,panelTexts.hitStop,false);pill(hitStopOn,panelTexts.on,body.hitStop);pill(hitStopOff,panelTexts.off,!body.hitStop);
+        label(5,panelTexts.recommend,false);pill(recommendButton,recommendAsked.load()?panelTexts.recommendDone:panelTexts.recommendSet,recommendAsked.load());
         std::wstring note=panelTexts.note;if(settingsIni.empty())note+=std::wstring(L"\n")+panelTexts.unsaved;
         b.push_back({{LONG(labelX0),LONG(noteTop),LONG(panelW)-30,LONG(panelH)-6},note,17,FW_NORMAL,RGB(140,133,120),0,0,0,0,DT_LEFT|DT_WORDBREAK|DT_EDITCONTROL});
     }
@@ -217,6 +220,22 @@ inline void pressHit(Hit hit,const char* by,int testValue=-1){
     }
     if(hit==Hit::Settings){settingsOpen=!settingsOpen.load();logFile->event("vr_settings_panel","\"open\":"+std::string(settingsOpen.load()?"true":"false")+",\"by\":\""+by+"\",\"frame\":"+std::to_string(liveFrame.frame));return;}
     if(hit==Hit::None||!settingsOpen.load())return;
+    // The recommended graphics (include/evr/recommended_graphics.hpp): the mod's [Picture] values now, the game's own
+    // settings by the loader at the next start (the game holds them in memory and writes them back when it closes); the
+    // card's video memory goes with the request (the loader runs in DllMain, where DXGI must not be asked).
+    if(hit==Hit::Recommend){
+        const auto machine=evr::recommend::detectMachine();const auto r=evr::recommend::recommend(machine);
+        std::string why="no settings file (a development start)";bool saved=false;std::vector<std::string> changed;
+        if(!settingsIni.empty()){std::string text;{std::ifstream in(std::filesystem::path(settingsIni),std::ios::binary);if(in)text.assign(std::istreambuf_iterator<char>(in),{});}
+            const auto out=evr::recommend::setPending(evr::recommend::applyIni(text,r,&changed),true,machine);const auto fresh=settingsIni+L".new";
+            {std::ofstream o(std::filesystem::path(fresh),std::ios::binary|std::ios::trunc);if(o)o<<out;saved=bool(o);}
+            saved=saved&&MoveFileExW(fresh.c_str(),settingsIni.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);if(!saved)why="could not write";}
+        if(saved)recommendAsked=true;
+        std::string list;for(const auto& c:changed)list+=std::string(list.empty()?"":",")+jsonString(c);
+        logFile->event("vr_settings_recommended","\"by\":\""+std::string(by)+"\",\"saved\":"+(saved?"true":"false")+(saved?std::string():",\"why\":"+jsonString(why))+",\"gpu\":"+jsonString(machine.gpu)+
+            ",\"vendor\":"+std::to_string(machine.vendor)+",\"video_memory_mb\":"+std::to_string(machine.videoMemory/(1024ull*1024ull))+",\"tier\":"+jsonString(r.tier)+
+            ",\"render_scale\":"+jsonString(r.renderScale)+",\"dlss\":"+jsonString(r.dlss)+",\"gi\":"+jsonString(r.giQuality)+",\"ini_changed\":["+list+"],\"game_settings\":\"at the next start\",\"frame\":"+std::to_string(liveFrame.frame));
+        return;}
     const auto before=currentBody();
     auto after=evr::vrpanel::apply(before,hit);
     // a slider: the value where it was pressed (a Mock's press gives its value), then followed while held; saved when let go

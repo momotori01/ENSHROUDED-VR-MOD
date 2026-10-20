@@ -34,14 +34,14 @@ inline std::string store(const std::string& ini,const Body& b){
     return settings::set(out,"Melee","HitStop",b.hitStop?"1":"0");
 }
 // What a place on the picture is, and what pressing it does.
-enum class Hit {None,BugReport,Settings,CrouchOn,CrouchOff,DropSlider,SwingSlider,SwimOn,SwimOff,HitStopOn,HitStopOff};
+enum class Hit {None,BugReport,Settings,CrouchOn,CrouchOff,DropSlider,SwingSlider,SwimOn,SwimOff,HitStopOn,HitStopOff,Recommend};
 inline const char* name(Hit h){
     switch(h){case Hit::BugReport:return "bug_report";case Hit::Settings:return "settings";case Hit::CrouchOn:return "crouch_on";case Hit::CrouchOff:return "crouch_off";
         case Hit::DropSlider:return "slider";case Hit::SwingSlider:return "swing_slider";case Hit::SwimOn:return "swim_on";case Hit::SwimOff:return "swim_off";
-        case Hit::HitStopOn:return "hit_stop_on";case Hit::HitStopOff:return "hit_stop_off";default:return "none";}
+        case Hit::HitStopOn:return "hit_stop_on";case Hit::HitStopOff:return "hit_stop_off";case Hit::Recommend:return "recommend";default:return "none";}
 }
 inline Hit hitNamed(const std::string& s){
-    for(const auto h:{Hit::BugReport,Hit::Settings,Hit::CrouchOn,Hit::CrouchOff,Hit::DropSlider,Hit::SwingSlider,Hit::SwimOn,Hit::SwimOff,Hit::HitStopOn,Hit::HitStopOff})if(s==name(h))return h;
+    for(const auto h:{Hit::BugReport,Hit::Settings,Hit::CrouchOn,Hit::CrouchOff,Hit::DropSlider,Hit::SwingSlider,Hit::SwimOn,Hit::SwimOff,Hit::HitStopOn,Hit::HitStopOff,Hit::Recommend})if(s==name(h))return h;
     return Hit::None;
 }
 inline bool isSlider(Hit h){return h==Hit::DropSlider||h==Hit::SwingSlider;}
@@ -56,9 +56,10 @@ inline Body apply(Body b,Hit h){
 // button needs to stand out"): the bug report's button on top as before, the settings' button a small pill beside it,
 // and under them, while open, four slim rows - a label on the left (a heading and a small note), the control on the
 // right (two small pills, or a thin slider) - and the note at the bottom. 17:40: a fifth row (the hit stop), the picture
-// 60 pixels taller (510; still inside the UI image: from 0.47 x 1080 = 508 to 1018).
+// 60 pixels taller (510; still inside the UI image: from 0.47 x 1080 = 508 to 1018). The sixth row (the recommended graphics,
+// a button - include/evr/recommended_graphics.hpp) another 60: 570, to 1078.
 struct Box {Hit hit;int x0,y0,x1,y1;constexpr bool contains(int x,int y)const{return x>=x0&&x<x1&&y>=y0&&y<y1;}};
-constexpr int width=1200,height=510,buttonHeight=84;
+constexpr int width=1200,height=570,buttonHeight=84;
 constexpr Box bugButton{Hit::BugReport,0,0,640,buttonHeight},settingsButton{Hit::Settings,664,20,868,64};
 // the sheet under the buttons, and its rows
 constexpr int sheetTop=96,rowTop=108,rowStep=60,rowHeight=52,labelX0=30,labelX1=660;
@@ -70,7 +71,8 @@ constexpr Box crouchOn=pillOn(Hit::CrouchOn,0),crouchOff=pillOff(Hit::CrouchOff,
 constexpr Box dropSlider=sliderBox(Hit::DropSlider,1),swingSlider=sliderBox(Hit::SwingSlider,2);
 constexpr Box swimOn=pillOn(Hit::SwimOn,3),swimOff=pillOff(Hit::SwimOff,3);
 constexpr Box hitStopOn=pillOn(Hit::HitStopOn,4),hitStopOff=pillOff(Hit::HitStopOff,4);
-constexpr int rows=5,noteTop=rowY(rows)+8;
+constexpr Box recommendButton{Hit::Recommend,968,rowY(5)+10,1170,rowY(5)+44};   // one button the width of the two pills
+constexpr int rows=6,noteTop=rowY(rows)+8;
 // A slider: the press (and the trigger held while the hand moves) sets the value where the pointer is on its track; the
 // ends of the box past the track give the lowest and the highest.
 constexpr int trackInset=24;
@@ -90,7 +92,7 @@ inline int sliderSwing(int x){return sliderValue(swingSlider,settings::swingSpee
 inline int swingX(int percent){return sliderPosition(swingSlider,settings::swingSpeedLow,settings::swingSpeedHigh,settings::clampSwingSpeed(percent));}
 inline std::vector<Box> boxes(bool open){
     std::vector<Box> out{bugButton,settingsButton};
-    if(open)for(const auto& b:{crouchOn,crouchOff,dropSlider,swingSlider,swimOn,swimOff,hitStopOn,hitStopOff})out.push_back(b);
+    if(open)for(const auto& b:{crouchOn,crouchOff,dropSlider,swingSlider,swimOn,swimOff,hitStopOn,hitStopOff,recommendButton})out.push_back(b);
     return out;
 }
 inline Hit hitAt(int x,int y,bool open){for(const auto& b:boxes(open))if(b.contains(x,y))return b.hit;return Hit::None;}
@@ -98,66 +100,67 @@ inline Hit hitAt(int x,int y,bool open){for(const auto& b:boxes(open))if(b.conta
 // explanation (two blocks: a heading and its note are drawn apart, each fitting its own height).
 struct Texts {const wchar_t* button;const wchar_t* crouch;const wchar_t* on;const wchar_t* off;const wchar_t* drop;const wchar_t* note;const wchar_t* unsaved;
     const wchar_t* swing;const wchar_t* swim;   // 2026-10-20: the stroke's speed (a number, as drop) and swimming by the arms
-    const wchar_t* hitStop;};                   // 17:40: the hit stop
+    const wchar_t* hitStop;                     // 17:40: the hit stop
+    const wchar_t* recommend;const wchar_t* recommendSet;const wchar_t* recommendDone;};   // 18:50: the recommended graphics
 // (2026-10-19, user: "the in-game settings in the game's language" - the languages of the VR bug report's button,
 // include/evr/bug_report.hpp; English for any other.)
 inline Texts texts(const std::string& language){
     if(language=="german")return {L"VR-Einstellungen",L"Echtes Ducken\nKopf senken zum Schleichen",L"Ein",L"Aus",L"Ducktiefe: %d%%\nWie weit unter der Augenhöhe im Stehen",
         L"Einstellungen gelten sofort und bleiben für den nächsten Start.\nAugenhöhe im Stehen = Höhe beim letzten Zurücksetzen der Sicht.",
         L"(Entwicklungsstart: gilt jetzt, wird nicht gespeichert)",
-        L"Schwungtempo für Angriffe: %d%%\nNiedriger: schon ein leichterer Schwung greift an",L"Mit den Armen schwimmen\nIm Wasser mit offenen Händen paddeln (Daumen weg vom Stick)",L"Trefferstopp\nHand und Waffe halten beim Treffer kurz an"};
+        L"Schwungtempo für Angriffe: %d%%\nNiedriger: schon ein leichterer Schwung greift an",L"Mit den Armen schwimmen\nIm Wasser mit offenen Händen paddeln (Daumen weg vom Stick)",L"Trefferstopp\nHand und Waffe halten beim Treffer kurz an",L"Empfohlene Grafik\nGrafik für VR auf diesem PC (ab dem nächsten Start)",L"Setzen",L"Vorgemerkt"};
     if(language=="french")return {L"Réglages VR",L"Accroupissement réel\nBaissez la tête pour vous faufiler",L"Oui",L"Non",L"Profondeur : %d%%\nDe combien sous la hauteur des yeux debout",
         L"Les réglages s'appliquent tout de suite et sont gardés au prochain lancement.\nHauteur des yeux debout = hauteur au dernier recentrage de la vue.",
         L"(lancement de développement : appliqué maintenant, non enregistré)",
-        L"Vitesse du coup pour attaquer : %d%%\nPlus bas : un coup plus léger suffit",L"Nager avec les bras\nDans l'eau, brassez mains ouvertes (pouces hors des sticks)",L"Arrêt à l'impact\nLa main et l'arme s'arrêtent un instant au coup"};
+        L"Vitesse du coup pour attaquer : %d%%\nPlus bas : un coup plus léger suffit",L"Nager avec les bras\nDans l'eau, brassez mains ouvertes (pouces hors des sticks)",L"Arrêt à l'impact\nLa main et l'arme s'arrêtent un instant au coup",L"Graphismes recommandés\nRéglages pour la VR sur ce PC (au prochain lancement)",L"Appliquer",L"Prévu"};
     if(language=="spanish"||language=="latam")return {L"Ajustes de VR",L"Agacharse de verdad\nBaja la cabeza para ir en sigilo",L"Sí",L"No",L"Profundidad: %d%%\nCuánto por debajo de la altura de los ojos de pie",
         L"Los ajustes se aplican al instante y se guardan para el próximo inicio.\nAltura de los ojos de pie = la del último reinicio de la vista.",
         L"(inicio de desarrollo: se aplica ahora, no se guarda)",
-        L"Velocidad del golpe para atacar: %d%%\nMenor: basta un golpe más suave",L"Nadar con los brazos\nEn el agua, brazadas con las manos abiertas (pulgares fuera del stick)",L"Pausa al impactar\nLa mano y el arma se detienen un instante al golpear"};
+        L"Velocidad del golpe para atacar: %d%%\nMenor: basta un golpe más suave",L"Nadar con los brazos\nEn el agua, brazadas con las manos abiertas (pulgares fuera del stick)",L"Pausa al impactar\nLa mano y el arma se detienen un instante al golpear",L"Gráficos recomendados\nAjustes para VR en este PC (desde el próximo inicio)",L"Aplicar",L"Listo"};
     if(language=="italian")return {L"Impostazioni VR",L"Accovacciamento reale\nAbbassa la testa per muoverti furtivo",L"Sì",L"No",L"Profondità: %d%%\nQuanto sotto l'altezza degli occhi in piedi",
         L"Le impostazioni valgono subito e restano al prossimo avvio.\nAltezza degli occhi in piedi = quella dell'ultimo ripristino della vista.",
         L"(avvio di sviluppo: vale ora, non viene salvato)",
-        L"Velocità del colpo per attaccare: %d%%\nPiù bassa: basta un colpo più leggero",L"Nuotare con le braccia\nIn acqua, bracciate a mani aperte (pollici lontani dagli stick)",L"Pausa all'impatto\nMano e arma si fermano un attimo quando colpisci"};
+        L"Velocità del colpo per attaccare: %d%%\nPiù bassa: basta un colpo più leggero",L"Nuotare con le braccia\nIn acqua, bracciate a mani aperte (pollici lontani dagli stick)",L"Pausa all'impatto\nMano e arma si fermano un attimo quando colpisci",L"Grafica consigliata\nImpostazioni per la VR su questo PC (dal prossimo avvio)",L"Applica",L"Pronto"};
     if(language=="polish")return {L"Ustawienia VR",L"Prawdziwe kucanie\nOpuść głowę, aby się skradać",L"Wł.",L"Wył.",L"Głębokość: %d%%\nO ile poniżej wysokości oczu na stojąco",
         L"Ustawienia działają od razu i zostają na następne uruchomienie.\nWysokość oczu na stojąco = z ostatniego resetu widoku.",
         L"(uruchomienie deweloperskie: działa teraz, nie zapisano)",
-        L"Szybkość zamachu do ataku: %d%%\nNiżej: wystarczy lżejszy zamach",L"Pływanie rękami\nW wodzie wiosłuj otwartymi dłońmi (kciuki z dala od drążków)",L"Zatrzymanie przy trafieniu\nRęka i broń na chwilę stają przy trafieniu"};
+        L"Szybkość zamachu do ataku: %d%%\nNiżej: wystarczy lżejszy zamach",L"Pływanie rękami\nW wodzie wiosłuj otwartymi dłońmi (kciuki z dala od drążków)",L"Zatrzymanie przy trafieniu\nRęka i broń na chwilę stają przy trafieniu",L"Zalecana grafika\nUstawienia dla VR na tym PC (od następnego uruchomienia)",L"Ustaw",L"Gotowe"};
     if(language=="brazilian"||language=="portuguese")return {L"Configurações de VR",L"Agachar de verdade\nAbaixe a cabeça para ficar furtivo",L"Sim",L"Não",L"Profundidade: %d%%\nQuanto abaixo da altura dos olhos em pé",
         L"As configurações valem na hora e ficam para a próxima vez.\nAltura dos olhos em pé = a do último reajuste da visão.",
         L"(início de desenvolvimento: vale agora, não é salvo)",
-        L"Velocidade do golpe para atacar: %d%%\nMenor: um golpe mais leve já ataca",L"Nadar com os braços\nNa água, braçadas com as mãos abertas (polegares fora do analógico)",L"Pausa no impacto\nA mão e a arma param um instante ao acertar"};
+        L"Velocidade do golpe para atacar: %d%%\nMenor: um golpe mais leve já ataca",L"Nadar com os braços\nNa água, braçadas com as mãos abertas (polegares fora do analógico)",L"Pausa no impacto\nA mão e a arma param um instante ao acertar",L"Gráficos recomendados\nAjustes para VR neste PC (a partir do próximo início)",L"Aplicar",L"Pronto"};
     if(language=="russian")return {L"Настройки VR",L"Настоящее приседание\nОпустите голову, чтобы красться",L"Вкл",L"Выкл",L"Глубина: %d%%\nНасколько ниже высоты глаз стоя",
         L"Настройки действуют сразу и сохраняются до следующего запуска.\nВысота глаз стоя = при последнем сбросе вида.",
         L"(запуск для разработки: действует сейчас, не сохраняется)",
-        L"Скорость взмаха для атаки: %d%%\nНиже: хватит и более лёгкого взмаха",L"Плавание руками\nВ воде гребите открытыми ладонями (большие пальцы не на стиках)",L"Стоп при ударе\nРука и оружие на миг замирают при попадании"};
+        L"Скорость взмаха для атаки: %d%%\nНиже: хватит и более лёгкого взмаха",L"Плавание руками\nВ воде гребите открытыми ладонями (большие пальцы не на стиках)",L"Стоп при ударе\nРука и оружие на миг замирают при попадании",L"Рекомендуемая графика\nНастройки для VR на этом ПК (со следующего запуска)",L"Задать",L"Готово"};
     if(language=="ukrainian")return {L"Налаштування VR",L"Справжнє присідання\nОпустіть голову, щоб скрадатися",L"Увімк",L"Вимк",L"Глибина: %d%%\nНаскільки нижче висоти очей стоячи",
         L"Налаштування діють одразу й зберігаються до наступного запуску.\nВисота очей стоячи = під час останнього скидання виду.",
         L"(запуск для розробки: діє зараз, не зберігається)",
-        L"Швидкість замаху для атаки: %d%%\nНижче: вистачить і легшого замаху",L"Плавання руками\nУ воді гребіть відкритими долонями (великі пальці не на стиках)",L"Зупинка при ударі\nРука й зброя на мить завмирають при влучанні"};
+        L"Швидкість замаху для атаки: %d%%\nНижче: вистачить і легшого замаху",L"Плавання руками\nУ воді гребіть відкритими долонями (великі пальці не на стиках)",L"Зупинка при ударі\nРука й зброя на мить завмирають при влучанні",L"Рекомендована графіка\nНалаштування для VR на цьому ПК (з наступного запуску)",L"Задати",L"Готово"};
     if(language=="schinese")return {L"VR 设置",L"真实下蹲\n低头即可潜行",L"开",L"关",L"下蹲深度：%d%%\n比站立时的眼睛高度低多少",
         L"设置立即生效，并保留到下次启动。\n站立时的眼睛高度 = 上次重置视角时的高度。",
         L"（开发用启动：仅本次生效，不保存）",
-        L"攻击所需挥动速度：%d%%\n越低，越轻的挥动也能攻击",L"用手臂游泳\n在水中张开手划水即可前进（拇指离开摇杆）",L"命中停顿\n命中时手和武器短暂停住"};
+        L"攻击所需挥动速度：%d%%\n越低，越轻的挥动也能攻击",L"用手臂游泳\n在水中张开手划水即可前进（拇指离开摇杆）",L"命中停顿\n命中时手和武器短暂停住",L"推荐画质设置\n按本机为 VR 设置（下次启动时生效）",L"应用",L"已预约"};
     if(language=="tchinese")return {L"VR 設定",L"真實蹲下\n低頭即可潛行",L"開",L"關",L"蹲下深度：%d%%\n比站立時的眼睛高度低多少",
         L"設定立即生效，並保留到下次啟動。\n站立時的眼睛高度 = 上次重設視角時的高度。",
         L"（開發用啟動：僅本次生效，不儲存）",
-        L"攻擊所需揮動速度：%d%%\n越低，越輕的揮動也能攻擊",L"用手臂游泳\n在水中張開手划水即可前進（拇指離開搖桿）",L"命中停頓\n命中時手和武器短暫停住"};
+        L"攻擊所需揮動速度：%d%%\n越低，越輕的揮動也能攻擊",L"用手臂游泳\n在水中張開手划水即可前進（拇指離開搖桿）",L"命中停頓\n命中時手和武器短暫停住",L"推薦畫質設定\n依本機為 VR 設定（下次啟動時生效）",L"套用",L"已預約"};
     if(language=="koreana")return {L"VR 설정",L"실제 웅크리기\n머리를 숙이면 은신합니다",L"켜기",L"끄기",L"웅크림 깊이: %d%%\n서 있을 때 눈높이보다 얼마나 낮을 때",
         L"설정은 즉시 적용되고 다음 실행에도 유지됩니다.\n서 있을 때 눈높이 = 마지막으로 시점을 재설정한 높이.",
         L"(개발용 실행: 이번에만 적용, 저장 안 됨)",
-        L"공격에 필요한 휘두르기 속도: %d%%\n낮을수록 가볍게 휘둘러도 공격합니다",L"팔로 수영\n물속에서 손을 펴고 물을 저으면 나아갑니다 (엄지는 스틱에서 떼기)",L"히트 스톱\n명중하면 손과 무기가 잠깐 멈춥니다"};
+        L"공격에 필요한 휘두르기 속도: %d%%\n낮을수록 가볍게 휘둘러도 공격합니다",L"팔로 수영\n물속에서 손을 펴고 물을 저으면 나아갑니다 (엄지는 스틱에서 떼기)",L"히트 스톱\n명중하면 손과 무기가 잠깐 멈춥니다",L"권장 그래픽 설정\n이 PC의 VR에 맞게 변경 (다음 실행부터)",L"적용",L"예약됨"};
     if(language=="turkish")return {L"VR ayarları",L"Gerçek eğilme\nGizlenmek için başını eğ",L"Açık",L"Kapalı",L"Eğilme derinliği: %d%%\nAyaktaki göz yüksekliğinin ne kadar altında",
         L"Ayarlar hemen uygulanır ve sonraki açılışta da kalır.\nAyaktaki göz yüksekliği = son görüş sıfırlamasındaki yükseklik.",
         L"(geliştirme başlatması: şimdi uygulanır, kaydedilmez)",
-        L"Saldırı için savurma hızı: %d%%\nDüşük: daha hafif bir savuruş da saldırır",L"Kollarla yüzme\nSuda açık ellerle kulaç at (başparmaklar çubuktan uzakta)",L"Vuruş duraklaması\nİsabet anında el ve silah bir an durur"};
+        L"Saldırı için savurma hızı: %d%%\nDüşük: daha hafif bir savuruş da saldırır",L"Kollarla yüzme\nSuda açık ellerle kulaç at (başparmaklar çubuktan uzakta)",L"Vuruş duraklaması\nİsabet anında el ve silah bir an durur",L"Önerilen grafik\nBu PC'de VR için ayarlar (sonraki açılıştan itibaren)",L"Uygula",L"Hazır"};
     if(language=="japanese")return {L"VR設定",L"リアルしゃがみ\n頭を下げると隠密になります",L"入",L"切",L"しゃがむ深さ：%d%%\n立った時の目の高さから何%%下がったら隠密か",
         L"設定はすぐに反映され、次の起動にも残ります。\n立った時の目の高さ＝最後に視点をリセットした時の高さです。",
         L"（開発用の起動：この回だけ反映、保存はしません）",
-        L"攻撃に要る振りの速さ：%d%%\n低いほど軽い振りで攻撃が出ます",L"腕で泳ぐ\n水の中で手を開いて水をかくと進みます（親指はスティックから離す）",L"ヒットストップ\n当たった瞬間に手と武器が一瞬止まります"};
+        L"攻撃に要る振りの速さ：%d%%\n低いほど軽い振りで攻撃が出ます",L"腕で泳ぐ\n水の中で手を開いて水をかくと進みます（親指はスティックから離す）",L"ヒットストップ\n当たった瞬間に手と武器が一瞬止まります",L"推奨グラフィック設定\nこの PC の VR 向けに変更（次の起動で反映）",L"変更",L"予約済み"};
     return {L"VR settings",L"Real crouch\nLower your head to sneak",L"On",L"Off",L"Crouch depth: %d%%\nHow far below your standing eye height",
         L"Settings apply at once and are kept for the next start.\nStanding eye height = the height at your last view reset.",
         L"(development start: applies now, not saved)",
-        L"Swing speed to attack: %d%%\nLower: a lighter swing attacks",L"Swim with your arms\nIn water, stroke with open hands (thumbs off the sticks)",L"Hit stop\nYour hand and weapon pause for a moment on a hit"};
+        L"Swing speed to attack: %d%%\nLower: a lighter swing attacks",L"Swim with your arms\nIn water, stroke with open hands (thumbs off the sticks)",L"Hit stop\nYour hand and weapon pause for a moment on a hit",L"Recommended graphics\nSet the game's graphics for VR on this PC (from the next start)",L"Set",L"Done"};
 }
 // Presses for a Mock trial (EVR_VR_SETTINGS_PRESSES): "frame:name;frame:name", in the order of their frames; a slider
 // takes its value as "frame:slider=40" / "frame:swing_slider=80".
