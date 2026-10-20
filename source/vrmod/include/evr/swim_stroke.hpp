@@ -9,19 +9,26 @@ namespace evr::motion {
 // Swimming by the arms (2026-10-20, user: "add swimming by hand - VHVR had it", "switchable in the settings"), as VHVR's
 // gestured locomotion (docs/analysis/vhvr_spec_20261010/locomotion_input.md 5.0 and 5.2, GesturedLocomotionManager.cs):
 //   - a hand counts while the character swims, the hand is under the water's surface and the hand is not "held back"
-//     (VHVR's StopGesturedLocomotion: the thumb on the stick or a button, the trigger pulled, the grip closed);
+//     (VHVR's StopGesturedLocomotion: the thumb on the stick or a button, the trigger pulled, the grip closed; here the
+//     trigger, the grip and the face buttons only - see below);
 //   - its push: the hand's speed along its palm's direction (left hand: the grip's +X, right hand: -X - OpenXR's grip
 //     space, the palm's normal) less 0.5 m/s, toward the opposite of the hand's movement;
 //   - both hands' pushes added and laid flat: under 0.375 m/s nothing, else twice that is the wanted velocity;
 //   - the velocity goes toward the wanted one by (step / 1 s) each step (VHVR's decay time in the water: a stroke
 //     carries on and fades over a few seconds); under 0.0625 m/s it is nothing;
-//   - it is given as the left stick, 1 m/s = the stick's full throw, along the head's forward and right (the sent
-//     camera follows the head while swimming - include/evr/walking_head_camera.hpp swimHead), added to the stick.
-// The water's surface: the game's own is not read here. Guess (not measured): the character floats with the water
-// about at its chin, so the surface is taken `surfaceBelowHead` under the headset.
+//   - it is given as the left stick along the head's forward and right (the sent camera follows the head while
+//     swimming - include/evr/walking_head_camera.hpp swimHead), added to the stick.
+// Headset run 20261020-112023 (user: "I cannot swim with my hands"; bug report 112732, its hands replayed through this
+// computation - scratchpad swim_replay.py): the strokes were 0.07..0.35 m under the head, a third of the hands' rows
+// were above the surface taken 0.2 m under the head, many more were held back by the stick (the thumb on it), and a
+// stroke lasted about 80 ms, so the velocity rose to 0.06..0.37 m/s - a tenth of the stick at VHVR's 1 m/s per full
+// throw (Valheim's swimming; Enshrouded's is another). Now: the surface 0.05 m under the head (still a guess - the
+// game's water level is not read), the thumb and the stick do not hold a hand back (the stick's own push is added to
+// the strokes anyway), and 0.25 m/s is the full throw (fitted to that one recording: its strokes then give 0.4..1 of
+// the stick for a second or two; EVR_SWIM_STICK_SCALE).
 struct SwimStrokeSettings {
-    float palmDeadSpeed=.5f,minimumPush=.375f,pushGain=2.f,decaySeconds=1.f,minimumSpeed=.0625f,metresPerSecondPerStick=1.f;
-    float surfaceBelowHead=.2f;
+    float palmDeadSpeed=.5f,minimumPush=.375f,pushGain=2.f,decaySeconds=1.f,minimumSpeed=.03f,metresPerSecondPerStick=.25f;
+    float surfaceBelowHead=.05f;
     float maximumHandSpeed=15.f;   // a tracking jump, not a stroke
     double maximumStep=.1;         // seconds; a longer gap starts over
 };
@@ -30,10 +37,9 @@ class SwimStroke {
     std::array<Vec3,2> last_{};std::array<bool,2> have_{};XrTime lastTime_=0;Vec3 velocity_{0,0,0};
 public:
     void reset(){have_={};lastTime_=0;velocity_={0,0,0};}
-    // A hand held back (VHVR: gestures only with open hands and the thumbs off).
+    // A hand held back: the trigger pulled, the grip closed, a face button down (VHVR also the thumb on the stick - not
+    // here, see above).
     static bool heldBack(const HandSample& h){
-        if(h.thumbTouchActive&&h.thumbTouch)return true;
-        if(h.stickActive&&std::hypot(h.stick.x,h.stick.y)>.2f)return true;
         if(h.triggerActive&&h.trigger>=.5f)return true;
         if(h.grabActive&&h.grab)return true;
         return (h.primaryActive&&h.primaryPressed)||(h.secondaryActive&&h.secondaryPressed);

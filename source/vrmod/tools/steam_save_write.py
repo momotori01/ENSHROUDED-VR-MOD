@@ -12,6 +12,10 @@ current ones are written with ISteamRemoteStorage::FileWrite - as the game itsel
 the file agree and the next direct start loads that state. The game's own backup\\ and migrated\\ folders are left alone.
 Run with the game closed and Steam running; back the current saves up first (backup_game_saves.ps1).
   python -I vrmod/tools/steam_save_write.py vrmod/output/save-backups/<snapshot> [--dry-run]
+--settings also takes the snapshot's user_settings.json, --only NAME limits it to the files named (2026-10-20: an old-style
+restore - run_play_session.ps1 -SaveReference through restore_scenery_backup.ps1 - had copied a 10-17 user_settings.json
+behind Steam's back, with the session mode Public instead of the player's Friends; it was put back from the backup made
+just before: --settings --only user_settings.json).
 """
 import argparse, ctypes, hashlib, json, os, pathlib, re, subprocess, sys
 
@@ -22,6 +26,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('snapshot', type=pathlib.Path)
     p.add_argument('--dry-run', action='store_true')
+    p.add_argument('--settings', action='store_true', help='also user_settings.json')
+    p.add_argument('--only', action='append', default=[], help='only this file (repeatable)')
     a = p.parse_args()
     game = pathlib.Path(__file__).resolve().parents[2]
     snap = a.snapshot.resolve()
@@ -37,7 +43,9 @@ def main():
     files = []
     for e in manifest:
         rel = e['relative']
-        if re.search(r'[\\/]', rel) or not re.fullmatch(r'[A-Za-z0-9_-]+\.ksd', rel):
+        if re.search(r'[\\/]', rel) or not (re.fullmatch(r'[A-Za-z0-9_-]+\.ksd', rel) or (a.settings and rel == 'user_settings.json')):
+            continue
+        if a.only and rel not in a.only:
             continue
         data = (snap / 'remote' / rel).read_bytes()
         if hashlib.sha256(data).hexdigest().upper() != e['sha256'].upper():

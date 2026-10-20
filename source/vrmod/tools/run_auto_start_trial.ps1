@@ -24,7 +24,9 @@ $mod=Split-Path $PSScriptRoot -Parent;$game=Split-Path $mod -Parent
 Set-Location -LiteralPath $game
 if(Get-Process enshrouded -ErrorAction SilentlyContinue){throw 'The game is already running; close it first.'}
 if(!(Test-Path -LiteralPath 'dinput8.dll') -or !(Test-Path -LiteralPath 'EnshroudedVR/bin/evr_hooks.dll')){throw 'The package is not in the game folder (tools/pack_release.ps1 -Install).'}
-if($SaveReference){& (Join-Path $PSScriptRoot 'restore_scenery_backup.ps1') -Backup $SaveReference}
+# The reference through Steam's own storage (2026-10-20: restore_scenery_backup.ps1 copies behind Steam's back - 1.0 cannot read
+# such a save, and it had put back an old user_settings.json; tools/steam_save_write.py writes the .ksd files only).
+if($SaveReference){& python -I (Join-Path $PSScriptRoot 'steam_save_write.py') $SaveReference;if($LASTEXITCODE -ne 0){throw 'The save reference could not be written through Steam (steam_save_write.py).'}}
 $source=$null
 foreach($candidate in (Get-ChildItem -LiteralPath (Join-Path $mod 'output/save-backups') -Directory | Sort-Object Name -Descending)){
     $recordPath=Join-Path $candidate.FullName 'backup.json';if(!(Test-Path -LiteralPath $recordPath)){continue}

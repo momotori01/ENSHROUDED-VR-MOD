@@ -27,22 +27,27 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(r.stroking&&r.moving&&r.stickY>.5f&&std::abs(r.stickX)<.05f&&r.counted[0]&&r.counted[1]);
   ck(r.wanted.z<-4.f);                                                  // (2 - 0.5) x 2 hands x 2 = 6 m/s, toward -Z
   // the hands still: the stroke carries on and fades over a few seconds (VHVR: 1 s decay in the water)
-  float earlier=r.stickY;for(int k=0;k<90;++k,t+=step)r=s.update(backward(frame(t,{-.3f,1.f,.6f},{.3f,1.f,.6f})),head,true);
-  ck(!r.stroking&&r.moving&&r.stickY<earlier&&r.stickY>0);
+  const float earlier=length(r.velocity);for(int k=0;k<90;++k,t+=step)r=s.update(backward(frame(t,{-.3f,1.f,.6f},{.3f,1.f,.6f})),head,true);
+  ck(!r.stroking&&r.moving&&length(r.velocity)<earlier*.5f&&r.stickY>0);
   for(int k=0;k<500;++k,t+=step)r=s.update(backward(frame(t,{-.3f,1.f,.6f},{.3f,1.f,.6f})),head,true);
   ck(!r.moving&&r.stickY==0);}
- // Above the water's surface (0.2 m under the head) a hand does nothing; nor a hand held back (the thumb on the stick,
- // the trigger, the grip closed); nor slow strokes (0.5 m/s is taken off each hand), nor out of the water.
+ // Above the water's surface (0.05 m under the head, 2026-10-20 11:40) a hand does nothing; nor a hand held back (the
+ // trigger, the grip closed - the thumb on the stick does not hold it back since 11:40); nor slow strokes (0.5 m/s is
+ // taken off each hand), nor out of the water.
  auto stroke=[&](float y,auto&& hold,bool swimming,float speed=2.f){SwimStroke s;SwimStrokeResult r;XrTime t=step;
   for(int k=0;k<28;++k,t+=step){auto f=backward(frame(t,{-.3f,y,speed*k*step*1e-9f},{.3f,y,speed*k*step*1e-9f}));hold(f);r=s.update(f,head,swimming);}
   return r;};
  auto none=[](HandFrame&){};
- ck(stroke(1.f,none,true).moving&&!stroke(1.5f,none,true).moving&&!stroke(1.f,none,false).moving);
- ck(!stroke(1.f,[](HandFrame& f){for(auto& h:f.hands){h.thumbTouchActive=true;h.thumbTouch=true;}},true).moving);
+ ck(stroke(1.f,none,true).moving&&stroke(1.5f,none,true).moving&&!stroke(1.58f,none,true).moving&&!stroke(1.f,none,false).moving);
+ ck(stroke(1.f,[](HandFrame& f){for(auto& h:f.hands){h.thumbTouchActive=true;h.thumbTouch=true;h.stickActive=true;h.stick={0,.8f};}},true).moving);
  ck(!stroke(1.f,[](HandFrame& f){for(auto& h:f.hands){h.triggerActive=true;h.trigger=.9f;}},true).moving);
  ck(!stroke(1.f,[](HandFrame& f){for(auto& h:f.hands){h.grabActive=true;h.grab=true;}},true).moving);
  ck(!stroke(1.f,none,true,.6f).moving);                                // (0.6 - 0.5) x 2 = 0.2 < 0.375
- ck(stroke(1.f,[](HandFrame& f){f.hands[0].thumbTouchActive=true;f.hands[0].thumbTouch=true;},true).moving);   // one hand alone: 1.5 m/s
+ ck(stroke(1.f,[](HandFrame& f){f.hands[0].triggerActive=true;f.hands[0].trigger=1;},true).moving);   // one hand alone: 1.5 m/s
+ // 0.25 m/s is the stick's full throw (fitted 2026-10-20 11:40): a short stroke of 80 ms at 2.5 m/s moves the stick far
+ {SwimStroke s;SwimStrokeResult r;XrTime t=step;float most=0;
+  for(int k=0;k<40;++k,t+=step){const float z=k<8?.0278f*k:.0278f*7;r=s.update(backward(frame(t,{-.3f,1.f,z},{.3f,1.f,z})),head,true);most=std::max(most,r.stickY);}
+  ck(most>.6f);}
  // The palms turned forward and the hands moved back: no push (only the palm's side pushes water).
  {SwimStroke s;SwimStrokeResult r;XrTime t=step;
   for(int k=0;k<28;++k,t+=step){auto f=frame(t,{-.3f,1.f,.0222f*k},{.3f,1.f,.0222f*k});

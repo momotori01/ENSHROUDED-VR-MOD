@@ -271,7 +271,9 @@ if($WriteProfile){
 if($Hands -and !$RealVr){& $py vrmod/tools/validate_mock_hands.py $Hands;if($LASTEXITCODE -ne 0){throw 'Mock hand sequence failed native runtime preflight before settings/save/game changes.'}}
 if($SettingsFile){& $py vrmod/tools/validate_gi_settings.py $SettingsFile;if($LASTEXITCODE -ne 0){throw 'GI preset validation failed before settings/save changes.'}}
 if(Get-Process enshrouded -ErrorAction SilentlyContinue){throw 'The game is already running; close it first.'}
-if($SaveReference){& (Join-Path $PSScriptRoot 'restore_scenery_backup.ps1') -Backup $SaveReference}
+# The reference through Steam's own storage (2026-10-20: restore_scenery_backup.ps1 copies behind Steam's back - 1.0 cannot read
+# such a save, and it had put back an old user_settings.json; tools/steam_save_write.py writes the .ksd files only).
+if($SaveReference){& $py -I (Join-Path $PSScriptRoot 'steam_save_write.py') $SaveReference;if($LASTEXITCODE -ne 0){throw 'The save reference could not be written through Steam (steam_save_write.py).'}}
 $cur='enshrouded_local.json';$settingsRecord=$null
 # 1.0 (2026-10-16): the game reads its machine settings from Saved Games\keen games\Enshrouded\local_settings.json.
 $machineSettings=Join-Path $env:USERPROFILE 'Saved Games\keen games\Enshrouded\local_settings.json';if(Test-Path -LiteralPath $machineSettings){$cur=$machineSettings}

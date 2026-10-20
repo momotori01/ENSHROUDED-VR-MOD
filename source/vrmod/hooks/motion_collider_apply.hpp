@@ -45,36 +45,61 @@ inline void sweepFromTip(const motion::ColliderPose& pose,const std::array<uint8
  std::memcpy(previous.data(),&start,24);std::memcpy(previous.data()+24,current.data()+24,16);
  lastTipSweepMetres=tipWay;++tipSweeps;
 }
-// The sweep from the press (2026-10-20, user: "strokes at pots miss although I swung close - like the fix for the enemies,
+// The way from the press (2026-10-20, user: "strokes at pots miss although I swung close - like the fix for the enemies,
 // can't everything breakable the blade passed during the attack be hit?"). Headset run 20261020-100726: the game's hit
 // volume came 80 ms after a stroke's press and lasted 150 ms; its first update stood at the blade without a sweep (the
 // previous transform the same as the current), so where the blade went in those 80 ms - with a fast stroke 0.4..0.8 m,
-// past a pot 0.5 m across - was never in the volume. The first two updates of a hit volume now sweep from where the tip
-// was when the stroke pressed the attack (the shown weapon's pose then, motionColliderChannel::past) to where it is,
-// as sweepFromTip does between two updates: what the blade passed from the press on is in the sweep. At most 300 ms
-// back and 2 m. EVR_MELEE_CATCH_UP=0: off.
+// past a pot 0.5 m across - was never in the volume.
+// 11:10: the first two updates swept in one line from the tip at the press to the tip now. Headset run 20261020-112023
+// (user: "strokes at pots still miss now and then"): that line was 0.3..1.9 m long - the tip of a fast stroke moves 1.6..1.9 m
+// in 78 ms, along an arc about a metre round the shoulder, whose middle is 0.3 m and more off the line (computed).
+// Now the volume goes the blade's way again from the press: each update takes the shown weapon's pose 36 ms later than
+// the one before (motionColliderChannel::past, about every 11 ms), swept from the one before as between two updates
+// (sweepFromTip), until it reaches the blade of now - with the game's update every 18 ms the volume catches up in about
+// five updates, 90 ms behind the blade at first. Then it follows the blade as before. At most 300 ms after the press.
+// EVR_MELEE_CATCH_UP=0: off (the volume at the blade from its first update).
 inline const bool catchUp=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MELEE_CATCH_UP",v,sizeof v);return !(n==1&&v[0]=='0');}();
-inline motion::ColliderKey catchKey{};inline unsigned catchUpdates=0;inline double lastCatchUpMetres=0;inline uint64_t lastCatchUpMs=0;inline std::atomic<unsigned> catchUps{0};
-inline void sweepFromPress(const motion::ColliderPose& pose,const motion::ColliderKey& key,bool continuous,const std::array<uint8_t,56>& native,const std::array<uint8_t,56>& current,std::array<uint8_t,72>& previous){
- lastCatchUpMetres=0;lastCatchUpMs=0;
- if(!continuous){catchKey=key;catchUpdates=0;}else if(catchKey==key)++catchUpdates;else return;
- if(!catchUp||catchUpdates>1||!(pose.tipY>.2f&&pose.tipY<4.f))return;
- const auto stroke=controllerUiFixture::strokeMs.load();
- if(!stroke||pose.milliseconds<stroke||pose.milliseconds-stroke>300)return;
- motion::ColliderPose then;if(!motionColliderChannel::pastAt(stroke>10?stroke-10:stroke,pose.item,then)||then.milliseconds>=pose.milliseconds)return;
- const auto was=motion::colliderTransform(then,native);
+constexpr int64_t replayStepNs=36000000;
+// One replay for each hit volume (a skill may have more than one at a time), the four last.
+struct Replay {motion::ColliderKey key{};bool used=false,running=false;int64_t at=0;uint64_t touched=0;};
+inline std::array<Replay,4> replayStates{};inline uint64_t replayTouches=0;
+inline double lastReplayLagMs=0;inline bool lastReplayed=false,lastReplayFirst=false;inline std::atomic<unsigned> replays{0};
+// Before the lease: a new volume after a stroke starts the replay at the press (startOut: the pose then, first: true);
+// while it runs `current` becomes the pose 36 ms on. False: the live pose stays.
+inline bool replayCurrent(const motion::ColliderPose& pose,const motion::ColliderKey& key,const std::array<uint8_t,56>& native,std::array<uint8_t,56>& current,motion::ColliderPose& startOut,bool& first){
+ first=false;lastReplayed=false;lastReplayLagMs=0;
+ Replay* r=nullptr;for(auto& x:replayStates)if(x.used&&x.key==key){r=&x;break;}
+ if(!r){r=&replayStates[0];for(auto& x:replayStates)if(!x.used||x.touched<r->touched)r=&x;   // a new volume
+  *r={};r->key=key;r->used=true;
+  const auto stroke=controllerUiFixture::strokeMs.load();
+  if(catchUp&&stroke&&pose.milliseconds>=stroke&&pose.milliseconds-stroke<=300&&pose.tipY>.2f&&pose.tipY<4.f){
+   motion::ColliderPose s;
+   if(motionColliderChannel::pastAt(stroke>10?stroke-10:stroke,pose.item,s)&&s.predictedTime<pose.predictedTime){r->running=true;r->at=s.predictedTime;startOut=s;first=true;++replays;}
+  }
+ }
+ r->touched=++replayTouches;
+ if(!r->running)return false;
+ const int64_t to=r->at+replayStepNs;
+ if(to>=pose.predictedTime-5000000){r->running=false;return false;}   // caught up: the live blade (its sweep from the last replayed pose)
+ motion::ColliderPose p;
+ if(!motionColliderChannel::pastAtTime(to,pose.item,p)||p.predictedTime>=pose.predictedTime){r->running=false;return false;}
+ current=motion::colliderTransform(p,native);r->at=p.predictedTime;
+ lastReplayed=true;lastReplayLagMs=double(pose.predictedTime-p.predictedTime)*1e-6;return true;
+}
+// The first update of a replay: the sweep from the tip at the press to the tip of `current` (both as tracked), the
+// current orientation placed where the tip was (as sweepFromTip).
+inline void sweepFromStart(const motion::ColliderPose& pose,const motion::ColliderPose& start,const std::array<uint8_t,56>& native,const std::array<uint8_t,56>& current,std::array<uint8_t,72>& previous){
+ if(!(pose.tipY>.2f&&pose.tipY<4.f))return;
+ const auto was=motion::colliderTransform(start,native);
  WorldPositionQ32 cp,pp;Quat cq,pq;std::memcpy(&cp,current.data(),24);std::memcpy(&cq,current.data()+24,16);std::memcpy(&pp,was.data(),24);std::memcpy(&pq,was.data()+24,16);
  {const float a=cq.x*cq.x+cq.y*cq.y+cq.z*cq.z+cq.w*cq.w,b=pq.x*pq.x+pq.y*pq.y+pq.z*pq.z+pq.w*pq.w;if(!(a>.5f&&a<1.5f&&b>.5f&&b<1.5f))return;}
  const Vec3 tip{0,pose.tipY,0};const Vec3 ct=rotate(normalized(cq),tip),pt=rotate(normalized(pq),tip);
  const Vec3 grip{float(relativeQ32(pp.x,cp.x)),float(relativeQ32(pp.y,cp.y)),float(relativeQ32(pp.z,cp.z))};
- const Vec3 shift=grip+pt-ct;const float way=length(shift);   // the tip then - the tip now
- if(!std::isfinite(way)||way>2.f||way<.05f)return;
- // only when it reaches further back than the sweep the update has already
- WorldPositionQ32 ps;std::memcpy(&ps,previous.data(),24);const Vec3 had{float(relativeQ32(ps.x,cp.x)),float(relativeQ32(ps.y,cp.y)),float(relativeQ32(ps.z,cp.z))};
- if(length(had)>=way)return;
- WorldPositionQ32 start=cp;start.x+=int64_t(double(shift.x)*4294967296.);start.y+=int64_t(double(shift.y)*4294967296.);start.z+=int64_t(double(shift.z)*4294967296.);
- std::memcpy(previous.data(),&start,24);std::memcpy(previous.data()+24,current.data()+24,16);
- lastCatchUpMetres=way;lastCatchUpMs=pose.milliseconds-then.milliseconds;++catchUps;
+ const Vec3 shift=grip+pt-ct;const float way=length(shift);
+ if(!std::isfinite(way)||way>1.5f)return;
+ WorldPositionQ32 at=cp;at.x+=int64_t(double(shift.x)*4294967296.);at.y+=int64_t(double(shift.y)*4294967296.);at.z+=int64_t(double(shift.z)*4294967296.);
+ std::memcpy(previous.data(),&at,24);std::memcpy(previous.data()+24,current.data()+24,16);
+ lastTipSweepMetres=way;
 }
 struct PoseSeen {uint32_t item=0;uint64_t serial=0;int64_t predictedTime=0;WorldPositionQ32 position{};bool valid=false;};
 inline PoseSeen poseSeen;inline double lastLeadMetres=0;inline std::atomic<unsigned> leadApplied{0};
@@ -137,19 +162,22 @@ inline void begin(uintptr_t world,uint32_t entity,void* query,unsigned sample,co
  if(live){
   if(!pose.valid||!combatEpochGate::newAllowed(combatEpochGate::Stage::Collider,pose.clientWorld,world)){++ignored;return;}
   sourceCurrent=read<std::array<uint8_t,56>>(q[1]);sourcePrevious=q[3]?read<std::array<uint8_t,72>>(q[3]):std::array<uint8_t,72>{};
-  auto current=motion::colliderTransform(pose,sourceCurrent);if(!remote)leadPosition(pose,current);enlarge(current);
+  auto current=motion::colliderTransform(pose,sourceCurrent);if(!remote)leadPosition(pose,current);
+  motion::ColliderPose replayStart;bool replayFirst=false;const bool replayed=!remote&&replayCurrent(pose,key,sourceCurrent,current,replayStart,replayFirst);
+  lastReplayFirst=replayFirst;enlarge(current);
   const auto decision=liveLease.apply(key,true,GetTickCount64(),current);
   if(!decision.track){++ignored;return;}
   impactLifetime::tracked(world,entity,key.event);
   sourceQuery=q;scopeKey=key;cancelScope=false;lookupSeen=false;readySample=sample;
   // The game sweeps from the previous transform: the tracked weapon's own previous pose, or no sweep on the first update.
-  auto previous=sourcePrevious;if(q[3]){std::memcpy(previous.data(),decision.previous.data(),52);if(decision.continuous&&!remote)sweepFromTip(pose,current,previous);
-   if(!remote)sweepFromPress(pose,key,decision.continuous,sourceCurrent,current,previous);}
+  auto previous=sourcePrevious;if(q[3]){std::memcpy(previous.data(),decision.previous.data(),52);
+   if(replayFirst&&!decision.continuous)sweepFromStart(pose,replayStart,sourceCurrent,current,previous);
+   else if(decision.continuous&&!remote)sweepFromTip(pose,current,previous);}
   borrow.open(q,current,previous);activeScope=true;++outstanding;++opened;++applied;if(decision.continuous)++liveContinuous;
   if(liveLogged.fetch_add(1)<400||!(liveLogged.load()%20))logFile->event("motion_collider_apply_begin","\"ready_sample\":"+std::to_string(sample)+",\"entity\":"+std::to_string(entity)+",\"frame\":"+std::to_string(pose.frame)+",\"collider_before\":"+std::to_string(id)+
    ",\"original_current\":"+jsonString(nativeImpactComponents::asHex(sourceCurrent))+",\"applied_current\":"+jsonString(nativeImpactComponents::asHex(current))+
    ",\"original_previous\":"+jsonString(nativeImpactComponents::asHex(sourcePrevious))+",\"applied_previous\":"+jsonString(nativeImpactComponents::asHex(previous))+
-   ",\"previous_present\":"+(q[3]?"true":"false")+",\"live\":true,\"continuous\":"+(decision.continuous?"true":"false")+",\"item\":"+std::to_string(pose.item)+",\"hit_scale\":"+std::to_string(hitScale)+",\"tip_y\":"+std::to_string(pose.tipY)+",\"tip_sweep_metres\":"+std::to_string(lastTipSweepMetres)+",\"from_press_metres\":"+std::to_string(remote?0.:lastCatchUpMetres)+",\"from_press_ms\":"+std::to_string(remote?0:lastCatchUpMs)+",\"lead_ms\":"+std::to_string(colliderLeadMs)+",\"lead_metres\":"+std::to_string(remote?0.:lastLeadMetres)+",\"remote\":"+(remote?"true":"false")+",\"ecs_written_by_mod\":false");
+   ",\"previous_present\":"+(q[3]?"true":"false")+",\"live\":true,\"continuous\":"+(decision.continuous?"true":"false")+",\"item\":"+std::to_string(pose.item)+",\"hit_scale\":"+std::to_string(hitScale)+",\"tip_y\":"+std::to_string(pose.tipY)+",\"tip_sweep_metres\":"+std::to_string(lastTipSweepMetres)+",\"replayed\":"+(replayed?"true":"false")+",\"replay_first\":"+(replayFirst?"true":"false")+",\"replay_lag_ms\":"+std::to_string(replayed?lastReplayLagMs:0.)+",\"lead_ms\":"+std::to_string(colliderLeadMs)+",\"lead_metres\":"+std::to_string(remote?0.:lastLeadMetres)+",\"remote\":"+(remote?"true":"false")+",\"ecs_written_by_mod\":false");
   return;
  }
  const bool forced=cancelAfter&&applied.load()>=cancelAfter;

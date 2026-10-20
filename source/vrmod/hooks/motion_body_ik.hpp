@@ -74,14 +74,16 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
             Vec3 lengthwise{0,0,0},up{0,1,0};(axis==0?lengthwise.x:axis==1?lengthwise.y:lengthwise.z)=headAtMaximum?1.f:-1.f;if(axis==1)up={0,0,1};
             // The palm (the left socket) in the world, and the character's forward there.
             const auto palm=rotate(modelQ,Vec3{gs[socket].position.x*modelScale.x,gs[socket].position.y*modelScale.y,gs[socket].position.z*modelScale.z});
-            // Fixed in the hand (2026-10-20, user: "can its angle follow the hand too"): the head out of the fist's little-finger
-            // side - the socket is the controller's grip (include/evr/body_ik.hpp puts it on the target), whose -Z a held
-            // sword's blade follows - and its back toward the grip's +Y; the fish turns with the hand. EVR_FISH_HANG=1: it
-            // hangs straight down from the palm, its back toward the character's forward (before).
+            // Fixed in the hand (2026-10-20, user: "can its angle follow the hand too"): the socket is the controller's grip
+            // (include/evr/body_ik.hpp puts it on the target), whose -Z a held sword's blade follows. The head toward the
+            // grip's -Y and the back toward its +Z (11:40, user after the headset run: "with the hand turned on its side it
+            // should hang as a fish held up by its tail fin - turn the head 90 degrees down"; 11:10 the head went out of the
+            // fist's little-finger side, +Z, the back +Y); the fish turns with the hand. EVR_FISH_HANG=1: it hangs straight
+            // down from the palm, its back toward the character's forward.
             static const bool hang=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_HANG",v,sizeof v);return n==1&&v[0]=='1';}();
             const auto handQ=normalized(multiply(modelQ,gs[socket].orientation));
             const Vec3 down{0,-1,0};const auto forward=rotate(modelQ,Vec3{0,0,1});
-            const auto towardHead=hang?down:rotate(handQ,Vec3{0,0,1}),backToward=hang?forward:rotate(handQ,Vec3{0,1,0});
+            const auto towardHead=hang?down:rotate(handQ,Vec3{0,-1,0}),backToward=hang?forward:rotate(handQ,Vec3{0,0,1});
             const auto first=motion::alignDirections(lengthwise,towardHead);
             // then about that line, the back toward its side (both taken square to the line)
             const auto upNow=rotate(first,up);

@@ -21,7 +21,9 @@ Set-Location -LiteralPath (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $pw=(Get-Process -Id $PID).Path
 $py='S:/stable/Python31011/python.exe'
 if(Get-Process enshrouded -ErrorAction SilentlyContinue){throw 'The game is already running; close it first.'}
-if($SaveReference){& (Join-Path $PSScriptRoot 'restore_scenery_backup.ps1') -Backup $SaveReference}
+# The reference through Steam's own storage (2026-10-20: restore_scenery_backup.ps1 copies behind Steam's back - 1.0 cannot read
+# such a save, and it had put back an old user_settings.json; tools/steam_save_write.py writes the .ksd files only).
+if($SaveReference){& python -I (Join-Path $PSScriptRoot 'steam_save_write.py') $SaveReference;if($LASTEXITCODE -ne 0){throw 'The save reference could not be written through Steam (steam_save_write.py).'}}
 $before=@(Get-ChildItem vrmod/output -Directory -Filter 'game-*' | ForEach-Object Name)
 $argList="-NoProfile -File ./vrmod/launch_diagnostics.ps1 -VrUpscaler Keep -VrSharpness Keep -InteractiveWindow -VulkanValidation None -LogNameCap $LogNameCap$(if(!$Menu){' -DirectPlay'})"
 Start-Process -FilePath $pw -ArgumentList $argList -WindowStyle Hidden | Out-Null

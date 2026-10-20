@@ -196,7 +196,7 @@ inline std::atomic<bool> roomSneakOn{true};inline std::atomic<int> crouchDrop{30
 // The speed a stroke needs to attack, percent of the mod's own (include/evr/vr_settings.hpp swingSpeed), and swimming by
 // the arms on / off (include/evr/swim_stroke.hpp); both changed in the start menu's VR settings too (2026-10-20).
 inline std::atomic<int> swingPercent{100};inline std::atomic<bool> armSwimOn{true};
-// When the last stroke pressed the attack (GetTickCount64; motion_collider_apply.hpp sweepFromPress, 2026-10-20).
+// When the last stroke pressed the attack (GetTickCount64; motion_collider_apply.hpp replayCurrent, 2026-10-20).
 inline std::atomic<uint64_t> strokeMs{0};
 inline evr::motion::SwimStroke swimStroke;
 inline std::atomic<uint64_t> recenterRequests{0},originEpoch{0};inline std::atomic<float> originHeadY{0},originReference{1.65f};
@@ -941,7 +941,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     }
                     if(heavyUntil){if(play&&now<heavyUntil)pad.buttons|=evr::motion::LivePadMapper::X;else heavyUntil=0;}
                     if(swing.fired){
-                        strokeMs.store(now);   // the hit volume's sweep starts here (motion_collider_apply.hpp sweepFromPress)
+                        strokeMs.store(now);   // the hit volume's sweep starts here (motion_collider_apply.hpp replayCurrent)
                         if(observeMeleeNative){const auto running=observeMeleeNative();std::lock_guard<std::mutex> lock(livePressMutex);
                             liveAttackPress={running.valid?running.entity:0u,uint32_t(weapon.binding>>32),running.triggerTime,now,liveAttackPress.serial+1};
                             if(cooldown)liveCooldown.expect(liveAttackPress.serial,heavyUntil?liveHeavyHoldMs:0);}
@@ -1432,7 +1432,9 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                  const bool inWater=armSwimOn.load()&&actorSwimming&&actorSwimming(now)&&fresh&&mapped.valid&&screenKind==evr::motion::LiveScreen::Gameplay&&!value.active;
                  if(hands.frame!=swimFrame||!inWater){swimFrame=hands.frame;
                     evr::motion::GestureHead swimHead;{std::lock_guard<std::mutex> lock(gestureMutex);swimHead=gestureHead;}
-                    swim=swimStroke.update(hands,swimHead.pose,inWater&&(swimHead.flags&15)==15);}
+                    static const evr::motion::SwimStrokeSettings swimSettings=[]{evr::motion::SwimStrokeSettings c;char v[16]{};const auto n=GetEnvironmentVariableA("EVR_SWIM_STICK_SCALE",v,sizeof v);
+                        if(n&&n<sizeof v){const float x=float(std::atof(v));if(x>=.05f&&x<=2.f)c.metresPerSecondPerStick=x;}return c;}();
+                    swim=swimStroke.update(hands,swimHead.pose,inWater&&(swimHead.flags&15)==15,swimSettings);}
                  if(swim.moving){
                     pad.leftX=int16_t(std::clamp<long>(long(pad.leftX)+std::lround(swim.stickX*32767),-32767,32767));
                     pad.leftY=int16_t(std::clamp<long>(long(pad.leftY)+std::lround(swim.stickY*32767),-32767,32767));}
