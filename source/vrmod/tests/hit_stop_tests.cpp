@@ -17,7 +17,7 @@ float apart(Vec3 a,Vec3 b){return length(a-b);}
 }
 int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if(!b)throw std::runtime_error(std::to_string(n)+" at line "+std::to_string(line));};
  // The weapon classes' stops
- ck(hitStopSeconds(false,false)==.1&&hitStopSeconds(false,true)==.2&&hitStopSeconds(true,false)==.3&&hitStopSeconds(true,true)==.3);
+ ck(hitStopSeconds(false,false)==.15&&hitStopSeconds(false,true)==.25&&hitStopSeconds(true,false)==.3&&hitStopSeconds(true,true)==.3);
  // No stop: the hands as they come
  {HitStop s;auto f=frame({.3f,1,0});auto o=s.apply(f,0);ck(apart(o.hands[1].grip.position,f.hands[1].grip.position)<1e-6f&&!s.active(1));}
  // A stop of the right hand for 0.1 s: it stays where it was shown, the left goes on; then it chases to the tracked hand

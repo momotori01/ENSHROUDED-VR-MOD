@@ -18,8 +18,9 @@ struct HitStopSettings {
     double doneMetres=.002,doneRadians=.01;   // close enough: the hand is shown as tracked again
 };
 // The stop of a weapon class (seconds): a tool (no target gate - pickaxe, felling axe and the like) 0.3, a two-hand
-// weapon 0.2, a one-hand weapon (and a fist) 0.1.
-inline double hitStopSeconds(bool tool,bool twoHanded){return tool?.3:twoHanded?.2:.1;}
+// weapon 0.25, a one-hand weapon (and a fist) 0.15 (2026-10-20 18:10, user after trying 0.1 / 0.2: "one-hand 0.15,
+// two-hand 0.25 - decided").
+inline double hitStopSeconds(bool tool,bool twoHanded){return tool?.3:twoHanded?.25:.15;}
 class HitStop {
     struct Hand {
         bool stopped=false,chasing=false,shownValid=false;double until=0,last=0;

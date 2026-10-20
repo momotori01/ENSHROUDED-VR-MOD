@@ -428,7 +428,13 @@ inline size_t nearBlade(const evr::motion::LiveMeleeWeapon& weapon,float radius,
 // The state of a kept thing: its health, -1 kept without a readable health (a pot, a tree not yet struck), -2 not kept
 // (gone: broken, or its components changed - a tree gets its Health when first struck).
 inline int32_t stateLocked(const Cached& c){
- const auto l=layout(c.layout);if(!l.health)return -1;   // (healthNow above: not the kept layouts alone)
+ const auto l=layout(c.layout);
+ // A guest's World (online): the replicated keen::ecs::NetworkHealth (health, healthMax) where the server's Health is
+ // missing (as the list takes it in tick() above) - so that a guest's hit stop sees a health drop too (2026-10-20 18:10,
+ // user: "make it work in an online session, on the guest's side as well").
+ if(!l.health&&l.networkHealth){uint32_t value[2]{};if(!block(c.data+l.networkHealthOffset+uintptr_t(c.row)*8,value,sizeof value)||!value[1]||value[0]>value[1])return -1;
+  return int32_t(std::min<uint32_t>(value[0],0x7fffffff));}
+ if(!l.health)return -1;   // (healthNow above: not the kept layouts alone)
  const auto bytes=types.healthBytes;if(bytes!=68&&bytes!=40)return -1;
  std::array<uint8_t,256> h{};if(!block(c.data+l.healthOffset+uintptr_t(c.row)*bytes,h.data(),bytes))return -1;
  int32_t health=-1;
