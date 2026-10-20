@@ -177,13 +177,28 @@ public:
         a.arm=arm_;a.barOn=barOn_;a.equipOn=equipOn_;a.bar=bar_;a.equip=equip_;return a;
     }
 };
-// Nothing but the head camera, the two actions, the ranged-combat bit and the AreaLoot bit differs.
+// Diving by the arms' strokes (2026-10-20, user: "stroke up, stroke down to dive and come up"; include/evr/swim_stroke.hpp
+// up): keen::ecs::PlayerInputType SwimStartDiving 34, DiveAscend 35, DiveDescend 36 in 1.0 (read from the type's own
+// table in the executable at 0x16e9760, 40 bytes an entry, the known 7 / 8 / 50 / 55 in the same order; before 1.0 the
+// table of docs/analysis/input_digital_enum.json had them at 32..34). The bits in swimInputBits go into the sent input
+// until swimInputUntilMs (controller_ui_fixture.hpp sets them every frame while it wants them).
+constexpr unsigned inputSwimStartDivingBit=34,inputDiveAscendBit=35,inputDiveDescendBit=36;
+constexpr uint64_t inputSwimStartDiving=1ull<<inputSwimStartDivingBit,inputDiveAscend=1ull<<inputDiveAscendBit,inputDiveDescend=1ull<<inputDiveDescendBit;
+constexpr uint64_t inputSwimBits=inputSwimStartDiving|inputDiveAscend|inputDiveDescend;
+inline std::atomic<uint64_t> swimInputBits{0},swimInputUntilMs{0};
+inline bool applySwimInput(ClientInputBytes& output,uint64_t now){
+    const auto bits=swimInputBits.load()&inputSwimBits;
+    if(!bits||now>=swimInputUntilMs.load())return false;
+    uint64_t digital=0;std::memcpy(&digital,output.data()+inputDigital,8);digital|=bits;std::memcpy(output.data()+inputDigital,&digital,8);return true;
+}
+// Nothing but the head camera, the two actions, the ranged-combat bit, the AreaLoot bit and the diving bits differs.
 inline bool onlyHolsterAndCameraChanged(const ClientInputBytes& a,const ClientInputBytes& b){
     for(size_t i=0;i<a.size();++i){
         if(a[i]==b[i]||(i>=0x20&&i<0x4c)||(i>=inputBarAction&&i<inputBarAction+8)||(i>=inputEquipAction&&i<inputEquipAction+16))continue;
         // the ranged-combat bit only (bit 50 in 1.0: byte 6, 0x04; June bit 47: byte 5, 0x80)
         if(i==inputDigital+inputRangedCombatArmBit/8&&((a[i]^b[i])&~uint8_t(1u<<(inputRangedCombatArmBit%8)))==0)continue;
         if(i==inputDigital+inputAreaLootBit/8&&((a[i]^b[i])&~uint8_t(1u<<(inputAreaLootBit%8)))==0)continue;
+        if(i==inputDigital+4&&((a[i]^b[i])&~uint8_t(inputSwimBits>>32))==0)continue;   // bits 34..36: byte 4
         return false;}
     return true;
 }

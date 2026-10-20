@@ -72,8 +72,8 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
             static const float gripShare=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_FISH_GRIP_PERCENT",v,sizeof v);const float x=n&&n<sizeof v?float(std::atof(v)):20.f;return (x>=2.f&&x<=45.f?x:20.f)/100.f;}();
             tail[axis]=headAtMaximum?l[axis]+gripShare*e[axis]:h[axis]-gripShare*e[axis];
             Vec3 lengthwise{0,0,0},up{0,1,0};(axis==0?lengthwise.x:axis==1?lengthwise.y:lengthwise.z)=headAtMaximum?1.f:-1.f;if(axis==1)up={0,0,1};
-            // The palm (the left socket) in the world, and the character's forward there.
-            const auto palm=rotate(modelQ,Vec3{gs[socket].position.x*modelScale.x,gs[socket].position.y*modelScale.y,gs[socket].position.z*modelScale.z});
+            // The palm (the left socket) in the world.
+            Vec3 palm=rotate(modelQ,Vec3{gs[socket].position.x*modelScale.x,gs[socket].position.y*modelScale.y,gs[socket].position.z*modelScale.z});
             // Fixed in the hand (2026-10-20, user: "can its angle follow the hand too"): the socket is the controller's grip
             // (include/evr/body_ik.hpp puts it on the target), whose -Z a held sword's blade follows. The head toward the
             // grip's -Y and the back toward its +Z (11:40, user after the headset run: "with the hand turned on its side it
@@ -83,7 +83,16 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
             static const bool hang=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FISH_HANG",v,sizeof v);return n==1&&v[0]=='1';}();
             const auto handQ=normalized(multiply(modelQ,gs[socket].orientation));
             const Vec3 down{0,-1,0};const auto forward=rotate(modelQ,Vec3{0,0,1});
-            const auto towardHead=hang?down:rotate(handQ,Vec3{0,-1,0}),backToward=hang?forward:rotate(handQ,Vec3{0,0,1});
+            // 12:20 (user after the headset run: "the tail fin's base should come up to the thumb's base, about 5 cm higher;
+            // I hold the fish with the hand as in the last 10 seconds - tilt it 20 to 30 degrees more, the head down"):
+            // bug report 121352, its last 10 s (376 rows): straight down in the grip's frame was (0.116, -0.898, 0.425) on
+            // average - 26 degrees from the grip's -Y (25..30). The head goes that way and the back turns with it, and the
+            // fish 5 cm toward the grip's "up" of that hold (EVR_FISH_RAISE_CM=<0..15>).
+            static const Vec3 headInGrip=[]{const Vec3 v{.116f,-.898f,.425f};return v*(1/length(v));}();
+            static const Vec3 backInGrip=rotate(motion::alignDirections(Vec3{0,-1,0},headInGrip),Vec3{0,0,1});
+            static const float raise=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_FISH_RAISE_CM",v,sizeof v);const float x=n&&n<sizeof v?float(std::atof(v)):5.f;return (x>=0&&x<=15?x:5.f)/100.f;}();
+            if(!hang)palm=palm+rotate(handQ,headInGrip*-raise);
+            const auto towardHead=hang?down:rotate(handQ,headInGrip),backToward=hang?forward:rotate(handQ,backInGrip);
             const auto first=motion::alignDirections(lengthwise,towardHead);
             // then about that line, the back toward its side (both taken square to the line)
             const auto upNow=rotate(first,up);

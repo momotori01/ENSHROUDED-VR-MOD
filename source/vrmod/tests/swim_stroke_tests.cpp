@@ -60,6 +60,15 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
    f.hands[1].grip.orientation=euler(pi,0,0);                    // the right grip turned round: its -X is +X too
    r=s.update(f,turned,true);}
   ck(r.moving&&r.stickY>.5f&&std::abs(r.stickX)<.05f);}
+ // Up and down (2026-10-20 12:20): both hands pushed down at 2 m/s, the palms facing down (the left grip's +X and the
+ // right grip's -X turned to -Y): the push lifts - up and upStick positive; pulled up with the palms up: negative.
+ {auto vertical=[&](float dir){SwimStroke s;SwimStrokeResult r;XrTime t=step;
+   for(int k=0;k<20;++k,t+=step){const float y=1.f+dir*.0222f*k;auto f=frame(t,{-.3f,y,0},{.3f,y,0});
+    f.hands[0].grip.orientation=euler(0,0,dir<0?-(pi/2):(pi/2));f.hands[1].grip.orientation=euler(0,0,dir<0?(pi/2):-(pi/2));r=s.update(f,headAt(1.8f),true);}
+   return r;};
+  const auto down=vertical(-1),up=vertical(1);
+  ck(down.strokingUp&&down.up>.1f&&down.upStick>.3f&&!down.moving);   // lifts, no forward
+  ck(up.strokingUp&&up.up<-.1f&&up.upStick<-.3f);}
  // A tracking jump (a hand 1 m in one frame) is not a stroke; a gap over 0.1 s starts over.
  {SwimStroke s;XrTime t=step;s.update(backward(frame(t,{-.3f,1.f,0},{.3f,1.f,0})),head,true);t+=step;
   auto r=s.update(backward(frame(t,{-.3f,1.f,1.f},{.3f,1.f,1.f})),head,true);ck(!r.stroking&&!r.moving);

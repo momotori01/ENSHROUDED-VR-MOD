@@ -176,6 +176,8 @@ inline bool fishingFloatOut(uint64_t now){const auto at=fishingFloatMs.load();re
 inline bool holsterRequested=false;inline bool (*holsterAct)(unsigned,uint64_t)=nullptr;inline void (*holsterTick)(uint64_t)=nullptr;
 // In the water no holster press is looked for (VHVR Pose.cs:42-49: swimming skips the gesture detection; 2026-10-18).
 inline bool (*actorSwimming)(uint64_t)=nullptr;
+// Which: 1 FloatingOnWater (43), 2 UnderWater (44), 3 both, 0 neither or not known (2026-10-20, diving by the strokes).
+inline unsigned (*actorWater)(uint64_t)=nullptr;
 // A fallen player within reach of a revive (live_melee_targets.hpp downedNear): the right B then holds the game's
 // interaction for as long as it is held instead of tapping it or opening the quick wheel (include/evr/quick_slot.hpp).
 inline bool (*fallenPlayerNear)(uint64_t)=nullptr;
@@ -773,8 +775,10 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 const auto mapped=verticalMapper.update(now,received,ownerSerial,fresh?evr::motion::liveStickMode(screenKind):evr::motion::VerticalStickMode::Unavailable,hands,value);
                 auto pad=liveMapper.update(fresh?screenKind:evr::motion::LiveScreen::Unavailable,mapped,hands,wieldGrip&&!value.active);
                 // The left trigger's pull also sends AreaLoot for 150 ms (include/evr/holster.hpp): a killed enemy's loot is
-                // taken too. EVR_LT_AREA_LOOT=0: the interaction only.
-                {static const bool areaLoot=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_LT_AREA_LOOT",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                // taken too. Off since 12:20 the same day (user: "gathering everything stays the default - the button held"): the
+                // left trigger is the game's Y, held as long as it is pulled, and the game's own long press gathers.
+                // EVR_LT_AREA_LOOT=1: the pulse again.
+                {static const bool areaLoot=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_LT_AREA_LOOT",v,sizeof v);return n==1&&v[0]=='1';}();
                  static bool was=false;const bool on=liveMapper.leftInteract();
                  if(areaLoot&&on&&!was){evr::game::areaLootUntilMs.store(now+150);static unsigned lines=0;if(lines++<200)logFile->event("left_trigger_area_loot","\"milliseconds\":"+std::to_string(now));}
                  was=on;}
@@ -1385,7 +1389,8 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // The hand with the menu pointer: while the ray is on a menu its trigger is the mouse's left button and
                 // its B the right one (VHVR; B is the pad's "back" again when the hand points away from the menu).
                 if(menuPointer::trigger.load())pad.rightTrigger=0;
-                if(menuPointer::secondary.load())pad.buttons&=~evr::motion::LivePadMapper::B;
+                if(menuPointer::secondary.load())pad.buttons&=~evr::motion::LivePadMapper::B;   // the left A: the right click
+                if(menuPointer::primary.load())pad.buttons&=~evr::motion::LivePadMapper::A;     // the right A: the left click
                 if(auto stickUntil=airAttackStickUntil.load()){
                     static unsigned pushes=0;
                     if(now<stickUntil&&screenKind==evr::motion::LiveScreen::Gameplay&&std::abs(int(pad.leftX))<8000&&std::abs(int(pad.leftY))<8000){
@@ -1438,6 +1443,20 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                  if(swim.moving){
                     pad.leftX=int16_t(std::clamp<long>(long(pad.leftX)+std::lround(swim.stickX*32767),-32767,32767));
                     pad.leftY=int16_t(std::clamp<long>(long(pad.leftY)+std::lround(swim.stickY*32767),-32767,32767));}
+                 // Up and down (include/evr/swim_stroke.hpp up, include/evr/holster.hpp swim inputs): under the water a stroke
+                 // that lifts presses the game's DiveAscend and one that sinks DiveDescend, as long as it carries (30 % of a
+                 // full throw); on the surface one that sinks presses SwimStartDiving. EVR_SWIM_DIVE=0: off.
+                 {static const bool dive=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_SWIM_DIVE",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                  static uint64_t lastBits=0;static unsigned diveLines=0;
+                  uint64_t bits=0;const unsigned water=inWater&&actorWater?actorWater(now):0u;
+                  if(dive&&inWater){
+                    if(water&2){if(swim.upStick>=.3f)bits=evr::game::inputDiveAscend;else if(swim.upStick<=-.3f)bits=evr::game::inputDiveDescend;}
+                    else if(water&1){if(swim.upStick<=-.3f)bits=evr::game::inputSwimStartDiving;}}
+                  evr::game::swimInputBits.store(bits);if(bits)evr::game::swimInputUntilMs.store(now+120);
+                  if(bits!=lastBits&&diveLines++<300){std::ostringstream s;s<<std::setprecision(3)<<"\"frame\":"<<hands.frame<<",\"water\":"<<water<<",\"up_m_s\":"<<swim.up<<",\"up_stick\":"<<swim.upStick
+                     <<",\"start_diving\":"<<((bits&evr::game::inputSwimStartDiving)?"true":"false")<<",\"ascend\":"<<((bits&evr::game::inputDiveAscend)?"true":"false")<<",\"descend\":"<<((bits&evr::game::inputDiveDescend)?"true":"false");
+                     logFile->event("swim_dive",s.str());}
+                  lastBits=bits;}
                  const bool sample=swim.stroking&&strokeFrames++%30==0;
                  if((swim.moving!=wasMoving||sample)&&lines<600){++lines;
                     std::ostringstream s;s<<std::setprecision(3)<<"\"frame\":"<<hands.frame<<",\"moving\":"<<(swim.moving?"true":"false")<<",\"stroking\":"<<(swim.stroking?"true":"false")

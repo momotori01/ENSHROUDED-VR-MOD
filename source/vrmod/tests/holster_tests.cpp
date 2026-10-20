@@ -95,6 +95,11 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   // AreaLoot (bit 8) for a short while from the left trigger's pull (2026-10-20): set until areaLootUntilMs, allowed by the check
   {auto o=wheel;areaLootUntilMs=1000;ck(applyAreaLoot(o,999)&&!applyAreaLoot(o,1000));uint64_t d=0;std::memcpy(&d,o.data()+inputDigital,8);
    ck((d&inputAreaLoot)&&inputAreaLootBit==8&&onlyHolsterAndCameraChanged(wheel,o));o[inputDigital+1]^=2;ck(!onlyHolsterAndCameraChanged(wheel,o));areaLootUntilMs=0;}
+  // Diving by the strokes (2026-10-20): SwimStartDiving 34, DiveAscend 35, DiveDescend 36 while swimInputUntilMs lasts
+  {auto o=wheel;swimInputBits=inputDiveDescend;swimInputUntilMs=500;ck(applySwimInput(o,499)&&!applySwimInput(o,500));uint64_t d=0;std::memcpy(&d,o.data()+inputDigital,8);
+   ck((d&inputDiveDescend)&&!(d&inputDiveAscend)&&onlyHolsterAndCameraChanged(wheel,o));
+   auto p=wheel;swimInputBits=inputSwimBits|inputAreaLoot;ck(applySwimInput(p,10));std::memcpy(&d,p.data()+inputDigital,8);ck((d&inputSwimBits)==inputSwimBits&&onlyHolsterAndCameraChanged(wheel,p));
+   p[inputDigital+4]^=0x20;ck(!onlyHolsterAndCameraChanged(wheel,p));swimInputBits=0;swimInputUntilMs=0;ck(!applySwimInput(o,10));}
   out=wheel;out[inputDigital+5]^=0x40;ck(!onlyHolsterAndCameraChanged(wheel,out));
   r.serial=6;r.equip=-1;r.arm=true;out=wheel;s.apply(r,wheel,out);s.reset();out=wheel;a=s.apply(r,wheel,out);ck(out==wheel&&!a.arm);}
  std::cout<<"holster "<<n<<" PASS\n";return 0;}

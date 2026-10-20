@@ -86,6 +86,10 @@ inline std::atomic<uint32_t> playerFlags{0};inline std::atomic<uint64_t> playerF
 inline bool uiCover(uint64_t now){const auto at=playerFlagsMs.load();return at&&now>=at&&now-at<=500&&(playerFlags.load()&((1u<<1)|(1u<<2)))!=0;}
 // For the pad that is sent (controller_ui_fixture.hpp): the right trigger and B are the mouse's buttons just now.
 inline std::atomic<bool> trigger{false},secondary{false};
+// The right A and the left A are the mouse's left and right buttons while the ray is on the screen (2026-10-20, user: "the
+// left click on the right A, the right click on the left A - most VR games confirm with the right A and cancel with the
+// left A"); the pad's A and B (the left A's in menus, include/evr/live_pad.hpp) are not sent then.
+inline std::atomic<bool> primary{false};
 using CursorFn=int(*)(float,float,int);
 inline CursorFn showCursor=nullptr;
 using PlateFn=int(*)(int,const float*);
@@ -172,7 +176,9 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
         // Controller-only (not gameMouse): the ray counts only on a button of the mod's own; B is never the mouse's.
         const bool onButton=spot.on&&overlayButtonAt&&client.right>0&&client.bottom>0&&overlayButtonAt(float(spot.pixelX)/float(client.right),float(spot.pixelY)/float(client.bottom),open);
         if(!spot.on&&overlayButtonAt)overlayButtonAt(-1.f,-1.f,open);   // off the plate: nothing of the mod's is pointed at
-        const bool ray=gameMouse?spot.on:onButton,pull=hand.triggerActive&&hand.trigger>.5f,face=false;   // B: always the pad's "back"
+        const auto& leftHand=f.hands[0];
+        const bool rightA=hand.primaryActive&&hand.primaryPressed,leftA=leftHand.primaryActive&&leftHand.primaryPressed;
+        const bool ray=gameMouse?spot.on:onButton,pull=(hand.triggerActive&&hand.trigger>.5f)||rightA,face=gameMouse&&leftA;   // B (the right B): the pad's
         const auto change=buttons.update(ray,pull,face);
         const auto keys=[&]{return WPARAM((buttons.left?MK_LBUTTON:0)|(buttons.right?MK_RBUTTON:0));};
         const bool held=buttons.left||buttons.right;
@@ -209,7 +215,7 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
             if(change.rightDown){PostMessageW(h,WM_RBUTTONDOWN,keys(),place);++clicks;}
             if(change.rightUp){PostMessageW(h,WM_RBUTTONUP,keys(),place);++clicks;}
         }
-        trigger=buttons.takesTrigger();secondary=false;   // B goes to the game as the pad's B
+        trigger=buttons.takesTrigger();primary=buttons.takesTrigger();secondary=gameMouse&&buttons.takesSecondary();
         // The dot: where the cursor is (a held click keeps its place), larger and green while a button is down. Only
         // where it can press something - on the mod's own buttons (user 2026-10-18 12:40: "if the pointer cannot work the
         // menu, do not show it - it is confusing"; 11:00 to 12:40 it showed over the whole plate).
@@ -233,7 +239,7 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
 inline void disable(){
     if(!installed)return;
     if(onDisable){const auto f=onDisable;onDisable=nullptr;f();}
-    installed=false;trigger=false;secondary=false;
+    installed=false;trigger=false;secondary=false;primary=false;
     {std::lock_guard<std::mutex> lock(mutex);
      // A click that is still down gets its release before the pointer goes.
      if(window&&IsWindow(window)&&lastClient.x>=0){

@@ -49,19 +49,19 @@ int main(){unsigned n=0;try{
   x.wield=true;check(x.step().buttons==M::RB);x.r().grab=false;x.step();x.r().grab=true;check(x.step().buttons==0);
   x.r().grab=false;x.step();x.screen=LiveScreen::Ui;x.r().grab=true;check(x.step().buttons==M::RB);
  }
- // Menu table; the right stick keeps its vertical axis.
+ // Menu table (2026-10-20: right B = Y, left A = B, left B = X); the right stick keeps its vertical axis.
  {Rig x;x.screen=LiveScreen::Ui;x.settle();
   const std::pair<bool HandSample::*,unsigned> rows[]{{&HandSample::primaryPressed,1},{&HandSample::secondaryPressed,1},{&HandSample::primaryPressed,0},{&HandSample::secondaryPressed,0},{&HandSample::grab,1},{&HandSample::grab,0}};
-  const uint16_t want[]{M::A,M::B,M::X,M::Y,M::RB,M::LB};
+  const uint16_t want[]{M::A,M::Y,M::B,M::X,M::RB,M::LB};
   for(unsigned i=0;i<6;i++){x.hands.hands[rows[i].second].*rows[i].first=true;check(x.step().buttons==want[i]);x.release();check(x.step().buttons==0);}
   x.r().stick={0,-.8f};auto o=x.step();check(o.rightY==int16_t(std::lround(-.8f*32767))&&o.buttons==0);
-  x.release();x.step();x.r().primaryPressed=x.r().secondaryPressed=true;x.l().grab=x.r().grab=true;check(x.step().buttons==(M::A|M::B|M::LB|M::RB));
+  x.release();x.step();x.r().primaryPressed=x.r().secondaryPressed=true;x.l().grab=x.r().grab=true;check(x.step().buttons==(M::A|M::Y|M::LB|M::RB));
  }
  // A press keeps the target of its press edge across screen changes.
- {Rig x;x.screen=LiveScreen::Ui;x.settle();x.r().secondaryPressed=true;check(x.step().buttons==M::B);
+ {Rig x;x.screen=LiveScreen::Ui;x.settle();x.l().primaryPressed=true;check(x.step().buttons==M::B);
   x.screen=LiveScreen::Gameplay;for(int i=0;i<10;i++){auto o=x.step();check(o.buttons==M::B);}
-  x.release();check(x.step().buttons==0);x.r().secondaryPressed=true;check(x.step().buttons==M::Y);
-  x.screen=LiveScreen::Ui;check(x.step().buttons==M::Y);x.release();x.step();x.r().secondaryPressed=true;check(x.step().buttons==M::B);
+  x.release();check(x.step().buttons==0);x.l().primaryPressed=true;check(x.step().buttons==0);
+  x.screen=LiveScreen::Ui;check(x.step().buttons==0);x.release();x.step();x.l().primaryPressed=true;check(x.step().buttons==M::B);
  }
  {Rig x;x.settle();x.l().grab=true;check(x.step().buttons==0);x.screen=LiveScreen::Ui;
   for(int i=0;i<5;i++)check(x.step().buttons==0); // pressed in gameplay (no target): no LB until pressed again

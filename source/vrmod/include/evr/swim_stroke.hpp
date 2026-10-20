@@ -32,11 +32,15 @@ struct SwimStrokeSettings {
     float maximumHandSpeed=15.f;   // a tracking jump, not a stroke
     double maximumStep=.1;         // seconds; a longer gap starts over
 };
-struct SwimStrokeResult {float stickX=0,stickY=0;bool stroking=false,moving=false;Vec3 velocity{0,0,0},wanted{0,0,0};std::array<bool,2> counted{};};
+// Up and down (2026-10-20 12:20, user: "can the hands also move me up and down in the water - stroke up, stroke down to
+// dive and come up"): the strokes' upward part is kept apart in the same way (the push opposite to the hands: hands
+// pushed down lift, hands pulled up sink) as `up` in m/s and `upStick` (the same 0.25 m/s for a full throw); the game's
+// own diving inputs are pressed from it (controller_ui_fixture.hpp, include/evr/holster.hpp swim inputs).
+struct SwimStrokeResult {float stickX=0,stickY=0,up=0,upStick=0;bool stroking=false,moving=false,strokingUp=false;Vec3 velocity{0,0,0},wanted{0,0,0};std::array<bool,2> counted{};};
 class SwimStroke {
-    std::array<Vec3,2> last_{};std::array<bool,2> have_{};XrTime lastTime_=0;Vec3 velocity_{0,0,0};
+    std::array<Vec3,2> last_{};std::array<bool,2> have_{};XrTime lastTime_=0;Vec3 velocity_{0,0,0};float up_=0;
 public:
-    void reset(){have_={};lastTime_=0;velocity_={0,0,0};}
+    void reset(){have_={};lastTime_=0;velocity_={0,0,0};up_=0;}
     // A hand held back: the trigger pulled, the grip closed, a face button down (VHVR also the thumb on the stick - not
     // here, see above).
     static bool heldBack(const HandSample& h){
@@ -64,11 +68,13 @@ public:
             const float amount=std::max(0.f,dot(v,palm)-s.palmDeadSpeed);
             push=push-v*(amount/speed);
         }
-        push.y=0;
+        const float pushUp=push.y;push.y=0;
         const float pushSize=length(push);out.wanted=pushSize>=s.minimumPush?push*s.pushGain:Vec3{0,0,0};
         out.stroking=pushSize>=s.minimumPush;
-        if(stepOk){const float k=float(std::min(1.,dt/double(s.decaySeconds)));velocity_=velocity_+(out.wanted-velocity_)*k;}
+        out.strokingUp=std::abs(pushUp)>=s.minimumPush;const float wantedUp=out.strokingUp?pushUp*s.pushGain:0.f;
+        if(stepOk){const float k=float(std::min(1.,dt/double(s.decaySeconds)));velocity_=velocity_+(out.wanted-velocity_)*k;up_=up_+(wantedUp-up_)*k;}
         out.velocity=velocity_;
+        if(std::abs(up_)>=s.minimumSpeed){out.up=up_;out.upStick=std::clamp(up_/s.metresPerSecondPerStick,-1.f,1.f);}
         const float flat=std::hypot(velocity_.x,velocity_.z);
         if(flat<s.minimumSpeed)return out;
         // the head's forward (-Z) and right (+X), laid flat

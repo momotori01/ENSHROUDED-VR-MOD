@@ -3546,6 +3546,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                 // keen::actor::StateFlag FloatingOnWater (43) / UnderWater (44) of the local actor within the last half second.
                 controllerUiFixture::actorSwimming=[](uint64_t now){std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;
                     return s.actorKnown&&s.milliseconds&&now>=s.milliseconds&&now-s.milliseconds<=500&&(s.actorState&game::swimmingStates)!=0;};
+                controllerUiFixture::actorWater=[](uint64_t now)->unsigned{std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;
+                    return s.actorKnown&&s.milliseconds&&now>=s.milliseconds&&now-s.milliseconds<=500?unsigned((s.actorState>>43)&3):0u;};
                 controllerUiFixture::handItem=&holsters::hand;
                 const motion::HolsterZones z;
                 std::ostringstream o;o<<"\"left_shoulder\":\"ranged_weapon_of_the_equipment\",\"right_shoulder\":\"weapon_in_the_hand\",\"left_hip\":\"shield\",\"shoulder_height\":["<<z.shoulderLow<<','<<z.shoulderHigh

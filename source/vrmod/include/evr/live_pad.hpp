@@ -9,11 +9,14 @@ namespace evr::motion {
 //
 //   source           gameplay / quick wheel     menus and other native screens
 //   right primary    A  (jump)                  A  (confirm)
-//   right secondary  Y  (interact)              B  (back)
-//   left primary     -                          X
-//   left secondary   -                          Y
+//   right secondary  Y  (interact)              Y  (take - the loot's and the catch's "Y")
+//   left primary     -                          B  (back / cancel)
+//   left secondary   -                          X
 //   right grip       RB (quick wheel)           RB (next tab)
 //   left grip        -                          LB (previous tab)
+// Menus since 2026-10-20 (user: "the game asks for Y - make Y the right B; close and cancel on the left A, as most VR
+// games confirm with the right A and cancel with the left A"; before: right B = B, left A = X, left B = Y). With the
+// menu pointer on the screen the right A is the mouse's left button and the left A its right one (hooks/menu_pointer.hpp).
 //
 // Sticks and triggers pass through (left stick move, right stick X turn, LT/RT analog); in play LT stays released (below).
 // Not in phase 1: motion melee attacks, posture guard, shoulder/hip equip zones (they need body
@@ -47,7 +50,7 @@ public:
  enum Source:unsigned {RightPrimary,RightSecondary,LeftPrimary,LeftSecondary,RightGrip,LeftGrip,SourceCount};
  static uint16_t target(LiveScreen s,unsigned source){
   static constexpr uint16_t play[SourceCount]{A,Y,0,0,RB,0};
-  static constexpr uint16_t ui[SourceCount]{A,B,X,Y,RB,LB};
+  static constexpr uint16_t ui[SourceCount]{A,Y,B,X,RB,LB};
   if(source>=SourceCount||s==LiveScreen::Unavailable)return 0;
   return (s==LiveScreen::Ui?ui:play)[source];
  }
