@@ -137,7 +137,14 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
            
            scale.x>.1f&&scale.x<10.f&&scale.y>.1f&&scale.y<10.f&&scale.z>.1f&&scale.z<10.f){
             static const float share=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_CATCH_GRIP_PERCENT",v,sizeof v);const float x=n&&n<sizeof v?float(std::atof(v)):10.f;return (x>=0.f&&x<=45.f?x:10.f)/100.f;}();
-            const Vec3 grip{(lo.x+hi.x)*.5f,hi.y-share*extent.y,(lo.z+hi.z)*.5f};
+            Vec3 grip{(lo.x+hi.x)*.5f,hi.y-share*extent.y,(lo.z+hi.z)*.5f};
+            // The two models of what is not a fish (game data 1.0, docs/analysis/fishing_catches_20261020: the boot in its net,
+            // fishing_prop_fishing_shoe_02_minigame, Y -0.513 .. 0.262; the treasure sack, fishing_prop_lootcontainer_01_minigame,
+            // Y -0.613 .. 0.357 - guess: what the trash and treasure tables give): one skeleton, every vertex on joint 3, the
+            // net's neck at Y 0.14 .. 0.16 (2.3 / 4.3 cm thick) with its tuft above and the sack, the boot and the weeds below.
+            // Held at the neck, joint 3's rest place (0, 0.154, -0.008); another model by the share above.
+            const auto about=[](float a,float b){return std::abs(a-b)<.02f;};
+            if((about(lo.y,-.513f)&&about(hi.y,.262f))||(about(lo.y,-.613f)&&about(hi.y,.357f)))grip={0.f,.154f,-.008f};
             const Vec3 palm=rotate(modelQ,Vec3{gs[socket].position.x*modelScale.x,gs[socket].position.y*modelScale.y,gs[socket].position.z*modelScale.z});
             // upright; its front (+Z) the way the fist points (the grip's -Z), level
             const auto handQ=normalized(multiply(modelQ,gs[socket].orientation));
