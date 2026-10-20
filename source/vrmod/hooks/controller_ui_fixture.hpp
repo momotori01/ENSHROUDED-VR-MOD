@@ -767,7 +767,11 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // The death screen keeps the HUD screen 1 but raises the player's UiCoverRequest: it is a menu
                 // (menuPointer::uiCover; user 2026-10-19 "when I die I cannot respawn").
                 const bool uiCover=valid&&screen==1&&menuPointer::uiCover(now);
-                const auto screenKind=uiCover?evr::motion::LiveScreen::Ui:valid&&screen==1&&auxiliary==3&&!nativeBlocked?evr::motion::LiveScreen::Gameplay:evr::motion::liveScreen(valid,normalHud,auxiliary);
+                auto screenKind=uiCover?evr::motion::LiveScreen::Ui:valid&&screen==1&&auxiliary==3&&!nativeBlocked?evr::motion::LiveScreen::Gameplay:evr::motion::liveScreen(valid,normalHud,auxiliary);
+                // The building modes (29, the screwdriver's 33) and the summoning staff's adjustment (37) aim at the world: the
+                // table the building controls are made on (include/evr/live_pad.hpp WorldUi; menu_pointer.hpp leaves them too).
+                if(screenKind==evr::motion::LiveScreen::Ui&&!uiCover&&(screen==29||screen==33||screen==37))screenKind=evr::motion::LiveScreen::WorldUi;
+                {static const bool menuLeftY=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_LT_Y",v,sizeof v);return !(n==1&&v[0]=='0');}();liveMapper.menuLeftTriggerY(menuLeftY);}
                 {static bool was=false;if(uiCover!=was){was=uiCover;logFile->event("live_ui_cover","\"on\":"+std::to_string(int(uiCover))+",\"flags\":"+std::to_string(menuPointer::playerFlags.load())+",\"milliseconds\":"+std::to_string(now));}}
                 const bool fresh=received&&now>=received&&now-received<=200;
                 liveScreenGameplay=screenKind==evr::motion::LiveScreen::Gameplay;liveScreenAt=now;
@@ -832,7 +836,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // stick as well. User, 2026-10-12: "with the right stick's click I cannot do it with one hand; change it
                 // to the left stick's click". While the wheel's button is down the left stick's click is the game's
                 // right one (and no left click of its own); the right stick's click still works as before.
-                if(fresh&&mapped.valid&&!value.active&&(pad.buttons&evr::motion::LivePadMapper::RB)&&screenKind!=evr::motion::LiveScreen::Ui){
+                if(fresh&&mapped.valid&&!value.active&&(pad.buttons&evr::motion::LivePadMapper::RB)&&screenKind!=evr::motion::LiveScreen::Ui&&screenKind!=evr::motion::LiveScreen::WorldUi){
                     const bool leftClick=hands.hands[0].stickClickActive&&hands.hands[0].stickClick;static bool leftBefore=false;
                     pad.buttons&=~uint16_t(0x40);if(leftClick)pad.buttons|=0x80;
                     if(leftClick&&!leftBefore)logFile->event("quick_slot_page","\"frame\":"+std::to_string(hands.frame)+",\"left_stick_click\":true,\"native_button\":128,\"screen\":"+std::to_string(unsigned(screenKind)));

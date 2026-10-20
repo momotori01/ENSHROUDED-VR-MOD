@@ -17,6 +17,11 @@ namespace evr::motion {
 // Menus since 2026-10-20 (user: "the game asks for Y - make Y the right B; close and cancel on the left A, as most VR
 // games confirm with the right A and cancel with the left A"; before: right B = B, left A = X, left B = Y). With the
 // menu pointer on the screen the right A is the mouse's left button and the left A its right one (hooks/menu_pointer.hpp).
+// The native screens that aim at the world - the building modes and the summoning staff's adjustment (WorldUi, set by the
+// hook from the game's screen) - keep the table the building controls are made on (controller_ui_fixture.hpp: right B = B
+// opens the piece menu, left A = X builds, left B is taken for the piece menu, LT leaves building): A, B, X, Y, RB, LB.
+// The left trigger in menus is the game's Y too (2026-10-20, user: "in menus too the left trigger as Y"); held across a
+// change of screen it waits for its release (a pull that opened a loot window does not take from it).
 //
 // Sticks and triggers pass through (left stick move, right stick X turn, LT/RT analog); in play LT stays released (below).
 // Not in phase 1: motion melee attacks, posture guard, shoulder/hip equip zones (they need body
@@ -32,7 +37,7 @@ struct LivePadState {
   leftTrigger==o.leftTrigger&&rightTrigger==o.rightTrigger;}
  bool operator!=(const LivePadState& o)const{return !(*this==o);}
 };
-enum class LiveScreen {Unavailable,Gameplay,Overlay,Ui};
+enum class LiveScreen {Unavailable,Gameplay,Overlay,Ui,WorldUi};
 // From the native frontend input predicate: valid World/UI/entity, the normal HUD, and the auxiliary
 // state (1 = native quick wheel).
 inline LiveScreen liveScreen(bool valid,bool normalHud,uint8_t auxiliary){
@@ -42,7 +47,7 @@ inline LiveScreen liveScreen(bool valid,bool normalHud,uint8_t auxiliary){
 }
 inline VerticalStickMode liveStickMode(LiveScreen s){
  switch(s){case LiveScreen::Gameplay:return VerticalStickMode::Gameplay;case LiveScreen::Overlay:return VerticalStickMode::NativeOverlay;
-  case LiveScreen::Ui:return VerticalStickMode::NativeUi;default:return VerticalStickMode::Unavailable;}
+  case LiveScreen::Ui:case LiveScreen::WorldUi:return VerticalStickMode::NativeUi;default:return VerticalStickMode::Unavailable;}
 }
 class LivePadMapper {
 public:
@@ -51,12 +56,13 @@ public:
  static uint16_t target(LiveScreen s,unsigned source){
   static constexpr uint16_t play[SourceCount]{A,Y,0,0,RB,0};
   static constexpr uint16_t ui[SourceCount]{A,Y,B,X,RB,LB};
+  static constexpr uint16_t world[SourceCount]{A,B,X,Y,RB,LB};
   if(source>=SourceCount||s==LiveScreen::Unavailable)return 0;
-  return (s==LiveScreen::Ui?ui:play)[source];
+  return (s==LiveScreen::Ui?ui:s==LiveScreen::WorldUi?world:play)[source];
  }
 private:
  struct Latch {bool held=false,mustRelease=true;uint16_t target=0;};
- bool motionQuickSlot_=false,leftInteract_=false;
+ bool motionQuickSlot_=false,leftInteract_=false,menuLeftY_=true,leftWaits_=false;LiveScreen leftScreen_=LiveScreen::Unavailable;
  std::array<Latch,SourceCount> latch_{};
  uint64_t session_=0,origin_=0;XrPath leftProfile_=0,rightProfile_=0;
  static bool pressed(const HandFrame& h,unsigned s){
@@ -71,12 +77,14 @@ private:
   }
   return false;
  }
- void interrupt(){for(auto& l:latch_){l.held=false;l.target=0;l.mustRelease=true;}leftInteract_=false;}
+ void interrupt(){for(auto& l:latch_){l.held=false;l.target=0;l.mustRelease=true;}leftInteract_=false;leftWaits_=true;}
  static int16_t axis(float v){return int16_t(std::lround(std::clamp(v,-1.f,1.f)*32767));}
  static uint8_t trigger(float v){return uint8_t(std::lround(std::clamp(v,0.f,1.f)*255));}
 public:
  // The left trigger is interacting (pulled past 85 %, until under 50 %).
  bool leftInteract()const{return leftInteract_;}
+ // false: in menus the left trigger stays the game's LT (EVR_MENU_LT_Y=0).
+ void menuLeftTriggerY(bool on){menuLeftY_=on;}
  // Mapping and frame identity come from VerticalStickMapping; invalid means a neutral pad.
  LivePadState update(LiveScreen screen,const VerticalStickResult& mapped,const HandFrame& hands,bool wieldGrip=false){
   LivePadState out;
@@ -95,16 +103,20 @@ public:
   // long one while it is held"; a guest pressed every other button to take a caught fish off the ground, and a revive is
   // the interaction held): the game's Y while it is pulled past 85 % (a finger resting on it stays below - the 10-19 01:30
   // complaint) until it comes back under 50 %; not while the left grip holds a bow, a shield or a two-handed weapon.
-  if(screen==LiveScreen::Gameplay){const float t=mapped.pad.leftTrigger;const auto& lh=hands.hands[0];
-   leftInteract_=!(lh.grabActive&&lh.grab)&&(leftInteract_?t>=.5f:t>=.85f);if(leftInteract_)out.buttons|=Y;}
-  else leftInteract_=false;
+  // In menus as well since 2026-10-20 (header).
+  const bool leftY=screen==LiveScreen::Gameplay||(screen==LiveScreen::Ui&&menuLeftY_);
+  if(leftY){const float t=mapped.pad.leftTrigger;const auto& lh=hands.hands[0];out.leftTrigger=0;
+   if(screen!=leftScreen_){leftScreen_=screen;if(leftInteract_||t>=.5f)leftWaits_=true;leftInteract_=false;}
+   if(leftWaits_){if(t<.5f)leftWaits_=false;}
+   else{leftInteract_=!(lh.grabActive&&lh.grab)&&(leftInteract_?t>=.5f:t>=.85f);if(leftInteract_)out.buttons|=Y;}}
+  else{leftInteract_=false;leftScreen_=screen;}
   for(unsigned s=0;s<SourceCount;s++){
    auto& l=latch_[s];const bool down=pressed(hands,s);
    if(!down){l.held=false;l.target=0;l.mustRelease=false;continue;}
    if(l.mustRelease)continue;
    // Quick slot by hand motion (quick_slot.hpp): outside menus the right grip is free for other uses and
    // the right B button belongs to that gesture.
-   const bool freed=motionQuickSlot_&&screen!=LiveScreen::Ui&&(s==RightGrip||s==RightSecondary);
+   const bool freed=motionQuickSlot_&&screen!=LiveScreen::Ui&&screen!=LiveScreen::WorldUi&&(s==RightGrip||s==RightSecondary);
    if(!l.held){l.held=true;l.target=freed||(wieldGrip&&screen==LiveScreen::Gameplay&&s==RightGrip)?0:target(screen,s);}
    out.buttons|=l.target;
   }

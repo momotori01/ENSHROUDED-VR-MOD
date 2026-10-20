@@ -34,7 +34,15 @@ int main(){unsigned n=0;try{
   x.l().grab=true;check(x.step().buttons==0);x.release();x.step();
   x.l().stick={1,-1};x.r().stick={-1,0};x.l().trigger=1;x.r().trigger=.5f;auto o=x.step();
   check(o.leftX==32767&&o.leftY==-32767&&o.rightX==-32767&&o.rightY==0&&o.leftTrigger==0&&o.rightTrigger==128&&o.buttons==M::Y);   // LT released in play; pulled deep it interacts (2026-10-20)
-  x.screen=LiveScreen::Ui;check(x.step().leftTrigger==255&&!(x.step().buttons&M::Y));x.screen=LiveScreen::Gameplay;
+  // Into a menu with the trigger still pulled: no Y there until it is let go (2026-10-20); then it is Y in the menu too.
+  x.screen=LiveScreen::Ui;{auto u=x.step();check(u.leftTrigger==0&&!(u.buttons&M::Y));}x.l().trigger=0;check(!(x.step().buttons&M::Y));
+  x.l().trigger=1;check(x.step().buttons&M::Y);x.l().trigger=0;x.step();
+  // A screen that aims at the world (building): the game's LT, the old table (right B = B, left A = X, left B = Y)
+  x.screen=LiveScreen::WorldUi;x.l().trigger=1;{auto w=x.step();check(w.leftTrigger==255&&!(w.buttons&M::Y));}x.l().trigger=0;x.step();
+  x.r().secondaryPressed=true;check(x.step().buttons==M::B);x.release();x.step();x.l().primaryPressed=true;check(x.step().buttons==M::X);x.release();x.step();
+  x.l().secondaryPressed=true;check(x.step().buttons==M::Y);x.release();x.step();
+  {Rig z;z.screen=LiveScreen::Ui;z.live.menuLeftTriggerY(false);z.settle();z.l().trigger=1;auto u=z.step();check(u.leftTrigger==255&&!(u.buttons&M::Y));}   // EVR_MENU_LT_Y=0
+  x.screen=LiveScreen::Gameplay;x.step();
   // The left trigger's interaction: from 85 % down to 50 %; a resting finger (30 %) does nothing; not with the left grip held.
   {Rig y;y.settle();y.l().trigger=.3f;check(!(y.step().buttons&M::Y));y.l().trigger=.84f;check(!(y.step().buttons&M::Y));y.l().trigger=.86f;check(y.step().buttons&M::Y);
    y.l().trigger=.55f;check(y.step().buttons&M::Y);y.l().trigger=.45f;check(!(y.step().buttons&M::Y));y.l().trigger=.9f;y.l().grab=true;check(!(y.step().buttons&M::Y));}
