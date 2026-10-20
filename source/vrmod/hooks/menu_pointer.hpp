@@ -70,6 +70,7 @@ inline bool mouseFirst=true;
 inline std::atomic<bool> wantMouse{false};
 inline std::atomic<unsigned> mouseModeSet{0};
 inline unsigned downIn=0;                           // frames until the pull's button is posted (the place goes first)
+inline unsigned rightDownIn=0;                      // the same for the right button (the left A, 2026-10-20)
 // 6 frames (headset run 13:30: items of the backpack took no click or drag with 2 - guess: the game turns to its mouse mode and
 // moves its focus under the cursor a frame or two after the first move)
 inline unsigned leadFrames=6;
@@ -212,8 +213,18 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
                 if(downIn){downIn=0;PostMessageW(h,WM_LBUTTONDOWN,MK_LBUTTON,place);++clicks;}   // let go before its button went: a whole click
                 PostMessageW(h,WM_LBUTTONUP,keys(),place);++clicks;postedAt=now;}
                 mouseHeld=false;wantMouse=false;}
-            if(change.rightDown){PostMessageW(h,WM_RBUTTONDOWN,keys(),place);++clicks;}
-            if(change.rightUp){PostMessageW(h,WM_RBUTTONUP,keys(),place);++clicks;}
+            // The right button (the left A since 2026-10-20) goes as the left one: the place first and the game's mouse mode,
+            // held while it is down, and the pad's mode back 0.25 s after it (input_ui_observer.hpp waits on postedAt and
+            // mouseHeld). Headset run 20261020-125439: posted alone, it left the game in its mouse mode for the rest of the
+            // run - the keyboard's prompts in play and the pad's menu actions (splitting a stack) not taken.
+            if(change.rightDown){
+                if(keepPad){PostMessageW(h,WM_MOUSEMOVE,0,place);++moves;rightDownIn=leadFrames;mouseHeld=true;wantMouse=mouseFirst;postedAt=now;}
+                else{PostMessageW(h,WM_RBUTTONDOWN,keys(),place);++clicks;postedAt=now;}}
+            else if(rightDownIn&&--rightDownIn==0){PostMessageW(h,WM_RBUTTONDOWN,MK_RBUTTON,place);++clicks;postedAt=now;}
+            if(change.rightUp){
+                if(rightDownIn){rightDownIn=0;PostMessageW(h,WM_RBUTTONDOWN,MK_RBUTTON,place);++clicks;}
+                PostMessageW(h,WM_RBUTTONUP,keys(),place);++clicks;postedAt=now;
+                if(!buttons.left){mouseHeld=false;wantMouse=false;}}
         }
         trigger=buttons.takesTrigger();primary=buttons.takesTrigger();secondary=gameMouse&&buttons.takesSecondary();
         // The dot: where the cursor is (a held click keeps its place), larger and green while a button is down. Only

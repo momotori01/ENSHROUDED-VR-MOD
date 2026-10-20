@@ -772,6 +772,12 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // table the building controls are made on (include/evr/live_pad.hpp WorldUi; menu_pointer.hpp leaves them too).
                 if(screenKind==evr::motion::LiveScreen::Ui&&!uiCover&&(screen==29||screen==33||screen==37))screenKind=evr::motion::LiveScreen::WorldUi;
                 {static const bool menuLeftY=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_LT_Y",v,sizeof v);return !(n==1&&v[0]=='0');}();liveMapper.menuLeftTriggerY(menuLeftY);}
+                // A building hammer or a blueprint in the hand (the game's item category 10, Blueprints - 1.0 data
+                // docs/analysis/held_1_0_20261017: Tool_Quickbuilder_Hammer 693164685, _Improved 1468357474 and the walls and
+                // roofs): the left trigger is the game's LT, which enters building mode (include/evr/live_pad.hpp).
+                {bool blueprint=false;if(handItem&&screenKind==evr::motion::LiveScreen::Gameplay){const auto held=handItem(now);blueprint=held.valid&&held.item&&held.category==10;}
+                 liveMapper.leftTriggerGame(blueprint);
+                 static bool wasBlueprint=false;if(blueprint!=wasBlueprint){wasBlueprint=blueprint;logFile->event("left_trigger_game_lt","\"on\":"+std::string(blueprint?"true":"false")+",\"milliseconds\":"+std::to_string(now));}}
                 {static bool was=false;if(uiCover!=was){was=uiCover;logFile->event("live_ui_cover","\"on\":"+std::to_string(int(uiCover))+",\"flags\":"+std::to_string(menuPointer::playerFlags.load())+",\"milliseconds\":"+std::to_string(now));}}
                 const bool fresh=received&&now>=received&&now-received<=200;
                 liveScreenGameplay=screenKind==evr::motion::LiveScreen::Gameplay;liveScreenAt=now;

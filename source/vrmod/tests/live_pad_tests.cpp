@@ -42,6 +42,9 @@ int main(){unsigned n=0;try{
   x.r().secondaryPressed=true;check(x.step().buttons==M::B);x.release();x.step();x.l().primaryPressed=true;check(x.step().buttons==M::X);x.release();x.step();
   x.l().secondaryPressed=true;check(x.step().buttons==M::Y);x.release();x.step();
   {Rig z;z.screen=LiveScreen::Ui;z.live.menuLeftTriggerY(false);z.settle();z.l().trigger=1;auto u=z.step();check(u.leftTrigger==255&&!(u.buttons&M::Y));}   // EVR_MENU_LT_Y=0
+  // A building hammer in the hand: the game's LT in play (it enters building mode), no Y
+  {Rig z;z.settle();z.live.leftTriggerGame(true);z.l().trigger=1;auto u=z.step();check(u.leftTrigger==255&&!(u.buttons&M::Y));
+   z.live.leftTriggerGame(false);z.l().trigger=0;z.step();z.l().trigger=1;check(z.step().buttons&M::Y);}
   x.screen=LiveScreen::Gameplay;x.step();
   // The left trigger's interaction: from 85 % down to 50 %; a resting finger (30 %) does nothing; not with the left grip held.
   {Rig y;y.settle();y.l().trigger=.3f;check(!(y.step().buttons&M::Y));y.l().trigger=.84f;check(!(y.step().buttons&M::Y));y.l().trigger=.86f;check(y.step().buttons&M::Y);

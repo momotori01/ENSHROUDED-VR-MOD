@@ -88,7 +88,10 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
             // bug report 121352, its last 10 s (376 rows): straight down in the grip's frame was (0.116, -0.898, 0.425) on
             // average - 26 degrees from the grip's -Y (25..30). The head goes that way and the back turns with it, and the
             // fish 5 cm toward the grip's "up" of that hold (EVR_FISH_RAISE_CM=<0..15>).
-            static const Vec3 headInGrip=[]{const Vec3 v{.116f,-.898f,.425f};return v*(1/length(v));}();
+            // 13:10 (user after the headset run: "the fish tilts the wrong way"): the left socket's frame is the controller's
+            // grip turned half round its up axis (guess - x and z the other way), so the head goes to (-0.116, -0.898,
+            // -0.425) and the 5 cm up with it.
+            static const Vec3 headInGrip=[]{const Vec3 v{-.116f,-.898f,-.425f};return v*(1/length(v));}();
             static const Vec3 backInGrip=rotate(motion::alignDirections(Vec3{0,-1,0},headInGrip),Vec3{0,0,1});
             static const float raise=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_FISH_RAISE_CM",v,sizeof v);const float x=n&&n<sizeof v?float(std::atof(v)):5.f;return (x>=0&&x<=15?x:5.f)/100.f;}();
             if(!hang)palm=palm+rotate(handQ,headInGrip*-raise);

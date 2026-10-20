@@ -62,7 +62,7 @@ public:
  }
 private:
  struct Latch {bool held=false,mustRelease=true;uint16_t target=0;};
- bool motionQuickSlot_=false,leftInteract_=false,menuLeftY_=true,leftWaits_=false;LiveScreen leftScreen_=LiveScreen::Unavailable;
+ bool motionQuickSlot_=false,leftInteract_=false,menuLeftY_=true,leftWaits_=false,leftGame_=false;LiveScreen leftScreen_=LiveScreen::Unavailable;
  std::array<Latch,SourceCount> latch_{};
  uint64_t session_=0,origin_=0;XrPath leftProfile_=0,rightProfile_=0;
  static bool pressed(const HandFrame& h,unsigned s){
@@ -85,6 +85,10 @@ public:
  bool leftInteract()const{return leftInteract_;}
  // false: in menus the left trigger stays the game's LT (EVR_MENU_LT_Y=0).
  void menuLeftTriggerY(bool on){menuLeftY_=on;}
+ // true: in play the left trigger is the game's own LT this frame (2026-10-20, user: "I cannot enter the hammer's building
+ // mode - with the hammer the trigger"): the hook sets it while the hand holds a building hammer or a blueprint, whose
+ // LT enters building mode.
+ void leftTriggerGame(bool on){leftGame_=on;}
  // Mapping and frame identity come from VerticalStickMapping; invalid means a neutral pad.
  LivePadState update(LiveScreen screen,const VerticalStickResult& mapped,const HandFrame& hands,bool wieldGrip=false){
   LivePadState out;
@@ -98,13 +102,13 @@ public:
   // In play the left trigger is not the game's LT (user, 2026-10-19 01:30: "the left trigger keeps switching to the ranged
   // weapon of Q, over and over"): LT is the game's aim, which takes out the ranged weapon; a finger resting on the
   // trigger crossed its threshold again and again. The bow's aim is pressed by the mod itself (bow_draw.hpp); menus keep LT.
-  if(screen==LiveScreen::Gameplay)out.leftTrigger=0;
+  if(screen==LiveScreen::Gameplay&&!leftGame_)out.leftTrigger=0;   // (a building hammer in the hand: below)
   // The left trigger interacts (2026-10-20, VHVR equipment_tools 6.2: "the left trigger - an interaction when pressed, the
   // long one while it is held"; a guest pressed every other button to take a caught fish off the ground, and a revive is
   // the interaction held): the game's Y while it is pulled past 85 % (a finger resting on it stays below - the 10-19 01:30
   // complaint) until it comes back under 50 %; not while the left grip holds a bow, a shield or a two-handed weapon.
   // In menus as well since 2026-10-20 (header).
-  const bool leftY=screen==LiveScreen::Gameplay||(screen==LiveScreen::Ui&&menuLeftY_);
+  const bool leftY=(screen==LiveScreen::Gameplay&&!leftGame_)||(screen==LiveScreen::Ui&&menuLeftY_);
   if(leftY){const float t=mapped.pad.leftTrigger;const auto& lh=hands.hands[0];out.leftTrigger=0;
    if(screen!=leftScreen_){leftScreen_=screen;if(leftInteract_||t>=.5f)leftWaits_=true;leftInteract_=false;}
    if(leftWaits_){if(t<.5f)leftWaits_=false;}
