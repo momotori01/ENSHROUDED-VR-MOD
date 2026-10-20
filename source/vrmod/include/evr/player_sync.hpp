@@ -38,7 +38,10 @@ struct Body {
 inline Pose inHand(const Pose& hand,const Pose& itemWorld){return compose(inverse(hand),itemWorld);}
 inline Pose fromHand(const Pose& hand,const Pose& inHand){return compose(hand,inHand);}
 using Place=std::array<int32_t,3>;             // the character's position in the world, millimetres
-inline constexpr uint8_t magic=0xe5,version=2;   // 2 (2026-10-15): the off-hand item's pose may follow the main hand's
+inline constexpr uint8_t magic=0xe5,version=3;   // 2 (2026-10-15): the off-hand item's pose may follow the main hand's
+// 3 (2026-10-20): a body datagram ends with the sender's clock (milliseconds, 16 bit) - the receiver places the poses
+// on the sender's time and shows them a little late, between two of them (Receiver). Version 2 is still read.
+inline constexpr uint8_t oldVersion=2;inline constexpr size_t stampBytes=2;
 inline constexpr size_t headerBytes=6,placeBytes=12,poseBytes=13,bodyAt=headerBytes+placeBytes,helloBytes=headerBytes,
     pausedBytes=bodyAt+poseBytes,fullBytes=bodyAt+4*poseBytes+10,itemBytes=poseBytes;
 inline constexpr float positionUnit=1/2000.f;  // half a millimetre; +-16 m about the character
@@ -68,25 +71,27 @@ inline void header(std::vector<uint8_t>& out,uint16_t sequence,uint8_t flags,uin
 // right hand, pelvis and ten finger curls, then the held items' poses where there are any (the main hand's by the
 // flag 32, the off hand's by bit 2 of the two-hand byte): 31, 80, 93 or 106 bytes.
 inline std::vector<uint8_t> encodeHello(uint16_t sequence){std::vector<uint8_t> out;detail::header(out,sequence,0x40,0);return out;}
-inline std::vector<uint8_t> encode(const Body& b,uint16_t sequence,const Place& place){
+inline std::vector<uint8_t> encode(const Body& b,uint16_t sequence,const Place& place,uint16_t sentMs=0){
     if(!finite(b.head.position)||(b.ik&&(!finite(b.hand[0].position)||!finite(b.hand[1].position)||!finite(b.pelvis.position)||(b.item&&!finite(b.itemInHand.position))||(b.offhandItem&&!finite(b.offhandInHand.position)))))
         throw std::invalid_argument("player sync body");
     std::vector<uint8_t> out;out.reserve(fullBytes+2*itemBytes);
     detail::header(out,sequence,uint8_t((b.ik?1:0)|(b.bowDrawn?2:0)|(b.leftHanded?4:0)|(b.reverseGrip?8:0)|(b.swim?16:0)|(b.ik&&b.item?32:0)),uint8_t((b.twoHand>2?0:b.twoHand)|(b.ik&&b.offhandItem?4:0)));
     for(const auto v:place)for(unsigned n=0;n<4;n++)out.push_back(uint8_t(uint32_t(v)>>(8*n)));
     detail::putPose(out,b.head);
-    if(!b.ik)return out;
-    detail::putPose(out,b.hand[0]);detail::putPose(out,b.hand[1]);detail::putPose(out,b.pelvis);
-    for(const auto& hand:b.fingers)for(float v:hand.amount)out.push_back(uint8_t(std::lround(std::clamp(std::isfinite(v)?v:0.f,0.f,1.f)*255)));
-    if(b.item)detail::putPose(out,b.itemInHand);
-    if(b.offhandItem)detail::putPose(out,b.offhandInHand);
+    if(b.ik){
+        detail::putPose(out,b.hand[0]);detail::putPose(out,b.hand[1]);detail::putPose(out,b.pelvis);
+        for(const auto& hand:b.fingers)for(float v:hand.amount)out.push_back(uint8_t(std::lround(std::clamp(std::isfinite(v)?v:0.f,0.f,1.f)*255)));
+        if(b.item)detail::putPose(out,b.itemInHand);
+        if(b.offhandItem)detail::putPose(out,b.offhandInHand);
+    }
+    detail::put16(out,int(int16_t(sentMs)));
     return out;
 }
 // A roster (2026-10-15): a hello that carries the ids of the players with the mod this sender knows (heard from within
 // a few seconds) - bit 3 of the two-hand byte, then a count and that many ids - so that two guests of one host, who
 // hear only the host, learn of each other through it. Up to rosterMost ids; a receiver only sends hellos to them.
 inline constexpr size_t rosterMost=16;
-struct Received {Body body;uint16_t sequence=0;bool hello=false;Place place{};std::vector<uint64_t> roster;};
+struct Received {Body body;uint16_t sequence=0;bool hello=false;Place place{};std::vector<uint64_t> roster;bool timed=false;uint16_t sentMs=0;};
 inline std::vector<uint8_t> encodeRoster(uint16_t sequence,const std::vector<uint64_t>& ids){
     std::vector<uint8_t> out;detail::header(out,sequence,0x40,8);
     const size_t n=std::min(ids.size(),rosterMost);out.push_back(uint8_t(n));
@@ -95,7 +100,8 @@ inline std::vector<uint8_t> encodeRoster(uint16_t sequence,const std::vector<uin
 }
 // Nothing for anything that is not exactly one datagram of this version: these bytes come from another machine.
 inline std::optional<Received> decode(const uint8_t* data,size_t size){
-    if(!data||size<helloBytes||data[0]!=magic||data[1]!=version)return std::nullopt;
+    if(!data||size<helloBytes||data[0]!=magic||(data[1]!=version&&data[1]!=oldVersion))return std::nullopt;
+    const size_t stamp=data[1]==version?stampBytes:0;
     const uint8_t flags=data[4];if(flags&0x80||(data[5]&3)==3||data[5]&~0xf)return std::nullopt;
     Received r;r.sequence=uint16_t(data[2])|uint16_t(data[3])<<8;
     if(flags&0x40){
@@ -108,7 +114,8 @@ inline std::optional<Received> decode(const uint8_t* data,size_t size){
     if(data[5]&8)return std::nullopt;   // the roster bit belongs to a hello only
     auto& b=r.body;
     b.ik=flags&1;b.bowDrawn=flags&2;b.leftHanded=flags&4;b.reverseGrip=flags&8;b.swim=flags&16;b.item=flags&32;b.twoHand=data[5]&3;b.offhandItem=data[5]&4;
-    if(size!=(b.ik?fullBytes+(b.item?itemBytes:0)+(b.offhandItem?itemBytes:0):pausedBytes)||(!b.ik&&(b.item||b.offhandItem)))return std::nullopt;
+    if(size!=stamp+(b.ik?fullBytes+(b.item?itemBytes:0)+(b.offhandItem?itemBytes:0):pausedBytes)||(!b.ik&&(b.item||b.offhandItem)))return std::nullopt;
+    if(stamp){r.timed=true;r.sentMs=uint16_t(data[size-2])|uint16_t(data[size-1])<<8;}
     for(unsigned n=0;n<3;n++){const auto* p=data+headerBytes+4*n;r.place[n]=int32_t(uint32_t(p[0])|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24);}
     if(!detail::getPose(data+bodyAt,b.head))return std::nullopt;
     if(!b.ik)return r;
@@ -187,9 +194,16 @@ inline std::vector<size_t> bodyRecipients(const std::array<double,3>& mine,const
     std::sort(close.begin(),close.end());if(close.size()>most)close.resize(most);
     std::vector<size_t> out;for(const auto& n:close)out.push_back(n.second);return out;
 }
-// One other player, on the receiving side. VHVR keeps the newest data and steps a fifth of the way toward it on every
-// fixed tick (4.2, 4.3; a difference of a millimetre or of a thousandth of a degree is not stepped); here the same
-// share per 20 ms of the time that passed. Fingers, flags and the held item are taken as they come (4.7; VHVR steps
+// One other player, on the receiving side. Since 2026-10-20 (buffered, the default) the poses are shown a little late,
+// between the two received around that time (user, after the first session with a VR guest: "the other player's arms
+// move little and slowly - a stroke at an enemy looks like stroking it"). VHVR's way below - a fifth of the way toward
+// the newest data each 20 ms - is a low-pass of about 90 ms: a swing back and forth in 0.4 s keeps 58 % of its reach and
+// comes 60 ms late (2.5 Hz through 1/sqrt(1+(2 pi f tau)^2)). Buffered: a pose is placed on the sender's clock (version 3,
+// the receiver's arrival time for version 2) moved by the smallest transit seen, and shown at now - delay, where the
+// delay is 1.5 times the usual spacing of the poses plus 10 ms (30..150 ms): the full reach, a steady small lag.
+// buffered=false (EVR_SYNC_SMOOTHING=vhvr): VHVR's way. VHVR keeps the newest data and steps a fifth of the way toward
+// it on every fixed tick (4.2, 4.3; a difference of a millimetre or of a thousandth of a degree is not stepped); here the
+// same share per 20 ms of the time that passed. Fingers, flags and the held item are taken as they come (4.7; VHVR steps
 // the item's position too - left for when items are shown). The first data, and the first after a pause or after the
 // time limit, is taken as it is: VHVR starts its orientations from none and turns toward the first data for some ticks.
 struct ReceiverSettings {
@@ -198,9 +212,17 @@ struct ReceiverSettings {
     float minimumTurn=.001f*pi/180;           // rad
     double timeLimit=3;                       // s without data: nothing is shown for that player any more (not in VHVR)
     unsigned mostPerSecond=200;               // datagrams of one player in a second; the rest of that second is ignored (2026-10-15, spec 2.7)
+    bool buffered=true;                       // 2026-10-20: shown late between two received poses (false: VHVR's stepping)
+    double delayIntervals=1.5,delayExtra=.01,delayMin=.03,delayMax=.15;   // s: the lag of the buffered way
+    double transitRise=.0005;                 // s a pose: how fast the smallest transit may grow again (a slower route)
 };
 class Receiver {
     bool have_=false,shown_=false;Body newest_{},shownBody_{};uint16_t sequence_=0;double arrived_=0,stepped_=0;
+    // buffered: the poses received lately, oldest first, each at its time on the sender's clock (seconds); a pose is shown
+    // at that time + transit_ (the smallest arrival - sent seen) + the delay.
+    struct Sample {Body body;double sent=0;};
+    std::array<Sample,32> samples_{};size_t count_=0;
+    double transit_=0,spacing_=1/30.;bool clockKnown_=false;int64_t sentClock_=0;uint16_t lastStamp_=0;
     // The turn from one to the other, taken from its vector part: the angle of a small turn does not come out of the
     // four-part product in single precision (a hundredth of a degree is lost in the rounding of a value next to 1).
     static Quat toward(Quat from,Quat to,float share,float minimum){
@@ -214,16 +236,61 @@ class Receiver {
         const auto way=to.position-from.position;
         return {toward(from.orientation,to.orientation,share,s.minimumTurn),length(way)>s.minimumMove?from.position+way*share:to.position};
     }
+    // Between two poses a share t of the way (positions straight, turns along the shorter way).
+    static Pose between(const Pose& a,const Pose& b,float t){
+        auto q=normalized(b.orientation);const auto p=normalized(a.orientation);
+        if(p.x*q.x+p.y*q.y+p.z*q.z+p.w*q.w<0)q={-q.x,-q.y,-q.z,-q.w};
+        return {normalized(Quat{p.x+(q.x-p.x)*t,p.y+(q.y-p.y)*t,p.z+(q.z-p.z)*t,p.w+(q.w-p.w)*t}),a.position+(b.position-a.position)*t};
+    }
+    static Body between(const Body& a,const Body& b,float t){
+        if(!a.ik||!b.ik)return b;
+        Body out=b;out.head=between(a.head,b.head,t);out.pelvis=between(a.pelvis,b.pelvis,t);
+        for(unsigned h=0;h<2;h++){out.hand[h]=between(a.hand[h],b.hand[h],t);
+            for(size_t f=0;f<out.fingers[h].amount.size();f++)out.fingers[h].amount[f]=a.fingers[h].amount[f]+(b.fingers[h].amount[f]-a.fingers[h].amount[f])*t;}
+        if(a.item&&b.item)out.itemInHand=between(a.itemInHand,b.itemInHand,t);
+        if(a.offhandItem&&b.offhandItem)out.offhandInHand=between(a.offhandInHand,b.offhandInHand,t);
+        return out;
+    }
+    void clear(){count_=0;clockKnown_=false;spacing_=1/30.;}
+    void keep(const Received& r,double now,const ReceiverSettings& s){
+        double sent=now;
+        if(r.timed){
+            if(!clockKnown_){sentClock_=r.sentMs;clockKnown_=true;transit_=0;}else sentClock_+=int16_t(uint16_t(r.sentMs-lastStamp_));
+            lastStamp_=r.sentMs;const double at=double(sentClock_)/1000,transit=now-at;
+            transit_=count_?std::min(transit,transit_+s.transitRise):transit;sent=at;
+        }else{transit_=0;clockKnown_=false;}
+        if(count_){const double gap=sent-samples_[count_-1].sent;
+            if(gap<=0||gap>s.timeLimit){clear();if(r.timed){sentClock_=r.sentMs;clockKnown_=true;lastStamp_=r.sentMs;sent=double(sentClock_)/1000;transit_=now-sent;}}
+            else spacing_=.9*spacing_+.1*std::clamp(gap,.005,.2);}
+        if(count_==samples_.size()){std::move(samples_.begin()+1,samples_.end(),samples_.begin());--count_;}
+        samples_[count_++]={r.body,sent};
+    }
 public:
     // A datagram of that player that decode() took (not a hello). False: older than the newest one (or the same again) - dropped.
     bool offer(const Received& r,double now,const ReceiverSettings& s={}){
         if(r.hello)return false;
         if(have_&&now-arrived_<=s.timeLimit&&int16_t(uint16_t(r.sequence-sequence_))<=0)return false;
-        newest_=r.body;sequence_=r.sequence;arrived_=now;have_=true;return true;
+        if(!have_||now-arrived_>s.timeLimit)clear();
+        newest_=r.body;sequence_=r.sequence;arrived_=now;have_=true;
+        if(s.buffered)keep(r,now,s);
+        return true;
     }
     // What to show of that player now; nothing before the first data and after the time limit.
     std::optional<Body> update(double now,const ReceiverSettings& s={}){
-        if(!have_||now-arrived_>s.timeLimit){have_=shown_=false;return std::nullopt;}
+        if(!have_||now-arrived_>s.timeLimit){have_=shown_=false;clear();return std::nullopt;}
+        if(s.buffered&&count_){
+            // a pause shows at once (the others let go of the body), and so does the first pose after it
+            if(!newest_.ik){shownBody_=newest_;shown_=true;return newest_;}
+            const double delay=std::clamp(s.delayIntervals*spacing_+s.delayExtra,s.delayMin,s.delayMax);
+            const double play=now-delay-transit_;   // on the sender's clock
+            Body out;
+            if(count_==1||play>=samples_[count_-1].sent)out=samples_[count_-1].body;
+            else if(play<=samples_[0].sent)out=samples_[0].body;
+            else{size_t i=1;while(i<count_&&samples_[i].sent<play)++i;
+                const auto& a=samples_[i-1];const auto& b=samples_[i];
+                out=between(a.body,b.body,float(std::clamp((play-a.sent)/std::max(b.sent-a.sent,1e-6),0.,1.)));}
+            shownBody_=out;shown_=true;return out;
+        }
         const bool fresh=!shown_||!shownBody_.ik||!newest_.ik;
         const double dt=std::max(0.,now-stepped_);stepped_=now;
         const float share=fresh?1.f:1-std::pow(1-std::clamp(s.sharePerTick,0.f,1.f),float(dt/std::max(s.tick,1e-4f)));
@@ -235,6 +302,7 @@ public:
     bool known()const{return have_;}
     const Body& newest()const{return newest_;}   // as it came, without the stepping (the hit of a stroke: online_sync.hpp)
     uint16_t sequence()const{return sequence_;}
+    double delayShown(const ReceiverSettings& s={})const{return std::clamp(s.delayIntervals*spacing_+s.delayExtra,s.delayMin,s.delayMax);}
 };
 
 // Who is sent to and how often, and what came from whom. The players listed are the ones the transport found (friends

@@ -17,6 +17,9 @@ struct LiveTarget {
     uint32_t entity=0;
     std::array<int64_t,3> position{}; // world, Q32 fixed point (2^32 per metre), the entity's origin (feet, base of a trunk)
     bool character=false;             // has an Actor: a person or a creature, with a body about 2 m high
+    // keen::ecs::Destructible without a health (2026-10-20, user: "the sword does not break what cannot be locked on -
+    // tables, pots; only a jump's fall attack does"): small things, a smaller reach (objectRadius, objectHeight)
+    bool object=false;
 };
 struct LiveTargetReach {
     float characterRadius=.6f; // metres around the vertical axis of a character: its body (the aim mark stops there)
@@ -28,6 +31,7 @@ struct LiveTargetReach {
     float characterStrike=.85f;
     float otherRadius=1.3f;    // trees and objects: the big trees by the home are hit 1.1 m from their axis (game161403)
     float height=2.2f;         // the axis is taken this high from the origin
+    float objectRadius=.75f,objectHeight=1.2f;   // a table, a pot, a crate: about a metre across and up to a metre high
 };
 // Shortest distance between the segments a..b and c..d.
 inline float segmentDistance(Vec3 a,Vec3 b,Vec3 c,Vec3 d) {
@@ -50,7 +54,7 @@ inline float bladeDistance(const std::array<int64_t,3>& from,const std::array<in
     constexpr double q=1.0/4294967296.0;
     const Vec3 a{float(double(from[0]-target.position[0])*q),float(double(from[1]-target.position[1])*q),float(double(from[2]-target.position[2])*q)};
     const Vec3 b{float(double(to[0]-target.position[0])*q),float(double(to[1]-target.position[1])*q),float(double(to[2]-target.position[2])*q)};
-    return segmentDistance(a,b,{0,0,0},{0,reach.height,0});
+    return segmentDistance(a,b,{0,0,0},{0,target.object?reach.objectHeight:reach.height,0});
 }
 // A point of the blade a little later, from its last two positions (world Q32).
 // A stroke presses the game's attack button; the game reads the button on its next frame and starts the action on
@@ -71,6 +75,6 @@ inline std::array<int64_t,3> bladeAhead(const std::array<int64_t,3>& now,const s
 }
 inline bool bladeNear(const std::array<int64_t,3>& from,const std::array<int64_t,3>& to,const LiveTarget& target,const LiveTargetReach& reach={}) {
     const float distance=bladeDistance(from,to,target,reach);
-    return std::isfinite(distance)&&distance<=(target.character?reach.characterStrike:reach.otherRadius);
+    return std::isfinite(distance)&&distance<=(target.character?reach.characterStrike:target.object?reach.objectRadius:reach.otherRadius);
 }
 }

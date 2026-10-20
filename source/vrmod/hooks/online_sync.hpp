@@ -102,6 +102,11 @@ inline void sendCasts(){
     const auto bytes=sync::encodeCast(castId,castStrength);
     for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,bytes))++actionsSent;
 }
+// How another player's poses are shown (2026-10-20, user: "the other player's arms move little and slowly"): a little late,
+// between two received poses (sync::Receiver buffered). EVR_SYNC_SMOOTHING=vhvr: VHVR's stepping, a fifth of the way per
+// 20 ms (before; it keeps about 58 % of a quick swing's reach).
+inline const sync::ReceiverSettings& receiving(){static const sync::ReceiverSettings s=[]{sync::ReceiverSettings r;char v[8]{};
+    const auto n=GetEnvironmentVariableA("EVR_SYNC_SMOOTHING",v,sizeof v);r.buffered=!(n==4&&!_stricmp(v,"vhvr"));return r;}();return s;}
 inline void frame(uint64_t renderSerial) noexcept {
     if(!requested)return;
     try{
@@ -116,7 +121,7 @@ inline void frame(uint64_t renderSerial) noexcept {
         steamLink::receive([&](uint64_t from,const uint8_t* data,size_t size){
             if(size&&data&&data[0]==sync::actionMagic){action(from,data,size);return;}
             const auto r=sync::decode(data,size);if(!r){++refused;return;}
-            if(!peers.heard(from,*r,now))++notCounted;
+            if(!peers.heard(from,*r,now,receiving()))++notCounted;
             else if(!r->roster.empty()){++rostersHeard;for(const auto id:r->roster)if(id!=steamLink::self){if(!learned.count(id)){++learnedTotal;if(logs++<200)logFile->event("online_sync_learned","\"player\":\""+steamLink::tail(id)+"\",\"from\":\""+steamLink::tail(from)+"\"");}learned[id]=now;}}});
         sendCasts();
         // Out: the body of this frame; for a second after it stopped (the view left first person, the hands are gone)
@@ -136,8 +141,9 @@ inline void frame(uint64_t renderSerial) noexcept {
             const auto due=peers.due(p,now,(have||stopping)&&inSight);
             if(due==sync::Peers::Due::Nothing)continue;
             std::vector<uint8_t> bytes;
-            if(have)bytes=sync::encode(mine.body,++sequence,mine.place);
-            else if(stopping||(placed&&due==sync::Peers::Due::Hello&&(flat||now-lastBodyAt<=30))){sync::Body paused;paused.ik=false;bytes=sync::encode(paused,++sequence,lastPlace);}
+            const auto stamp=uint16_t(GetTickCount64()&0xffff);   // the sender's clock (version 3: the receiver shows the poses in this time)
+            if(have)bytes=sync::encode(mine.body,++sequence,mine.place,stamp);
+            else if(stopping||(placed&&due==sync::Peers::Due::Hello&&(flat||now-lastBodyAt<=30))){sync::Body paused;paused.ik=false;bytes=sync::encode(paused,++sequence,lastPlace,stamp);}
             else bytes=sync::encodeHello(++sequence);
             if(steamLink::send(p.id,bytes)){if(bytes.size()>=sync::fullBytes)++bodiesSent;else ++hellosSent;}
         }
@@ -162,7 +168,7 @@ inline void frame(uint64_t renderSerial) noexcept {
                 logFile->event("online_sync_unbound","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(p.character)+",\"reason\":\""+why+"\",\"metres_from_the_sent_place\":"+std::to_string(metres)+
                     ",\"characters_seen\":"+std::to_string(list.size())+",\"since_heard_s\":"+std::to_string(now-p.heard));};
             for(auto& p:peers.all()){
-                const auto body=p.receiver.update(now);
+                const auto body=p.receiver.update(now,receiving());
                 if(!body||!body->ik||!p.placed){unbound(p,!body?"no_body":!body->ik?"ik_paused":"no_place",-1);p.character=-1;continue;}
                 int previous=-1;for(size_t i=0;i<list.size();i++)if(int64_t(list[i].entity)==p.character)previous=int(i);
                 // A bound character stays bound farther from the sent place the older that place is (2026-10-20: in the first

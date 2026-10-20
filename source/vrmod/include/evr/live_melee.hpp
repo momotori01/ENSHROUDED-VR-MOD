@@ -149,7 +149,10 @@ public:
  // blade reaches a target while still fast; staying at a target, each new stroke (or thrust) attacks again.
  // cooldown: the player's one (shared by both hands' LiveMelee); the caller starts it when a stroke fired. A stroke
  // that meets it stays armed: still fast when the wait ends, it attacks then.
- LiveMeleeResult update(const HandFrame& f,const LiveMeleeWeapon& w,bool allowed,uint64_t now,bool nearTarget=true,const LiveCooldown* cooldown=nullptr,bool approaching=false){
+ // upwardFactor: the requirement times this while the weapon hand goes up faster than 1 m/s (2026-10-20, in the air: user,
+ // "the rising slash of a jump comes too easily - lifting the sword for a downward blow sets it off"). Such a lift that
+ // stays below it keeps the stroke armed: a fast blow down right after it attacks.
+ LiveMeleeResult update(const HandFrame& f,const LiveMeleeWeapon& w,bool allowed,uint64_t now,bool nearTarget=true,const LiveCooldown* cooldown=nullptr,bool approaching=false,float upwardFactor=1.f){
   LiveMeleeResult out;
   // "right" is the hand that carries the weapon, "left" the other one (the names of the usual right-hand case).
   if(w.hand>1||!std::isfinite(w.speedFactor)||w.speedFactor<=0||w.speedFactor>2)throw std::invalid_argument("melee weapon hand");
@@ -177,6 +180,7 @@ public:
     lastVelocity_[0]=rightVelocity;lastVelocity_[1]=leftVelocity;haveVelocity_=true;
     out=meleeMomentum(settings_,w,leftVelocity,rightVelocity,angular);out.sampled=true;out.handVelocity=rightVelocity;out.otherVelocity=leftVelocity;
     if(approaching&&nearTarget&&std::isfinite(settings_.approachFactor)&&settings_.approachFactor>0&&settings_.approachFactor<1)out.required*=settings_.approachFactor;
+    if(std::isfinite(upwardFactor)&&upwardFactor>1.f&&upwardFactor<=3.f&&rightVelocity.y>1.f)out.required*=upwardFactor;
     const bool momentum=out.thrust||out.speed>out.required;
     if(!momentum&&out.speed<out.required*settings_.rearmFactor)armed_=true;
     travel_=momentum?travel_+out.speed*dt:0;

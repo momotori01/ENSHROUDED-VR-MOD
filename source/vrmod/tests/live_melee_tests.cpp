@@ -118,6 +118,13 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   {const auto coming=[&](Vec3 velocity,bool approaching){++f.frame;f.predictedTime+=tick;now+=11;f.hands[1].grip.position=f.hands[1].grip.position+velocity*dt;return t.update(f,w,true,now,true,nullptr,approaching);};
    reset();calm();for(unsigned i=0;i<3;i++)ck(!coming({2.5f,0,0},false).fired);reset();calm();ck(coming({2.5f,0,0},true).fired);ck(t.presses()==1);
    reset();calm();for(unsigned i=0;i<3;i++)ck(!coming({1.5f,0,0},true).fired);ck(t.presses()==0);}
+  // In the air a stroke up needs a quarter more (2026-10-20): 3.4 m/s up attacks with the factor 1, not with 1.25, and stays
+  // armed - a fast blow down then attacks; 4 m/s up attacks with 1.25.
+  {const auto rising=[&](Vec3 velocity,float factor){++f.frame;f.predictedTime+=tick;now+=11;f.hands[1].grip.position=f.hands[1].grip.position+velocity*dt;return t.update(f,w,true,now,true,nullptr,false,factor);};
+   reset();calm();ck(rising({0,3.4f,0},1.f).fired);
+   reset();calm();for(unsigned i=0;i<4;i++)ck(!rising({0,3.4f,0},1.25f).fired);ck(t.presses()==0&&t.armed());rising({0,0,0},1.25f);ck(rising({0,-4.5f,0},1.25f).fired);
+   reset();calm();ck(rising({0,4.f,0},1.25f).fired);
+   reset();calm();ck(rising({3.4f,0,0},1.25f).fired);}                  // level: as before
   LiveMeleeWeapon d;ck(!d.blade&&d.needsTarget);}
  // The left-hand part of a weapon pair (hand 0): the left hand's own stroke attacks, the right hand's does not; and a
  // bare hand needs 0.45 of the requirement (VHVR FistCollision).

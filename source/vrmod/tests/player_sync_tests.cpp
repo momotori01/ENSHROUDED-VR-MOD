@@ -15,28 +15,34 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
  body.hand[0]={normalized(Quat{.3f,-.2f,.5f,.79f}),{-.25f,1.21f,.33f}};body.hand[1]={normalized(Quat{-.6f,.1f,.2f,-.76f}),{.27f,1.4f,.45f}};
  body.pelvis={turnY(38),{.02f,.97f,-.06f}};body.fingers[0].amount={.15f,1,.5f,.5f,.25f};body.fingers[1].amount={1,.15f,0,.75f,1};
  body.swim=true;body.bowDrawn=true;body.reverseGrip=true;body.twoHand=2;
- {const auto bytes=encode(body,0xbeef,somewhere);ck(bytes.size()==fullBytes&&fullBytes==80&&bytes[0]==magic&&bytes[1]==version);
+ {const auto bytes=encode(body,0xbeef,somewhere);ck(bytes.size()==fullBytes+stampBytes&&fullBytes==80&&bytes[0]==magic&&bytes[1]==version);
   const auto r=decode(bytes);ck(r&&r->sequence==0xbeef&&!r->hello&&r->place==somewhere);const auto& b=r->body;
   ck(same(b.head,body.head)&&same(b.hand[0],body.hand[0])&&same(b.hand[1],body.hand[1])&&same(b.pelvis,body.pelvis));
   ck(b.ik&&b.swim&&b.bowDrawn&&!b.leftHanded&&b.reverseGrip&&b.twoHand==2&&!b.item);
   for(unsigned h=0;h<2;h++)for(unsigned f=0;f<hand::FingerCount;f++)ck(std::abs(b.fingers[h].amount[f]-body.fingers[h].amount[f])<=.002f);
   // With a held item: thirteen bytes more.
   auto held=body;held.item=true;held.itemInHand={pitch(-70),{.01f,.12f,-.03f}};held.leftHanded=true;held.swim=false;
-  const auto more=encode(held,7,{-1,0,2147483647});ck(more.size()==fullBytes+itemBytes&&more.size()==93);const auto h=decode(more);
+  const auto more=encode(held,7,{-1,0,2147483647});ck(more.size()==fullBytes+itemBytes+stampBytes&&more.size()==95);const auto h=decode(more);
   ck(h&&h->body.item&&same(h->body.itemInHand,held.itemInHand)&&h->body.leftHanded&&!h->body.swim&&h->sequence==7&&h->place==Place{-1,0,2147483647});
   ck(!h->body.offhandItem);
   // The off hand's item too (version 2, 2026-10-15): thirteen bytes more again, by bit 2 of the two-hand byte; alone as well.
-  auto both=held;both.offhandItem=true;both.offhandInHand={pitch(20),{-.02f,.05f,.01f}};const auto two=encode(both,3,somewhere);ck(two.size()==fullBytes+2*itemBytes&&two.size()==106&&(two[5]&4));
+  auto both=held;both.offhandItem=true;both.offhandInHand={pitch(20),{-.02f,.05f,.01f}};const auto two=encode(both,3,somewhere);ck(two.size()==fullBytes+2*itemBytes+stampBytes&&two.size()==108&&(two[5]&4));
   const auto t2=decode(two);ck(t2&&t2->body.item&&t2->body.offhandItem&&same(t2->body.itemInHand,held.itemInHand)&&same(t2->body.offhandInHand,both.offhandInHand)&&t2->body.twoHand==2);
-  auto only=body;only.offhandItem=true;only.offhandInHand=both.offhandInHand;const auto one=encode(only,4,somewhere);ck(one.size()==fullBytes+itemBytes&&!(one[4]&32)&&(one[5]&4));
+  auto only=body;only.offhandItem=true;only.offhandInHand=both.offhandInHand;const auto one=encode(only,4,somewhere);ck(one.size()==fullBytes+itemBytes+stampBytes&&!(one[4]&32)&&(one[5]&4));
   const auto o1=decode(one);ck(o1&&!o1->body.item&&o1->body.offhandItem&&same(o1->body.offhandInHand,both.offhandInHand));
   auto bad5=two;bad5[5]|=8;ck(!decode(bad5));bad5=two;bad5[5]&=~4;ck(!decode(bad5));bad5=one;bad5[5]&=~4;ck(!decode(bad5));   // an unknown bit; the length does not fit
   {const Pose hand{pitch(-30),{.3f,1.2f,-.1f}},item{pitch(45),{.35f,1.3f,-.2f}};const auto rel=inHand(hand,item);
    ck(same(fromHand(hand,rel),item,1e-5f,.01f)&&length(rel.position)<.2f&&same(inHand(identityPose(),item),item,1e-5f,.01f));}
   // The IK paused: the place and the head alone.
-  auto paused=body;paused.ik=false;paused.item=true;const auto few=encode(paused,8,somewhere);ck(few.size()==pausedBytes&&few.size()==31);
+  auto paused=body;paused.ik=false;paused.item=true;const auto few=encode(paused,8,somewhere);ck(few.size()==pausedBytes+stampBytes&&few.size()==33);
   const auto p=decode(few);ck(p&&!p->body.ik&&!p->body.item&&!p->body.offhandItem&&same(p->body.head,body.head)&&p->body.bowDrawn&&p->place==somewhere);
-  auto pausedOff=paused;pausedOff.offhandItem=true;ck(encode(pausedOff,8,somewhere).size()==pausedBytes);   // paused: no item travels
+  auto pausedOff=paused;pausedOff.offhandItem=true;ck(encode(pausedOff,8,somewhere).size()==pausedBytes+stampBytes);   // paused: no item travels
+  // Version 3 (2026-10-20): the sender's clock in milliseconds at the end; version 2 (without it) is still read.
+  {const auto stamped=decode(encode(body,5,somewhere,54321));ck(stamped&&stamped->timed&&stamped->sentMs==54321&&same(stamped->body.hand[1],body.hand[1]));
+   const auto pausedStamp=decode(encode(paused,6,somewhere,7));ck(pausedStamp&&pausedStamp->timed&&pausedStamp->sentMs==7&&!pausedStamp->body.ik);
+   auto v2=bytes;v2[1]=oldVersion;v2.resize(v2.size()-stampBytes);const auto old=decode(v2);ck(old&&!old->timed&&same(old->body.hand[0],body.hand[0]));
+   auto v2long=bytes;v2long[1]=oldVersion;ck(!decode(v2long));auto v3short=bytes;v3short.resize(v3short.size()-stampBytes);ck(!decode(v3short));
+   auto oldHello=encodeHello(3);oldHello[1]=oldVersion;ck(decode(oldHello)&&decode(oldHello)->hello);}
   // A hello: "a player with this mod is here", nothing else.
   const auto hi=encodeHello(9);ck(hi.size()==helloBytes&&hi.size()==6);const auto g=decode(hi);ck(g&&g->hello&&!g->body.ik&&g->sequence==9);
   auto wrong=hi;wrong.push_back(0);ck(!decode(wrong));wrong=hi;wrong[4]|=1;ck(!decode(wrong));wrong=hi;wrong[5]=1;ck(!decode(wrong));
@@ -53,14 +59,14 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   // Far from the character: held at the range's end, not wrapped round.
   auto far=body;far.hand[1].position={40,-40,3};const auto f=decode(encode(far,1,somewhere));ck(f&&std::abs(f->body.hand[1].position.x-16.3835f)<1e-3f&&std::abs(f->body.hand[1].position.y+16.3835f)<1e-3f);
   // Bytes from another machine: anything that is not exactly one datagram of this version gives nothing.
-  ck(!decode(nullptr,80)&&!decode(bytes.data(),0)&&!decode(bytes.data(),79));auto bad=bytes;bad.push_back(0);ck(!decode(bad));
+  ck(!decode(nullptr,82)&&!decode(bytes.data(),0)&&!decode(bytes.data(),79)&&!decode(bytes.data(),81));auto bad=bytes;bad.push_back(0);ck(!decode(bad));
   bad=bytes;bad[0]^=1;ck(!decode(bad));bad=bytes;bad[1]=1;ck(!decode(bad));bad=bytes;bad[1]=version+1;ck(!decode(bad));bad=bytes;bad[4]|=0x80;ck(!decode(bad));bad=bytes;bad[4]|=0x40;ck(!decode(bad));bad=bytes;bad[5]=3;ck(!decode(bad));
   bad=bytes;bad[bodyAt+6]=4;ck(!decode(bad));                                        // no such largest part
   bad=bytes;for(unsigned at=7;at<13;at+=2){bad[bodyAt+at]=0xff;bad[bodyAt+at+1]=0x7f;}ck(!decode(bad));   // three parts of 0.707: longer than a unit
   bad=bytes;bad[4]|=32;ck(!decode(bad));bad=more;bad[4]&=~32;ck(!decode(bad));bad=few;bad[4]|=1;ck(!decode(bad));   // the length does not fit the flags
   for(size_t cut=0;cut<more.size();cut++)ck(!decode(more.data(),cut));
   bool threw=false;auto nan=body;nan.hand[0].position.x=NAN;try{encode(nan,1,somewhere);}catch(const std::invalid_argument&){threw=true;}ck(threw);
-  nan.ik=false;ck(encode(nan,1,somewhere).size()==pausedBytes);}                       // paused: the hands do not count
+  nan.ik=false;ck(encode(nan,1,somewhere).size()==pausedBytes+stampBytes);}                       // paused: the hands do not count
 
  // Model space and the world's axes: there and back, with a model that faces another way and is not of unit size.
  {const Model m{normalized(multiply(turnY(-110),pitch(12))),{.9f,.9f,.9f}};const Pose p{normalized(Quat{.2f,.4f,-.1f,.88f}),{.3f,1.5f,-.2f}};
@@ -92,22 +98,23 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
    for(auto j:{1,17,64,94})ck(angle(toWorld(owner,own[size_t(j)]).orientation,toWorld(seenAs,seen[size_t(j)]).orientation)<.2f);
    ck(shown->fingers[1].amount[0]==1&&std::abs(shown->fingers[1].amount[2]-.5f)<.003f);}}
 
- // The receiver steps toward the newest data: a fifth of the way per 20 ms, whatever the frame rate; orientations too.
- {const ReceiverSettings s;Body at;at.hand[1].position={0,1,0};Receiver r;ck(r.offer({at,1},0));ck(r.update(0)->hand[1].position.x==0);
-  Body next=at;next.hand[1].position.x=.1f;next.head.orientation=turnY(40);next.pelvis.position.z=.05f;ck(r.offer({next,2},0));
-  auto o=*r.update(.02);ck(std::abs(o.hand[1].position.x-.02f)<1e-5f&&std::abs(angle(o.head.orientation,{0,0,0,1})-8)<.01f&&std::abs(o.pelvis.position.z-.01f)<1e-5f);
-  o=*r.update(.04);ck(std::abs(o.hand[1].position.x-.036f)<1e-5f);
-  Receiver fine;fine.offer({at,1},0);fine.update(0);fine.offer({next,2},0);Body f;for(int i=1;i<=10;i++)f=*fine.update(i*.004);     // 250 frames a second
+ // VHVR's way (buffered=false): the receiver steps toward the newest data: a fifth of the way per 20 ms, whatever the
+ // frame rate; orientations too.
+ {ReceiverSettings s;s.buffered=false;Body at;at.hand[1].position={0,1,0};Receiver r;ck(r.offer({at,1},0,s));ck(r.update(0,s)->hand[1].position.x==0);
+  Body next=at;next.hand[1].position.x=.1f;next.head.orientation=turnY(40);next.pelvis.position.z=.05f;ck(r.offer({next,2},0,s));
+  auto o=*r.update(.02,s);ck(std::abs(o.hand[1].position.x-.02f)<1e-5f&&std::abs(angle(o.head.orientation,{0,0,0,1})-8)<.01f&&std::abs(o.pelvis.position.z-.01f)<1e-5f);
+  o=*r.update(.04,s);ck(std::abs(o.hand[1].position.x-.036f)<1e-5f);
+  Receiver fine;fine.offer({at,1},0,s);fine.update(0,s);fine.offer({next,2},0,s);Body f;for(int i=1;i<=10;i++)f=*fine.update(i*.004,s);     // 250 frames a second
   ck(std::abs(f.hand[1].position.x-.036f)<1e-4f);
-  Receiver coarse;coarse.offer({at,1},0);coarse.update(0);coarse.offer({next,2},0);ck(std::abs(coarse.update(.04)->hand[1].position.x-.036f)<1e-5f);
+  Receiver coarse;coarse.offer({at,1},0,s);coarse.update(0,s);coarse.offer({next,2},0,s);ck(std::abs(coarse.update(.04,s)->hand[1].position.x-.036f)<1e-5f);
   // Half of the way after about three ticks, a tenth left after about ten (VHVR 4.2).
-  Receiver half;half.offer({at,1},0);half.update(0);half.offer({next,2},0);ck(std::abs(half.update(.0621)->hand[1].position.x-.05f)<5e-4f);ck(half.update(.2063)->hand[1].position.x>.0899f);
+  Receiver half;half.offer({at,1},0,s);half.update(0,s);half.offer({next,2},0,s);ck(std::abs(half.update(.0621,s)->hand[1].position.x-.05f)<5e-4f);ck(half.update(.2063,s)->hand[1].position.x>.0899f);
   // Less than a millimetre, less than a thousandth of a degree: there at once.
-  Body close=o;close.hand[1].position.x+=.0009f;Receiver near;near.offer({o,1},0);near.update(0);near.offer({close,2},0);ck(near.update(.001)->hand[1].position.x==close.hand[1].position.x);
+  Body close=o;close.hand[1].position.x+=.0009f;Receiver near;near.offer({o,1},0,s);near.update(0,s);near.offer({close,2},0,s);ck(near.update(.001,s)->hand[1].position.x==close.hand[1].position.x);
   // The same time again: no step.
-  ck(std::abs(r.update(.04)->hand[1].position.x-.036f)<1e-5f);
+  ck(std::abs(r.update(.04,s)->hand[1].position.x-.036f)<1e-5f);
   // Fingers, flags and the held item are taken as they come.
-  Body flags=next;flags.fingers[0].amount[1]=1;flags.bowDrawn=true;flags.item=true;flags.itemInHand.position.y=.1f;r.offer({flags,3},.04);o=*r.update(.05);
+  Body flags=next;flags.fingers[0].amount[1]=1;flags.bowDrawn=true;flags.item=true;flags.itemInHand.position.y=.1f;r.offer({flags,3},.04,s);o=*r.update(.05,s);
   ck(o.fingers[0].amount[1]==1&&o.bowDrawn&&o.item&&o.itemInHand.position.y==.1f&&o.hand[1].position.x<.1f);
   // A hello is not a body.
   Received hello;hello.hello=true;hello.sequence=9;ck(!r.offer(hello,.06)&&r.sequence()==3);}
@@ -122,10 +129,31 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   Receiver late;late.offer({a,500},0);late.update(0);ck(late.offer({b,7},3.5));}                // nothing for longer than the limit, not yet noticed by update()
 
  // The IK paused: nothing of the body counts; back again: taken as it is, no sweep from where the hands were.
- {Receiver r;Body a;a.hand[0].position={-.3f,1,0};r.offer({a,1},0);r.update(0);Body paused=a;paused.ik=false;paused.head.position.x=.5f;r.offer({paused,2},.02);
-  auto o=*r.update(.04);ck(!o.ik&&o.head.position.x==.5f);Body back=a;back.hand[0].position.x=.4f;back.head.position.x=.6f;r.offer({back,3},.06);
-  o=*r.update(.08);ck(o.ik&&o.hand[0].position.x==.4f&&o.head.position.x==.6f);
-  Body move=back;move.hand[0].position.x=.5f;r.offer({move,4},.08);o=*r.update(.1);ck(std::abs(o.hand[0].position.x-.42f)<1e-5f);}
+ {ReceiverSettings s;s.buffered=false;Receiver r;Body a;a.hand[0].position={-.3f,1,0};r.offer({a,1},0,s);r.update(0,s);Body paused=a;paused.ik=false;paused.head.position.x=.5f;r.offer({paused,2},.02,s);
+  auto o=*r.update(.04,s);ck(!o.ik&&o.head.position.x==.5f);Body back=a;back.hand[0].position.x=.4f;back.head.position.x=.6f;r.offer({back,3},.06,s);
+  o=*r.update(.08,s);ck(o.ik&&o.hand[0].position.x==.4f&&o.head.position.x==.6f);
+  Body move=back;move.hand[0].position.x=.5f;r.offer({move,4},.08,s);o=*r.update(.1,s);ck(std::abs(o.hand[0].position.x-.42f)<1e-5f);}
+ // Buffered (the default since 2026-10-20): shown a little late, between two received poses - the full reach of a swing.
+ // A hand swinging 0.5 m back and forth 2.5 times a second, sent 30 times a second (each with the sender's clock), arriving
+ // 40 +-8 ms later, shown 90 times a second: the buffered way keeps over 94 % of the reach, VHVR's stepping about 58 %.
+ {auto swing=[](bool buffered,bool timed,double& lagOut){ReceiverSettings s;s.buffered=buffered;Receiver r;double reach=0;
+    std::vector<std::pair<double,float>> shown;uint32_t noise=12345;size_t next=0;std::vector<std::pair<double,Received>> flight;
+    for(int n=0;n<120;n++){const double t=n/30.;Body b;b.hand[1].position.x=float(.5*std::sin(2*pi*2.5*t));
+      noise=noise*1103515245u+12345u;const double jitter=(double((noise>>16)&1023)/1023.-.5)*.016;
+      Received d{b,uint16_t(n+1)};d.timed=timed;d.sentMs=uint16_t(uint32_t(std::lround(t*1000+63000))&0xffff);   // wraps round at 2.5 s
+      flight.push_back({t+.04+jitter,d});}
+    for(int k=0;k<360;k++){const double now=k/90.;
+      while(next<flight.size()&&flight[next].first<=now){r.offer(flight[next].second,flight[next].first,s);++next;}
+      const auto o=r.update(now,s);if(o&&now>1){reach=std::max(reach,double(std::abs(o->hand[1].position.x)));shown.push_back({now,o->hand[1].position.x});}}
+    double best=1e9;lagOut=0;for(int ms=0;ms<=200;ms+=5){double e=0;for(const auto& [t,x]:shown)e+=std::abs(x-.5*std::sin(2*pi*2.5*(t-ms/1000.)));if(e<best){best=e;lagOut=ms/1000.;}}
+    return reach;};
+  double lag=0,lagStep=0,lagOld=0;const double buffered=swing(true,true,lag),stepped=swing(false,true,lagStep),untimed=swing(true,false,lagOld);
+  ck(buffered>.47&&lag<=.12);ck(stepped<.33);ck(untimed>.45&&lagOld<=.14);}
+ // Buffered: a pause shows at once, and the pose after it is taken as it is (no sweep across the pause).
+ {Receiver r;Body a;a.hand[0].position={-.3f,1,0};r.offer({a,1},0);r.update(0);Body paused=a;paused.ik=false;paused.head.position.x=.5f;r.offer({paused,2},.03);
+  ck(!r.update(.031)->ik);Body back=a;back.hand[0].position.x=.4f;r.offer({back,3},.06);
+  for(double t=.07;t<.3;t+=.01){const auto o=*r.update(t);ck(!o.ik||o.hand[0].position.x==.4f||o.hand[0].position.x==-.3f);}
+  ck(r.update(.3)->hand[0].position.x==.4f);}
 
  // Whose body: the character that stands where the sender says, none while two are about as near, and the one taken
  // before for as long as the sender stays about it.

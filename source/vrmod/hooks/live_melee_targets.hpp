@@ -20,9 +20,9 @@ inline bool requested=false;
 // Both are taken where the server's components are missing; the host and a game of one keep the server's.
 // Players are the entities with keen::ecs::NetworkPlayerAttributes; one at no health is a fallen player a teammate revives
 // (its revivieData +0x28: NetworkReviveData state, duration, left; reviveDuration +0x44) - see downedNear below.
-struct Types {uintptr_t world=0,registry=0;int health=-1,current=-1,actor=-1,selected=-1,relevant=-1,networkHealth=-1,render=-1,networkActor=-1,player=-1,enemy=-1;
+struct Types {uintptr_t world=0,registry=0;int health=-1,current=-1,actor=-1,selected=-1,relevant=-1,networkHealth=-1,render=-1,networkActor=-1,player=-1,enemy=-1,destructible=-1;
  uint16_t healthBytes=68,selectedBytes=0,relevantBytes=0,renderBytes=0,playerBytes=0;bool usable=false;};
-struct Layout {bool health=false,current=false,actor=false,selected=false,relevant=false,networkHealth=false,render=false,player=false,enemy=false;std::array<uint64_t,10> bits{};
+struct Layout {bool health=false,current=false,actor=false,selected=false,relevant=false,networkHealth=false,render=false,player=false,enemy=false,destructible=false;std::array<uint64_t,10> bits{};
  uint16_t healthOffset=0,currentOffset=0,selectedOffset=0,relevantOffset=0,networkHealthOffset=0,renderOffset=0,playerOffset=0;};
 // Fallen players near the local one (2026-10-20, both players: "I cannot revive the other" - the revive is the game's
 // interaction held for reviveDuration, and the right B of the mod only taps it, a longer hold opening the quick wheel).
@@ -30,6 +30,7 @@ struct Downed {uint32_t entity=0;std::array<int64_t,3> position{};uint64_t seen=
 inline std::vector<Downed> downed;
 // What a full pass of the map found (once in a while): which components the entities near the player have.
 struct Census {unsigned entities=0,health=0,networkHealth=0,current=0,render=0,player=0,downed=0;
+ unsigned objects=0,objectsWithoutPose=0;double nearestObject=-1;   // destructible things (2026-10-20): within 60 m; how many lack a pose this list reads
  unsigned all=0,allHealth=0,allNetworkHealth=0,allCurrent=0,allRender=0,allPlayers=0,allEnemies=0;};   // all: anywhere in the map
 // A World without anything that has a health or is an enemy (2026-10-20, Mock game-20261020-021225: a game's client World -
 // what a guest has - holds 2455 entities, the 230 near the player the same as the server's 230, but none with Health,
@@ -91,6 +92,11 @@ inline uint64_t cursor=0,lastTick=0,lastLog=0,fullScans=0;inline std::atomic<uns
 // in the frame times (game191128, 2048 slots: median 27.0 ms with the list, 26.9 ms without).
 constexpr unsigned slotsPerTick=4096,maximumCached=64;
 constexpr double keepMetres=10,dropMetres=12;
+// Destructible things without a health (tables, pots, crates; 2026-10-20: 490 within 60 m of the home, 12 of them with
+// Health - live_targets_world_types of the server's World, Mock 20261020-083517): within reach only, and a few, so that
+// they never push the creatures out of the list.
+// EVR_MELEE_OBJECT_METRES=<1..15>: another distance (a test where nothing breakable stands within 4 m).
+inline const double objectKeepMetres=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_MELEE_OBJECT_METRES",v,sizeof v);const double m=n&&n<sizeof v?std::atof(v):4.;return m>=1&&m<=15?m:4.;}();constexpr unsigned maximumObjects=24;
 // Creatures are kept further out: the aim mark of a bow, staff or wand ends on the creature its line passes through
 // (aimReach below; include/evr/aim_mark.hpp markReach). The nearest 64 stay, as before.
 constexpr double aimKeepMetres=60,aimDropMetres=66;
@@ -121,6 +127,7 @@ inline void learn(uintptr_t world){
   else if(n=="keen::ecs::NetworkActor")types.networkActor=int(id);
   else if(n=="keen::ecs::NetworkPlayerAttributes"&&size>=0x34&&size<=0x400){types.player=int(id);types.playerBytes=size;}
   else if(n=="keen::ecs::NetworkEnemy")types.enemy=int(id);
+  else if(n=="keen::ecs::Destructible")types.destructible=int(id);
  }
  if(types.health<0){   // which types of this build look like it (bounded; names up to 64 characters)
   std::string seen;unsigned shown=0;
@@ -149,7 +156,7 @@ inline Layout layout(uintptr_t address){
   l.networkHealth=has(types.networkHealth)&&place(types.networkHealth,8,l.networkHealthOffset);
   l.render=has(types.render)&&place(types.render,types.renderBytes,l.renderOffset);
   l.player=types.player>=0&&has(types.player)&&place(types.player,types.playerBytes,l.playerOffset);
-  l.enemy=has(types.enemy);l.bits=bits;
+  l.enemy=has(types.enemy);l.destructible=has(types.destructible);l.bits=bits;
   l.selected=types.selected>=0&&has(types.selected)&&place(types.selected,types.selectedBytes,l.selectedOffset);
   l.relevant=types.relevant>=0&&has(types.relevant)&&place(types.relevant,types.relevantBytes,l.relevantOffset);
  }
@@ -174,7 +181,7 @@ inline void tick(uintptr_t world,uint32_t local){
   for(auto i=cache.begin();i!=cache.end();){
    const auto r=record(i->record);game::RootTransform t{};
    bool keep=r.valid&&r.layout==i->layout&&r.data==i->data&&r.row==i->row&&now-i->seen<=4000&&block(i->pose,&t,sizeof(t));
-   if(keep){i->target.position={t.position.x,t.position.y,t.position.z};keep=metres(i->target.position,origin)<=(i->target.character?aimDropMetres:dropMetres);}
+   if(keep){i->target.position={t.position.x,t.position.y,t.position.z};keep=metres(i->target.position,origin)<=(i->target.character?aimDropMetres:i->target.object?objectKeepMetres+1:dropMetres);}
    if(keep)++i;else{i=cache.erase(i);++dropped;}
   }
   // A slice of the World's entity map.
@@ -185,6 +192,7 @@ inline void tick(uintptr_t world,uint32_t local){
    if(censusLogs<4||fullScans%500==0){++censusLogs;
     logFile->event("live_targets_census","\"full_scans\":"+std::to_string(fullScans)+",\"entities_within_60m\":"+std::to_string(census.entities)+",\"health\":"+std::to_string(census.health)+
      ",\"network_health\":"+std::to_string(census.networkHealth)+",\"current_transform\":"+std::to_string(census.current)+",\"render_transform\":"+std::to_string(census.render)+
+     ",\"objects\":"+std::to_string(census.objects)+",\"objects_without_pose\":"+std::to_string(census.objectsWithoutPose)+",\"nearest_object_m\":"+std::to_string(census.nearestObject)+
      ",\"players\":"+std::to_string(census.player)+",\"fallen_players\":"+std::to_string(census.downed)+",\"cached\":"+std::to_string(cache.size())+
      ",\"map_entities\":"+std::to_string(census.all)+",\"map_health\":"+std::to_string(census.allHealth)+",\"map_network_health\":"+std::to_string(census.allNetworkHealth)+
      ",\"map_current_transform\":"+std::to_string(census.allCurrent)+",\"map_render_transform\":"+std::to_string(census.allRender)+",\"map_players\":"+std::to_string(census.allPlayers));}
@@ -209,7 +217,9 @@ inline void tick(uintptr_t world,uint32_t local){
    const auto l=layout(r.layout);
    if(typePasses<2)for(unsigned b=0;b<640;++b)if((l.bits[b/64]>>(b%64))&1)++typeCounts[b];
    ++census.all;if(l.health)++census.allHealth;if(l.networkHealth)++census.allNetworkHealth;if(l.current)++census.allCurrent;if(l.render)++census.allRender;if(l.player)++census.allPlayers;if(l.enemy)++census.allEnemies;
-   if(!(l.health||l.networkHealth||l.enemy)||!(l.current||l.render)){
+   const bool object=l.destructible&&!(l.health||l.networkHealth||l.enemy||l.actor);
+   if(object&&!(l.current||l.render))++census.objectsWithoutPose;
+   if(!(l.health||l.networkHealth||l.enemy||object)||!(l.current||l.render)){
     if(typePasses<2&&(l.current||l.render)){game::RootTransform t{};const auto spot=l.current?r.data+l.currentOffset+uintptr_t(r.row)*56:r.data+l.renderOffset+uintptr_t(r.row)*types.renderBytes;
      if(block(spot,&t,sizeof t)&&metres({t.position.x,t.position.y,t.position.z},origin)<=aimKeepMetres)for(unsigned b=0;b<640;++b)if((l.bits[b/64]>>(b%64))&1)++typeCountsNear[b];}
     continue;}
@@ -217,11 +227,12 @@ inline void tick(uintptr_t world,uint32_t local){
    game::RootTransform t{};if(!block(pose,&t,sizeof(t)))continue;
    const std::array<int64_t,3> position{t.position.x,t.position.y,t.position.z};
    const double away=metres(position,origin);
+   if(object&&away<=aimKeepMetres){++census.objects;if(census.nearestObject<0||away<census.nearestObject)census.nearestObject=away;}
    if(away<=aimKeepMetres){++census.entities;if(l.health)++census.health;if(l.networkHealth)++census.networkHealth;if(l.current)++census.current;if(l.render)++census.render;if(l.player)++census.player;}
    if(l.player&&playersSeen.size()<8)playersSeen.push_back({id,WorldPositionQ32{position[0],position[1],position[2]},now});
    if(typePasses<2&&away<=aimKeepMetres)for(unsigned b=0;b<640;++b)if((l.bits[b/64]>>(b%64))&1)++typeCountsNear[b];
    int32_t health=0;
-   if(!l.health&&!l.networkHealth)health=1;   // NetworkEnemy alone (a guest's World without either health): taken as alive
+   if(!l.health&&!l.networkHealth)health=1;   // NetworkEnemy alone (a guest's World without either health), or a destructible thing: taken as there
    else if(!l.health){   // a guest's World: the replicated health
     uint32_t value[2]{};if(!block(r.data+l.networkHealthOffset+uintptr_t(r.row)*8,value,sizeof value)||!value[1]||value[0]>value[1])continue;
     health=int32_t(std::min<uint32_t>(value[0],0x7fffffff));
@@ -248,10 +259,16 @@ inline void tick(uintptr_t world,uint32_t local){
       static std::atomic<unsigned> told{0};if(told.fetch_add(1)<100)logFile->event("fallen_player_seen","\"entity\":"+std::to_string(id)+",\"metres\":"+std::to_string(away)+",\"guest_world\":"+(l.health?"false":"true"));}
      d->entity=id;d->position=position;d->seen=now;}
     continue;}
-   if(away>(l.actor?aimKeepMetres:keepMetres))continue;
+   if(away>(l.actor?aimKeepMetres:object?objectKeepMetres:keepMetres))continue;
    const auto same=record(rows[size_t(at)]);if(!same.valid||same.layout!=r.layout||same.data!=r.data||same.row!=r.row)continue;
    auto known=std::find_if(cache.begin(),cache.end(),[&](const Cached& c){return c.target.entity==id;});
    if(known==cache.end()){
+    if(object){   // a few things at most: the nearest of them
+     const auto objects=unsigned(std::count_if(cache.begin(),cache.end(),[](const Cached& c){return c.target.object;}));
+     if(objects>=maximumObjects){auto farthest=cache.end();double farMetres=-1;
+      for(auto it=cache.begin();it!=cache.end();++it)if(it->target.object){const double m=metres(it->target.position,origin);if(m>farMetres){farMetres=m;farthest=it;}}
+      if(farthest==cache.end()||farMetres<=away)continue;cache.erase(farthest);++dropped;}
+    }
     if(cache.size()>=maximumCached){   // keep the nearest
      auto farthest=std::max_element(cache.begin(),cache.end(),[&](const Cached& a,const Cached& b){return metres(a.target.position,origin)<metres(b.target.position,origin);});
      if(metres(farthest->target.position,origin)<=metres(position,origin))continue;
@@ -259,7 +276,7 @@ inline void tick(uintptr_t world,uint32_t local){
     }
     cache.push_back({});known=cache.end()-1;++adopted;
    }
-   known->target.entity=id;known->target.position=position;known->target.character=l.actor;
+   known->target.entity=id;known->target.position=position;known->target.character=l.actor;known->target.object=object;
    known->record=rows[size_t(at)];known->layout=r.layout;known->data=r.data;known->row=r.row;known->pose=pose;known->seen=now;
   }
   // The local player's combat target (slot 0 of its SelectedTargets), once a tick; and its hard-lock candidate (slot 13).
@@ -305,7 +322,7 @@ inline void tick(uintptr_t world,uint32_t local){
    std::ostringstream o;o<<std::setprecision(4)<<"\"cached\":"<<cache.size()<<",\"full_scans\":"<<fullScans<<",\"ticks\":"<<ticks.load()<<",\"map_capacity\":"<<capacity<<",\"adopted\":"<<adopted.load()<<",\"dropped\":"<<dropped.load()<<",\"failures\":"<<failures.load()<<",\"nearest\":[";
    std::vector<const Cached*> order;for(const auto& c:cache)order.push_back(&c);
    std::sort(order.begin(),order.end(),[&](const Cached* a,const Cached* b){return metres(a->target.position,origin)<metres(b->target.position,origin);});
-   for(size_t i=0;i<order.size()&&i<6;++i)o<<(i?",":"")<<"{\"entity\":"<<order[i]->target.entity<<",\"metres\":"<<metres(order[i]->target.position,origin)<<",\"character\":"<<(order[i]->target.character?"true":"false")<<'}';
+   for(size_t i=0;i<order.size()&&i<6;++i)o<<(i?",":"")<<"{\"entity\":"<<order[i]->target.entity<<",\"metres\":"<<metres(order[i]->target.position,origin)<<",\"character\":"<<(order[i]->target.character?"true":"false")<<(order[i]->target.object?",\"object\":true":"")<<'}';
    o<<"]";logFile->event("live_targets_state",o.str());}
  }catch(const std::exception& e){if(failures.fetch_add(1)<3)logFile->event("live_targets_failure","\"reason\":"+jsonString(e.what()));}
 }

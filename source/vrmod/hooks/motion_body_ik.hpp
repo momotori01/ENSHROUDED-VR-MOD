@@ -212,7 +212,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
         static sync::Receiver receiver;static uint16_t sequence=0;static unsigned logs=0;static float worstEver=0;
         const sync::Model model{solveQ,modelScale};
         const auto body=sync::fromSolve(model,targets,report.hips,motionHandVisual::lastCurls);
-        const auto bytes=sync::encode(body,++sequence,sync::Place{});const auto back=sync::decode(bytes);
+        const auto bytes=sync::encode(body,++sequence,sync::Place{},uint16_t(GetTickCount64()&0xffff));const auto back=sync::decode(bytes);
         if(!back||back->sequence!=sequence)throw std::runtime_error("player sync loopback: the datagram was not taken");
         const auto again=bodyik::globals(bodyik::solve(animated,rig.neutral(),parents,sync::targets(model,back->body)),parents),own=bodyik::globals(upright,parents);
         float worst=0;unsigned worstJoint=0;

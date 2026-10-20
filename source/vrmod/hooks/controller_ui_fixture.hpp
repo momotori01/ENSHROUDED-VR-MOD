@@ -857,7 +857,11 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     TargetNear target;if(liveMeleeTargetGate&&weapon.needsTarget&&targetNear)target=targetNear(weapon,now);
                     if(target.gated&&!target.reached&&airborneNow(now)){target.reached=true;target.airborne=true;}
                     const evr::motion::LiveCooldown* cooldown=liveCooldownEnabled()?&liveCooldown:nullptr;
-                    auto swing=liveMelee.update(hands,weapon,allowed,now,target.reached,cooldown,target.ahead);   // ahead: reached by the look-ahead only - the blade is still coming
+                    // In the air a stroke up needs a quarter more speed (2026-10-20, user: "the rising slash of a jump goes off too
+                    // easily - lifting the sword for a downward blow sets it off"). EVR_AIR_UP_FACTOR=<1..3>: another factor.
+                    static const float airUpFactor=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_AIR_UP_FACTOR",v,sizeof v);const float f=n&&n<sizeof v?float(std::atof(v)):1.25f;return f>=1.f&&f<=3.f?f:1.25f;}();
+                    const float upFactor=airborneNow(now)?airUpFactor:1.f;
+                    auto swing=liveMelee.update(hands,weapon,allowed,now,target.reached,cooldown,target.ahead,upFactor);   // ahead: reached by the look-ahead only - the blade is still coming
                     if(swing.fired&&cooldown)liveCooldown.start(now);
                     bool cooledStroke=swing.cooling;
                     // The other weapon of a pair (VHVR: either hand strikes). Its stroke presses the same attack button.
@@ -865,7 +869,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     {const bool offhandAllowed=(offhand.fist?play&&clenched(0):allowed)&&offhand.binding&&offhand.hand==0&&offhandFrame==hands.frame&&offhandMs&&now>=offhandMs&&now-offhandMs<=200;
                      TargetNear leftTarget;if(offhandAllowed&&liveMeleeTargetGate&&offhand.needsTarget&&targetNear)leftTarget=targetNear(offhand,now);
                      if(leftTarget.gated&&!leftTarget.reached&&airborneNow(now)){leftTarget.reached=true;leftTarget.airborne=true;}
-                     const auto left=liveMeleeLeft.update(hands,offhand,offhandAllowed,now,leftTarget.reached,cooldown,leftTarget.ahead);
+                     const auto left=liveMeleeLeft.update(hands,offhand,offhandAllowed,now,leftTarget.reached,cooldown,leftTarget.ahead,upFactor);
                      if(left.fired&&cooldown)liveCooldown.start(now);
                      cooledStroke=cooledStroke||left.cooling;
                      if(left.fired){leftStruck=true;target=leftTarget;const bool press=swing.press||left.press;swing=left;swing.press=press;weapon=offhand;liveStrikeLeftMs.store(now);}
