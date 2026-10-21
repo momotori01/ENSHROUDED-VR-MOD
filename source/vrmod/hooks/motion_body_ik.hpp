@@ -192,14 +192,14 @@ inline void returnHands(uintptr_t s){
     if(!motionHandVisual::lentPose)return;
     if(motionHandVisual::handle&&motionHandVisual::poseHandle){
         auto id=motionHandVisual::handle;std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1};
-        reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x110880)(reinterpret_cast<void*>(s),ids.data(),motionHandVisual::poseHandle);
+        reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x110960)(reinterpret_cast<void*>(s),ids.data(),motionHandVisual::poseHandle);
         if(read<uint32_t>(motionVisual::object(motionHandVisual::handle)+layout::modelPose)!=motionHandVisual::poseHandle)throw std::runtime_error("body ik: the hands did not return to their pose");
     }
     motionHandVisual::lentPose=0;
 }
 inline void bind(uintptr_t s,uint32_t handle,uint32_t pose){
     auto id=handle;std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1};
-    reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x110880)(reinterpret_cast<void*>(s),ids.data(),pose);
+    reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x110960)(reinterpret_cast<void*>(s),ids.data(),pose);
 }
 // Back onto the game's pose while the body is not driven; prepare() takes the parts again.
 inline void release(const char* reason){
@@ -233,7 +233,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
     std::vector<hand::Joint> animated(102);std::memcpy(animated.data(),animatedBytes.data(),animatedBytes.size());
     if(!poseHandle){
         const auto hierarchy=read<std::array<uint32_t,4>>(owner);
-        poseHandle=reinterpret_cast<motionHandVisual::PoseCreate>(baseAddress+0xfb850)(reinterpret_cast<void*>(s),hierarchy.data());
+        poseHandle=reinterpret_cast<motionHandVisual::PoseCreate>(baseAddress+0xfb8e0)(reinterpret_cast<void*>(s),hierarchy.data());
         if(!poseHandle||poseHandle==native||poseHandle==motionHandVisual::poseHandle){poseHandle=0;throw std::runtime_error("body ik: pose creation failed/aliased");}
         nativePose=native;poseResource=owner;scene=s;
         std::string parts;
@@ -333,7 +333,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
         for(size_t j=wrist+1u;j<joints.size();j++){bool under=false;for(auto p=parents[j];p!=UINT16_MAX;p=parents[p])if(p==wrist){under=true;break;}
             if(under){joints[j].orientation=motionHandVisual::lastOutput[j].orientation;joints[j].position=motionHandVisual::lastOutput[j].position;}}}
     std::array<uintptr_t,2> span{reinterpret_cast<uintptr_t>(joints.data()),joints.size()};
-    reinterpret_cast<motionHandVisual::PoseUpdate>(baseAddress+0x110f80)(reinterpret_cast<void*>(s),poseHandle,span.data());
+    reinterpret_cast<motionHandVisual::PoseUpdate>(baseAddress+0x111060)(reinterpret_cast<void*>(s),poseHandle,span.data());
     // Every local body part still on the game's pose moves to the mod's pose (new parts after an equipment change too).
     unsigned moved=0;
     for(unsigned part=0;part<equipment.handles.size();part++)if(const auto handle=equipment.handles[part]){
@@ -350,7 +350,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
         else{
             auto id=motionHandVisual::handle;std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1},transforms{reinterpret_cast<uintptr_t>(transform.data()),1};
             if(read<uint32_t>(motionVisual::object(id)+layout::modelPose)!=poseHandle){
-                reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x110880)(reinterpret_cast<void*>(s),ids.data(),poseHandle);
+                reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x110960)(reinterpret_cast<void*>(s),ids.data(),poseHandle);
                 if(read<uint32_t>(motionVisual::object(id)+layout::modelPose)!=poseHandle)throw std::runtime_error("body ik: the hands did not take the body's pose");
                 motionHandVisual::lentPose=poseHandle;
                 if(handLends++<8)logFile->event("motion_body_ik_hands","\"frame\":"+std::to_string(liveFrame.frame)+",\"hand_model\":"+std::to_string(id)+",\"pose\":"+std::to_string(poseHandle)+",\"private_pose\":"+std::to_string(motionHandVisual::poseHandle)+",\"at_body_transform\":true");
@@ -393,7 +393,7 @@ inline void dispose(uintptr_t disposed){
     }
     bound.clear();
     const auto left=read<uint64_t>(handPoseMetadata::pose(scene,poseHandle)+0x58);
-    if(!left)reinterpret_cast<motionHandVisual::PoseRemove>(baseAddress+0x10e180)(reinterpret_cast<void*>(scene),poseHandle);
+    if(!left)reinterpret_cast<motionHandVisual::PoseRemove>(baseAddress+0x10e260)(reinterpret_cast<void*>(scene),poseHandle);
     logFile->event("motion_body_ik_disposed","\"restored\":"+std::to_string(restored)+",\"already_gone\":"+std::to_string(gone)+",\"native_pose_alive\":"+(nativeAlive?"true":"false")+
         ",\"models_left_on_pose\":"+std::to_string(left)+",\"updates\":"+std::to_string(updates)+",\"releases\":"+std::to_string(releases));
     poseHandle=0;ready=false;

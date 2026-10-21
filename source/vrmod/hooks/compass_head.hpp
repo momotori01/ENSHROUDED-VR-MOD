@@ -17,7 +17,7 @@ inline std::atomic<unsigned> callbacks{0},applied{0},restored{0},kept{0},failure
 inline std::atomic<uint64_t> turnMs{0};inline std::atomic<float> turn{0}; // radians about the vertical, and when it was told
 // 1.0 (Hotfix 1.0.0.1): the HUD's update is 0xbd1d40 ("doHudCompass()" at 0xbd1eaa); the data is
 // *(*(*(game+0xd0))+0x38) (June +0xc8, +0x28) and the heading +0x1da0 (June +0xb0): the compass adds pi and pi/2 to it.
-constexpr uintptr_t rva=0xbd2360,gameRva=0x281b498,headingOffset=0x1da0,holderAt=0xd0,dataAt=0x38;
+constexpr uintptr_t rva=0xbd3ee0,gameRva=0x281e498,headingOffset=0x1da0,holderAt=0xd0,dataAt=0x38;
 constexpr const char* pattern="4C 8B DC 49 89 4B 08 55 41 55 41 57 49 8D AB A8 F5 FF FF 48 81 EC 40 0B 00 00 4C 8B 3D ? ? ? ?";
 struct CallbackScope{CallbackScope(){++callbacks;}~CallbackScope(){--callbacks;}};
 constexpr float pi=3.14159265358979f;

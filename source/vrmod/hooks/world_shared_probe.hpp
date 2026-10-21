@@ -52,18 +52,18 @@ inline void snapshot(const char* phase,uintptr_t scene,bool initialize=false){
 }
 inline void install(const std::filesystem::path& directory){
     const auto pattern=parsePattern("48 89 5C 24 10 4C 89 44 24 18 56 57 41 56 48 83 EC 40");
-    auto* target=reinterpret_cast<void*>(baseAddress+0x8b3db0);
+    auto* target=reinterpret_cast<void*>(baseAddress+0x8b5020);
     if(scan(static_cast<const uint8_t*>(target),pattern.size(),pattern)!=std::vector<size_t>{0})
         throw std::runtime_error("shared array free observer signature mismatch");
     file=CreateFileW((directory/"world-shared-free.jsonl").c_str(),FILE_APPEND_DATA,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(file==INVALID_HANDLE_VALUE)throw std::runtime_error("shared array free trace unavailable");
     if(MH_CreateHook(target,reinterpret_cast<void*>(&freeMemory),reinterpret_cast<void**>(&originalFree))!=MH_OK||MH_EnableHook(target)!=MH_OK)
         throw std::runtime_error("shared array free observer hook failed");
-    enabled=true;logFile->event("world_shared_free_hook_enabled","\"rva\":\"0x8b3db0\",\"read_only\":true");
+    enabled=true;logFile->event("world_shared_free_hook_enabled","\"rva\":\"0x8b5020\",\"read_only\":true");
 }
 inline void disable() noexcept {
     if(!enabled)return;
-    const auto status=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0x8b3db0));
+    const auto status=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0x8b5020));
     if(status==MH_OK)enabled=false;
     // Keep the file/trampoline valid until process exit for any pre-disable caller.
     try{logFile->event("world_shared_free_hook_removed","\"status\":"+std::to_string(status)+",\"callbacks\":"+std::to_string(callbacks.load()));}catch(...){}

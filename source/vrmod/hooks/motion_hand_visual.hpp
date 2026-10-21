@@ -31,10 +31,10 @@ inline uintptr_t joints(uintptr_t pose){
 }
 inline void validate(){
     for(auto e:std::array<std::pair<uintptr_t,const char*>,4>{{
-      {0xfb850,"40 55 53 56 41 57 48 8d 6c 24 c1 48 81 ec 88 00 00 00 48 8b 42 08 33 db"},
-      {0x110f80,"85 d2 0f 84 ? ? ? ? 48 89 74 24 20 41 56 48 83 ec 30 48 8b f1 44 0f"},
-      {0x10e180,"85 d2 0f 84 ? ? ? ? 48 89 5c 24 20 57 48 83 ec 20 48 8b f9 8b da 48"},
-      {0x110880,"48 89 5c 24 18 48 89 6c 24 20 56 41 54 41 57 48 83 ec 20 45 33 e4 41 8b"}}}){
+      {0xfb8e0,"40 55 53 56 41 57 48 8d 6c 24 c1 48 81 ec 88 00 00 00 48 8b 42 08 33 db"},
+      {0x111060,"85 d2 0f 84 ? ? ? ? 48 89 74 24 20 41 56 48 83 ec 30 48 8b f1 44 0f"},
+      {0x10e260,"85 d2 0f 84 ? ? ? ? 48 89 5c 24 20 57 48 83 ec 20 48 8b f9 8b da 48"},
+      {0x110960,"48 89 5c 24 18 48 89 6c 24 20 56 41 54 41 57 48 83 ec 20 45 33 e4 41 8b"}}}){
         const auto p=parsePattern(e.second);if(scan(reinterpret_cast<const uint8_t*>(baseAddress+e.first),p.size(),p)!=std::vector<size_t>{0})throw std::runtime_error("hand visual signature mismatch");
         logFile->event("motion_hand_signature","\"rva\":"+hex(e.first)+",\"pattern\":"+jsonString(e.second)+",\"matched\":true");}
 }
@@ -56,11 +56,11 @@ inline void takeColours(uintptr_t clone){
     const auto wanted=read<std::array<uint32_t,layout::modelColourCount>>(motionVisual::object(sourceHandle)+layout::modelColours);
     if(read<std::array<uint32_t,layout::modelColourCount>>(clone+layout::modelColours)==wanted)return;
     static const bool known=[]{const auto p=parsePattern("48 89 5c 24 08 48 89 74 24 10 57 48 83 ec 20 41 0f b6 f0 41 8b d9 41 b0 01 48 8b f9");
-        const bool matched=scan(reinterpret_cast<const uint8_t*>(baseAddress+0x110270),p.size(),p)==std::vector<size_t>{0};
-        logFile->event("motion_hand_signature","\"rva\":\"0x110270\",\"use\":\"model instance colour\",\"matched\":"+std::string(matched?"true":"false"));return matched;}();
+        const bool matched=scan(reinterpret_cast<const uint8_t*>(baseAddress+0x110350),p.size(),p)==std::vector<size_t>{0};
+        logFile->event("motion_hand_signature","\"rva\":\"0x110350\",\"use\":\"model instance colour\",\"matched\":"+std::string(matched?"true":"false"));return matched;}();
     if(!known)return; // the hands stay as they were, without the colours
     using Colour=void(__fastcall*)(void*,uint32_t,uint8_t,uint32_t);
-    for(uint8_t n=0;n<layout::modelColourCount;n++)reinterpret_cast<Colour>(baseAddress+0x110270)(reinterpret_cast<void*>(s()),handle,n,wanted[n]);
+    for(uint8_t n=0;n<layout::modelColourCount;n++)reinterpret_cast<Colour>(baseAddress+0x110350)(reinterpret_cast<void*>(s()),handle,n,wanted[n]);
     if(read<std::array<uint32_t,layout::modelColourCount>>(clone+layout::modelColours)!=wanted)throw std::runtime_error("hand copy did not take the colours");
     if(colourCopies++<8){std::ostringstream o;o<<"\"frame\":"<<liveFrame.frame<<",\"handle\":"<<handle<<",\"source_handle\":"<<sourceHandle<<",\"colours\":[";
         for(unsigned n=0;n<layout::modelColourCount;n++)o<<(n?",":"")<<wanted[n];
@@ -141,7 +141,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
         const auto refs=read<uint32_t>(res+16),poseRefs=read<uint32_t>(owner+16);
         if(!refs||refs==UINT32_MAX||!poseRefs||poseRefs==UINT32_MAX)throw std::runtime_error("hand reference bounds");
         sourceHandle=equipment.handles[11];resource=res;sourcePose=sp;poseResource=owner;
-        poseHandle=reinterpret_cast<PoseCreate>(baseAddress+0xfb850)(reinterpret_cast<void*>(s()),hierarchyGuid.data());
+        poseHandle=reinterpret_cast<PoseCreate>(baseAddress+0xfb8e0)(reinterpret_cast<void*>(s()),hierarchyGuid.data());
         if(!poseHandle||poseHandle==sourcePose){poseHandle=0;throw std::runtime_error("hand private pose failed/aliased");}
         if(read<uintptr_t>(handPoseMetadata::pose(s(),poseHandle))!=owner||read<uint32_t>(owner+16)!=poseRefs+1)throw std::runtime_error("hand private pose reference mismatch");
         // Create at the native source transform, then move to the VR origin
@@ -149,16 +149,16 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
         // and never activates dynamic skinning/+12d or its42-joint palette.
         const auto initialTransform=read<std::array<uint8_t,56>>(source+0x38);
         if(!std::memcmp(initialTransform.data(),transform.data(),52))throw std::runtime_error("hand initial/source origin coincides; dynamic initialization unproven");
-        handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfb450)(reinterpret_cast<void*>(s()),modelGuid.data(),initialTransform.data());
+        handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfb4e0)(reinterpret_cast<void*>(s()),modelGuid.data(),initialTransform.data());
         if(!handle||handle==sourceHandle){handle=0;throw std::runtime_error("hand clone failed/aliased");}
-        auto clone=motionVisual::object(handle);reinterpret_cast<motionVisual::Mask>(baseAddress+0xf7030)(reinterpret_cast<void*>(s()),reinterpret_cast<void*>(clone),0);
+        auto clone=motionVisual::object(handle);reinterpret_cast<motionVisual::Mask>(baseAddress+0xf70c0)(reinterpret_cast<void*>(s()),reinterpret_cast<void*>(clone),0);
         if(read<uintptr_t>(clone+layout::modelResource)!=res||read<uint32_t>(res+16)!=refs+1||read<uint32_t>(clone+layout::modelAuxiliary))throw std::runtime_error("hand clone resource/auxiliary mismatch");
         const auto sdfId=read<uint32_t>(clone+layout::modelSdf);if(sdfId){
             if(sdfId==read<uint32_t>(source+layout::modelSdf))throw std::runtime_error("hand SDF aliases source");
             const auto sdf=read<uintptr_t>(s()+layout::sceneSdf),count=read<uint64_t>(sdf+0x78);if(!count)throw std::runtime_error("hand SDF count");
-            reinterpret_cast<PoseRemove>(baseAddress+0x15a540)(reinterpret_cast<void*>(sdf),sdfId);*reinterpret_cast<uint32_t*>(clone+layout::modelSdf)=0;
+            reinterpret_cast<PoseRemove>(baseAddress+0x15a640)(reinterpret_cast<void*>(sdf),sdfId);*reinterpret_cast<uint32_t*>(clone+layout::modelSdf)=0;
             if(read<uint64_t>(sdf+0x78)!=count-1)throw std::runtime_error("hand SDF release failed");}
-        std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&handle),1};reinterpret_cast<Bind>(baseAddress+0x110880)(reinterpret_cast<void*>(s()),ids.data(),poseHandle);
+        std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&handle),1};reinterpret_cast<Bind>(baseAddress+0x110960)(reinterpret_cast<void*>(s()),ids.data(),poseHandle);
         if(read<uint32_t>(clone+layout::modelPose)!=poseHandle||read<uint64_t>(handPoseMetadata::pose(s(),poseHandle)+0x58)!=1)throw std::runtime_error("hand pose binding failed");
         logFile->event("motion_hand_created","\"handle\":"+std::to_string(handle)+",\"source_handle\":"+std::to_string(sourceHandle)+
             ",\"pose_handle\":"+std::to_string(poseHandle)+",\"source_pose\":"+std::to_string(sourcePose)+",\"joints\":102,\"skin_joints\":42,\"mask\":0,\"sdf\":0,\"private_pose\":true,\"socket_calibration\":\"native_candidate_64_94\"");
@@ -181,7 +181,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
         ",\"left\":["+std::to_string(curls[0].amount[0])+","+std::to_string(curls[0].amount[1])+","+std::to_string(curls[0].amount[2])+"],\"right\":["+
         std::to_string(curls[1].amount[0])+","+std::to_string(curls[1].amount[1])+","+std::to_string(curls[1].amount[2])+"]");
     const auto output=rig->locate(grips,rig->curlEnabled()?&curls:nullptr);lastOutput=output;lastCurls=curls;std::array<uintptr_t,2> jointSpan{reinterpret_cast<uintptr_t>(output.data()),output.size()};
-    reinterpret_cast<PoseUpdate>(baseAddress+0x110f80)(reinterpret_cast<void*>(s()),poseHandle,jointSpan.data());
+    reinterpret_cast<PoseUpdate>(baseAddress+0x111060)(reinterpret_cast<void*>(s()),poseHandle,jointSpan.data());
     std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&handle),1},transforms{reinterpret_cast<uintptr_t>(transform.data()),1};
     motionVisual::change(reinterpret_cast<void*>(s()),ids.data(),transforms.data());
     const auto clone=motionVisual::object(handle),owned=handPoseMetadata::pose(s(),poseHandle);
@@ -204,14 +204,14 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
 inline void dispose(uintptr_t scene){
     if(scene!=s())return;
     if(handle){const auto id=handle;const auto refs=read<uint32_t>(resource+16);std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1};
-        reinterpret_cast<motionVisual::Remove>(baseAddress+0x10df20)(reinterpret_cast<void*>(scene),ids.data());handle=0;ready=false;
+        reinterpret_cast<motionVisual::Remove>(baseAddress+0x10e000)(reinterpret_cast<void*>(scene),ids.data());handle=0;ready=false;
         const bool invalid=read<uint8_t>(read<uintptr_t>(scene+0x1c8)+(id&0xffffff))!=uint8_t(id>>24);
         const bool released=refs==1||(refs>1&&read<uint32_t>(resource+16)==refs-1);
         logFile->event("motion_hand_model_disposed","\"generation_invalidated\":"+std::string(invalid?"true":"false")+",\"reference_released\":"+(released?"true":"false"));
         if(!invalid||!released)throw std::runtime_error("hand model retirement failed");}
     if(poseHandle){const auto id=poseHandle;const auto record=handPoseMetadata::pose(scene,id);const auto refs=read<uint32_t>(poseResource+16);
         if(read<uint64_t>(record+0x58))throw std::runtime_error("private hand pose still bound");
-        reinterpret_cast<PoseRemove>(baseAddress+0x10e180)(reinterpret_cast<void*>(scene),id);poseHandle=0;
+        reinterpret_cast<PoseRemove>(baseAddress+0x10e260)(reinterpret_cast<void*>(scene),id);poseHandle=0;
         bool invalid=false;try{handPoseMetadata::pose(scene,id);}catch(...){invalid=true;}
         const bool released=refs==1||(refs>1&&read<uint32_t>(poseResource+16)==refs-1);
         logFile->event("motion_hand_pose_disposed","\"generation_invalidated\":"+std::string(invalid?"true":"false")+",\"reference_released\":"+(released?"true":"false")+",\"updates\":"+std::to_string(updates));

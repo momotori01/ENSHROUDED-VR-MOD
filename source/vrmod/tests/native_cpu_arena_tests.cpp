@@ -23,10 +23,10 @@ int main(){
     base=0x10000000;original=&fakeInitialize;requestedBytes=16ull*1024*1024;
     std::array<uint8_t,0x110> object{};Span native{reinterpret_cast<void*>(0x20000000),450ull*1024*1024};
     const auto before=native;const uint8_t flags=0x80;Name name{"Game_Render",11};
-    arenaSyntheticCaller=base+0x8386d7;
+    arenaSyntheticCaller=base+0x839907;
     initialize(object.data(),&native,flags,&name);
     check("exact_caller_required",calls==1&&!consumed&&backing==nullptr&&received.data==native.data);
-    arenaSyntheticCaller=base+0x8386d8;Name wrong{"Game_Client",11};
+    arenaSyntheticCaller=base+0x839908;Name wrong{"Game_Client",11};
     initialize(object.data(),&native,flags,&wrong);
     check("exact_native_allocator_name_required",calls==2&&!consumed&&backing==nullptr);
     Span changed=native;changed.size+=8;initialize(object.data(),&changed,flags,&name);

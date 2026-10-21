@@ -25,7 +25,7 @@ inline Stage original=nullptr;inline bool enabled=false;inline std::atomic<bool>
 // 1.0 (Hotfix 1.0.0.1): render_water_surface is 0x1ecd50, called at 0x135576 with the View's water state (+0xb48,
 // June +0x8c8); its waves read the counter id at state+0x310 (0x1f0c28, June +0x1d8 at 1c4398) and the list at
 // state+0x318 (0x1f0e2c, June +0x1e0 at 1c4579).
-constexpr uintptr_t rva=0x1ed040,callerRva=0x1355bb,counterAt=0x310,listAt=0x318,counterRead=0x1f0f18,listRead=0x1f111c;
+constexpr uintptr_t rva=0x1ed1a0,callerRva=0x1356bb,counterAt=0x310,listAt=0x318,counterRead=0x1f1078,listRead=0x1f127c;
 constexpr const char* pattern="4C 89 44 24 18 48 89 54 24 10 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 C8 E7 FF FF B8 38 19 00 00";
 struct Fields {uint32_t counter=0;std::array<uint8_t,16> list{};};
 struct Source {uint64_t serial=0;uintptr_t state=0,parent=0;Fields fields;bool valid=false;};

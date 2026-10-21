@@ -64,7 +64,7 @@ void* __fastcall get(void* wrapper){
     auto result=original(wrapper);const ObserverLastError preserve;
     // 10aaf0 uses Scene[0], while native detail draws use View[0]. Restrict
     // substitution to this one descriptor-building call in our render scope.
-    if(!current||caller!=baseAddress+0x13da1c)return result;
+    if(!current||caller!=baseAddress+0x13db1c)return result;
     auto& c=*current;auto& pair=*c.pair;
     try{
         if(failed||c.eye>1||GetCurrentThreadId()!=pair.renderThread||++c.calls!=1)
@@ -137,18 +137,18 @@ inline void auditEye(unsigned eye,bool before,bool after,uint64_t countBefore){
 }
 inline void install(){
     const auto pattern=parsePattern("48 8B 81 E8 00 00 00 48 8B 00 C3");
-    if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0xf3b50),pattern.size(),pattern)!=std::vector<size_t>{0})
+    if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0xf3be0),pattern.size(),pattern)!=std::vector<size_t>{0})
         throw std::runtime_error("detail owner getter signature differs");
-    const auto* call=reinterpret_cast<const uint8_t*>(baseAddress+0x13da17);int32_t delta=0;std::memcpy(&delta,call+1,4);
-    if(*call!=0xe8||reinterpret_cast<uintptr_t>(call+5)+delta!=baseAddress+0xf3b50)
+    const auto* call=reinterpret_cast<const uint8_t*>(baseAddress+0x13db17);int32_t delta=0;std::memcpy(&delta,call+1,4);
+    if(*call!=0xe8||reinterpret_cast<uintptr_t>(call+5)+delta!=baseAddress+0xf3be0)
         throw std::runtime_error("detail descriptor callsite differs");
-    if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+0xf3b50),reinterpret_cast<void*>(&get),reinterpret_cast<void**>(&original))!=MH_OK||
-       MH_EnableHook(reinterpret_cast<void*>(baseAddress+0xf3b50))!=MH_OK)throw std::runtime_error("detail owner getter hook failed");
+    if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+0xf3be0),reinterpret_cast<void*>(&get),reinterpret_cast<void**>(&original))!=MH_OK||
+       MH_EnableHook(reinterpret_cast<void*>(baseAddress+0xf3be0))!=MH_OK)throw std::runtime_error("detail owner getter hook failed");
     enabled=true;logFile->event("detail_binding_enabled","\"private_eye_only\":true,\"source_owner_unchanged\":true");
 }
 inline void disable(){
     if(!enabled)return;
-    const auto result=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0xf3b50));
+    const auto result=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0xf3be0));
     if(result!=MH_OK)throw std::runtime_error("detail binding hook disable failed");enabled=false;
     logFile->event("detail_binding_disabled","\"left\":"+std::to_string(substitutions[0])+",\"right\":"+std::to_string(substitutions[1])+
         ",\"ready_checks\":["+std::to_string(readyChecks[0])+","+std::to_string(readyChecks[1])+"],\"warmup_calls\":["+

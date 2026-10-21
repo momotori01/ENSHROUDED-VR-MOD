@@ -112,7 +112,7 @@ def main():
     if not a.launch or not 1<=a.seconds<=900:p.error('managed launch and 1..900 seconds required')
     launch=a.launch.resolve();state=json.loads((launch/'launch.json').read_text(encoding='utf-8-sig'))
     expected=ROOT.parent/'enshrouded.exe'
-    profile=json.loads((ROOT/'config/profiles/build23966345.json').read_text())
+    profile=json.loads((ROOT/'config/profiles/build26082781.json').read_text())
     if hashlib.sha256(expected.read_bytes()).hexdigest()!=profile['exe_sha256']:raise ValueError('unsupported game build')
     proc=Process(state['pid'],expected)
     try:

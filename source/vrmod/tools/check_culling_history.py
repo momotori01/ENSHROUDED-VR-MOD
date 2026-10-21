@@ -41,7 +41,7 @@ def check_history(rows, rendered):
                 checks['culling_history_both_eyes_substituted']=len(freed)==2 and bool(pairs) and len({e['substitutions'] for e in freed})==1 and all(e['substitutions']>=len(pairs) and e['reset_commands']>=1 for e in freed)
             checks['culling_history_original_descriptors_preserved']=bool(subs) and {e['eye'] for e in subs}=={0,1} and all(e['source_unchanged'] and e['other_descriptors_unchanged'] for e in subs)
         generated=events('generated_instance_count_reset')
-        count_hook=any(int(str(e['rva']),16) in (0x7caa0,0xaabc0,0xaac20,0xaac50) for e in hooks)   # June 7caa0, 1.0 aabc0, Hotfix 1.0.0.1 aac20, build 25988036 aac50
+        count_hook=any(int(str(e['rva']),16) in (0x7caa0,0xaabc0,0xaac20,0xaac50,0xaacc0) for e in hooks)   # June 7caa0, 1.0 aabc0, Hotfix 1.0.0.1 aac20, build 25988036 aac50, build 26082781 aacc0
         checks['culling_history_hooks_restored']=len(hooks)==len(removed)==(4 if count_hook else 3) and {e['rva'] for e in hooks}=={e['rva'] for e in removed} and all(e['original_bytes_restored'] for e in removed)
         if count_hook:
             # With vfx_model_bridge.hpp (-ShareVfxModels) the eye that does not own the VFX culls the VFX models itself,

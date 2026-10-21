@@ -54,17 +54,17 @@ __declspec(noinline) void* __fastcall damage(void* output,void* arguments,void* 
 }
 struct Hook{uintptr_t rva;const char* pattern;void* callback;void** original;bool on=false;};
 inline std::array<Hook,6> hooks{{
- {0x12261e0,"40 53 41 56 48 83 ec 48 4d 8b f0 4c 8b d1 e8 5d",reinterpret_cast<void*>(&run),reinterpret_cast<void**>(&originalRun)},
- {0x35a690,"4c 89 44 24 18 53 57 41 54 41 56 41 57 48 81 ec",reinterpret_cast<void*>(&each),reinterpret_cast<void**>(&originalEach)},
- {0x3d4d50,"48 8b c4 4c 89 40 18 48 89 48 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8d a8 08 f9 ff ff 48 81",reinterpret_cast<void*>(&damage),reinterpret_cast<void**>(&originalDamage)},
- {0x3e8b40,"48 8b c4 4c 89 40 18 55 53 56 57 41 54 41 55",reinterpret_cast<void*>(&health::commit),reinterpret_cast<void**>(&health::originalCommit)},
- {0x3e83a0,"48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57",reinterpret_cast<void*>(&health::delta),reinterpret_cast<void**>(&health::originalDelta)},
- {0x121bea0,"89 54 24 10 53 48 83 ec 20 48 8b d9 48 8d 54 24 38 49 8d 48 68 e8 36",reinterpret_cast<void*>(&health::lookup),reinterpret_cast<void**>(&health::originalLookup)}
+ {0x1228490,"40 53 41 56 48 83 ec 48 4d 8b f0 4c 8b d1 e8 5d",reinterpret_cast<void*>(&run),reinterpret_cast<void**>(&originalRun)},
+ {0x35a830,"4c 89 44 24 18 53 57 41 54 41 56 41 57 48 81 ec",reinterpret_cast<void*>(&each),reinterpret_cast<void**>(&originalEach)},
+ {0x3d50d0,"48 8b c4 4c 89 40 18 48 89 48 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8d a8 08 f9 ff ff 48 81",reinterpret_cast<void*>(&damage),reinterpret_cast<void**>(&originalDamage)},
+ {0x3e8ec0,"48 8b c4 4c 89 40 18 55 53 56 57 41 54 41 55",reinterpret_cast<void*>(&health::commit),reinterpret_cast<void**>(&health::originalCommit)},
+ {0x3e8720,"48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57",reinterpret_cast<void*>(&health::delta),reinterpret_cast<void**>(&health::originalDelta)},
+ {0x121e150,"89 54 24 10 53 48 83 ec 20 48 8b d9 48 8d 54 24 38 49 8d 48 68 e8 36",reinterpret_cast<void*>(&health::lookup),reinterpret_cast<void**>(&health::originalLookup)}
 }};
 inline void install(){{std::lock_guard<std::mutex> lock(health::mutex);health::witnesses.clear();}for(auto& h:hooks){const auto p=parsePattern(h.pattern);if(scan(reinterpret_cast<const uint8_t*>(baseAddress+h.rva),p.size(),p)!=std::vector<size_t>{0})throw std::runtime_error("Impact VM observer signature changed");
  if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+h.rva),h.callback,h.original)!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+h.rva))!=MH_OK)throw std::runtime_error("Impact VM observer hook failed");h.on=true;enabled=true;}
- logFile->event("motion_health_observer_enabled","\"commit_rva\":\"0x3e8b40\",\"delta_rva\":\"0x3e83a0\",\"lookup_rva\":\"0x121bea0\",\"health_key\":2394442133,\"health_schema_required\":true,\"witness_capacity\":16,\"witness_max_age_ms\":500,\"read_only\":true");
- accepting=true;logFile->event("motion_hit_observer_enabled","\"vm_rva\":\"0x12261e0\",\"caller\":\"0x3ef6d3\",\"each_rva\":\"0x35a690\",\"damage_rva\":\"0x3d4d50\",\"hit_bytes\":232,\"read_only\":true");}
+ logFile->event("motion_health_observer_enabled","\"commit_rva\":\"0x3e8ec0\",\"delta_rva\":\"0x3e8720\",\"lookup_rva\":\"0x121e150\",\"health_key\":2394442133,\"health_schema_required\":true,\"witness_capacity\":16,\"witness_max_age_ms\":500,\"read_only\":true");
+ accepting=true;logFile->event("motion_hit_observer_enabled","\"vm_rva\":\"0x1228490\",\"caller\":\"0x3ef6d3\",\"each_rva\":\"0x35a830\",\"damage_rva\":\"0x3d50d0\",\"hit_bytes\":232,\"read_only\":true");}
 inline void disable(){accepting=false;if(!enabled)return;for(auto& h:hooks)if(h.on){if(MH_DisableHook(reinterpret_cast<void*>(baseAddress+h.rva))!=MH_OK)throw std::runtime_error("Impact VM observer disable failed");h.on=false;}
  const auto end=GetTickCount64()+500;while(callbacks.load()&&GetTickCount64()<end)std::this_thread::sleep_for(std::chrono::milliseconds(1));bool restored=true;for(const auto& h:hooks){const auto p=parsePattern(h.pattern);restored&=scan(reinterpret_cast<const uint8_t*>(baseAddress+h.rva),p.size(),p)==std::vector<size_t>{0};}
  logFile->event("motion_health_observer_removed","\"commits\":"+std::to_string(health::commits.load())+",\"deltas\":"+std::to_string(health::deltas.load())+",\"unqualified\":"+std::to_string(health::unqualified.load()));

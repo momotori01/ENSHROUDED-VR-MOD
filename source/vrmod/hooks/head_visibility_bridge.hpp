@@ -234,15 +234,15 @@ inline void install(){
     using Status=uint32_t(*)();auto module=GetModuleHandleW(L"evr_diagnostic.dll");
     auto status=module?reinterpret_cast<Status>(GetProcAddress(module,handsOnly?"evrHandsOnlyShaderStatus":"evrHeadVisibilityShaderStatus")):nullptr;
     if(!status||!status())throw std::runtime_error("dynamic head shader was not prepared at process launch");
-    target=reinterpret_cast<void*>(baseAddress+0xae50e);const auto bytes=parsePattern(pattern);
+    target=reinterpret_cast<void*>(baseAddress+0xae57e);const auto bytes=parsePattern(pattern);
     if(scan(static_cast<const uint8_t*>(target),bytes.size(),bytes)!=std::vector<size_t>{0}||
-       uintptr_t(int64_t(baseAddress+0xae513)+read<int32_t>(baseAddress+0xae50f))!=baseAddress+0x13ab360)   // the call's rel32 (the matcher took 0x80db9 to the call itself)
+       uintptr_t(int64_t(baseAddress+0xae583)+read<int32_t>(baseAddress+0xae57f))!=baseAddress+0x13ad610)   // the call's rel32 (the matcher took 0x80db9 to the call itself)
         throw std::runtime_error("head constant upload signature/target differs");
     // Native 7fd10 contains legacy SSE, with no live upper AVX registers.
     // Reuse camera_stub.asm's tested full GPR/flags/x87/XMM preservation.
     if(MH_CreateHook(target,reinterpret_cast<void*>(&evr_camera_stub),&evr_camera_trampoline)!=MH_OK||MH_EnableHook(target)!=MH_OK)
         throw std::runtime_error("head constant upload hook failed");
-    enabled=true;logFile->event("head_visibility_enabled","\"rva\":\"0xae50e\",\"pattern\":"+jsonString(pattern)+",\"payload_offset\":4132,\"payload_bytes\":12,\"shader_modules\":"+std::to_string(status()));
+    enabled=true;logFile->event("head_visibility_enabled","\"rva\":\"0xae57e\",\"pattern\":"+jsonString(pattern)+",\"payload_offset\":4132,\"payload_bytes\":12,\"shader_modules\":"+std::to_string(status()));
 }
 inline void disable(){
     if(!enabled)return;

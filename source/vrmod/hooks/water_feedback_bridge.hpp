@@ -29,7 +29,7 @@ inline water::Packet packet(const Result& result,uint32_t nodes,const std::files
 inline uintptr_t route(uintptr_t source,uintptr_t caller) noexcept {
     auto* state=current;const auto* stage=worldSharedStages::current;
     // The shared-update owner (original View, or eye 0 on desktop-skip frames) keeps the native pool.
-    if(!privateWaterFeedback||!state||!stage||stage->eye<0||stage->eye==worldSharedStages::ownerEye||caller!=0x1fac42)return source;
+    if(!privateWaterFeedback||!state||!stage||stage->eye<0||stage->eye==worldSharedStages::ownerEye||caller!=0x1fada2)return source;
     try {
         if(state->failed||stage->eye>1||source!=state->source||stage->shared!=state->owner||GetCurrentThreadId()!=state->thread)
             throw std::runtime_error("water copy scope/owner changed");
@@ -51,7 +51,7 @@ bool __fastcall take(Result* output,void* pool){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress;
     const bool available=originalTake(output,pool);
     auto* state=current;const auto* stage=worldSharedStages::current;
-    if(!available||!state||!stage||stage->eye!=worldSharedStages::ownerEye||caller!=0x1fe0c7||reinterpret_cast<uintptr_t>(pool)!=state->source||!state->firstSerial||output->serial<state->firstSerial||state->failed)
+    if(!available||!state||!stage||stage->eye!=worldSharedStages::ownerEye||caller!=0x1fe227||reinterpret_cast<uintptr_t>(pool)!=state->source||!state->firstSerial||output->serial<state->firstSerial||state->failed)
         return available;
     // Results come in the order of their serials, two frames after they were produced. A produced serial that is well
     // behind the result that just came will not come any more: the game drops a frame's readback when it rebuilds
@@ -132,7 +132,7 @@ inline void create(WaterFeedbackState& state,uintptr_t scene){
     descriptor.backend=backend;
     using Factory=void*(__fastcall*)(void*,const void*);
     for(size_t eye=0;eye<2;eye++) {
-        const auto pool=reinterpret_cast<uintptr_t>(reinterpret_cast<Factory>(baseAddress+0xfbe940)(reinterpret_cast<void*>(allocator),&descriptor));
+        const auto pool=reinterpret_cast<uintptr_t>(reinterpret_cast<Factory>(baseAddress+0xfc1550)(reinterpret_cast<void*>(allocator),&descriptor));
         if(!pool||pool==state.source||(eye&&pool==state.pools[0]))throw std::runtime_error("water feedback factory returned invalid ownership");
         state.pools[eye]=pool;
         if(read<uintptr_t>(pool)!=allocator||read<uintptr_t>(pool+8)!=graphics||read<uintptr_t>(pool+0x10)!=backend||read<uint64_t>(pool+0x28)!=count||read<uint64_t>(pool+0x278))
@@ -160,7 +160,7 @@ inline void release(WaterFeedbackState& state,bool leftWhileDrawing=false) noexc
                 ",\"stale_frames\":"+std::to_string(staleDropped)+",\"world_left_while_drawing\":"+(leftWhileDrawing?"true":"false")+",\"left_to_process_exit\":true");
             continue;
         }
-        reinterpret_cast<void(__fastcall*)(uintptr_t*)>(baseAddress+0xfcd320)(&state.pools[eye]);
+        reinterpret_cast<void(__fastcall*)(uintptr_t*)>(baseAddress+0xfcff30)(&state.pools[eye]);
         if(state.pools[eye])throw std::runtime_error("native water pool destructor did not clear ownership");
         logFile->event("water_feedback_pool_released","\"eye\":"+std::to_string(eye)+",\"pool\":"+hex(pool)+",\"drained\":"+std::to_string(drained));
     }catch(const std::exception& e){fail(state,e.what());}
@@ -190,7 +190,7 @@ inline void discardCompleted(WaterFeedbackState& state){
   // completion. It logs the unread count and releases ownership normally.
   // Do not modify pool bookkeeping or global graphics completion to hide it.
   logFile->event("water_private_feedback_discard","\"eye\":"+std::to_string(eye)+",\"pool\":"+hex(pool)+",\"unread_packets\":"+std::to_string(e.pending)+",\"completed\":"+std::to_string(e.completed)+",\"scene_returned\":true,\"native_take_calls\":0,\"native_serials_modified\":false");
-  reinterpret_cast<void(__fastcall*)(uintptr_t*)>(baseAddress+0xfcd320)(&state.pools[eye]);
+  reinterpret_cast<void(__fastcall*)(uintptr_t*)>(baseAddress+0xfcff30)(&state.pools[eye]);
   if(state.pools[eye])throw std::runtime_error("native detached pool destructor did not clear ownership");
   logFile->event("water_feedback_pool_released","\"eye\":"+std::to_string(eye)+",\"pool\":"+hex(pool)+",\"drained\":0,\"discarded_packets\":"+std::to_string(e.pending)+",\"after_native_completion\":true");
  }
@@ -226,19 +226,19 @@ inline void install(){
     // no counterpart yet) and the owner create() reads (scene+0x9d8 +0x130 ...) is not located: the private feedback stays
     // off - both eyes use the scene's own water feedback - until it is ported. Mock game-20261016-040701 read garbage here.
     throw std::runtime_error("private water feedback is not ported to 1.0 (WaterBrickTree)");
-    validate(0xfbe940,"48 89 6C 24 18 56 41 56 41 57 48 81 EC 80 00 00 00");
-    validate(0xfcd320,"4C 8B DC 49 89 5B 18 57 48 81 EC 90 00 00 00");
-    validate(0xfe4140,"48 89 6C 24 18 48 89 74 24 20 57 41 56 41 57 48 81 EC 80 00 00 00 48 83 BA 78");
-    const auto call=baseAddress+0x1fe0c2;   // 1.0: call 0xfe39c0 (return 0x1fdd77)
-    if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+0xfe4140)
+    validate(0xfc1550,"48 89 6C 24 18 56 41 56 41 57 48 81 EC 80 00 00 00");
+    validate(0xfcff30,"4C 8B DC 49 89 5B 18 57 48 81 EC 90 00 00 00");
+    validate(0xfe6d80,"48 89 6C 24 18 48 89 74 24 20 57 41 56 41 57 48 81 EC 80 00 00 00 48 83 BA 78");
+    const auto call=baseAddress+0x1fe222;   // 1.0: call 0xfe39c0 (return 0x1fdd77)
+    if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+0xfe6d80)
         throw std::runtime_error("water feedback consumer caller changed");
-    if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+0xfe4140),reinterpret_cast<void*>(&take),reinterpret_cast<void**>(&originalTake))!=MH_OK||
-       MH_EnableHook(reinterpret_cast<void*>(baseAddress+0xfe4140))!=MH_OK)throw std::runtime_error("water feedback consumer hook failed");
-    enabled=true;logFile->event("water_feedback_hook_enabled","\"rva\":\"0xfe4140\",\"policy\":\"same_serial_union_refine_intersection_coarsen_retire\"");
+    if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+0xfe6d80),reinterpret_cast<void*>(&take),reinterpret_cast<void**>(&originalTake))!=MH_OK||
+       MH_EnableHook(reinterpret_cast<void*>(baseAddress+0xfe6d80))!=MH_OK)throw std::runtime_error("water feedback consumer hook failed");
+    enabled=true;logFile->event("water_feedback_hook_enabled","\"rva\":\"0xfe6d80\",\"policy\":\"same_serial_union_refine_intersection_coarsen_retire\"");
 }
 inline void disable() noexcept {
     if(!enabled)return;
-    const auto result=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0xfe4140));if(result==MH_OK)enabled=false;
+    const auto result=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0xfe6d80));if(result==MH_OK)enabled=false;
     try{logFile->event("water_feedback_hook_removed","\"status\":"+std::to_string(result));}catch(...){}
 }
 }

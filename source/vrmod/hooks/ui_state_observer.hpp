@@ -3,7 +3,7 @@ namespace uiStateObserver {
 inline bool requested=false,enabled=false;
 inline std::atomic<bool> accepting{false};inline std::atomic<unsigned> callbacks{0},failures{0},calls{0};
 inline std::atomic<uint8_t> previousState{255};
-constexpr uintptr_t rva=0xbc078b;
+constexpr uintptr_t rva=0xbc230b;
 // Hotfix 1.0.0.1 (2026-10-16): the switch is a jump table of seven states now, its object in r15 (1.0: a chain of six in r14).
 constexpr const char* pattern="41 0F B6 47 0C FF C8 83 F8 06 0F 87";
 struct CallbackScope{CallbackScope(){++callbacks;}~CallbackScope(){--callbacks;}};
@@ -28,8 +28,8 @@ inline void onDispatch(uintptr_t rsp) noexcept {
 }
 inline void install(){
  auto site=reinterpret_cast<void*>(baseAddress+rva);const auto p=parsePattern(pattern);
- if(scan(static_cast<const uint8_t*>(site),p.size(),p)!=std::vector<size_t>{0}||read<uint8_t>(baseAddress+0xbc081d)!=0xe8||   // 1.0: the call to the slide at bc017d (the matcher took aac491 to bc011a, a call of c565e0)
-    uintptr_t(int64_t(baseAddress+0xbc0822)+read<int32_t>(baseAddress+0xbc081e))!=baseAddress+0xca7310)
+ if(scan(static_cast<const uint8_t*>(site),p.size(),p)!=std::vector<size_t>{0}||read<uint8_t>(baseAddress+0xbc239d)!=0xe8||   // 1.0: the call to the slide at bc017d (the matcher took aac491 to bc011a, a call of c565e0)
+    uintptr_t(int64_t(baseAddress+0xbc23a2)+read<int32_t>(baseAddress+0xbc239e))!=baseAddress+0xca8da0)
   throw std::runtime_error("native UI dispatch signature/slide target differs");
  if(MH_CreateHook(site,reinterpret_cast<void*>(&evr_ui_state_stub),&evr_ui_state_trampoline)!=MH_OK)throw std::runtime_error("UI dispatch observer hook creation");
  accepting=true;

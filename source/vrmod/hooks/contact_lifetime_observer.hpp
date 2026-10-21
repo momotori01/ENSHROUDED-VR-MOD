@@ -14,7 +14,7 @@ inline std::mutex mutex;inline std::array<Watch,8> watches{};
 inline motion::ContactLifetimePool<8> lifetimes;
 using Destroy=uint8_t(__fastcall*)(void*,uint32_t,uint8_t,uint8_t);
 inline Destroy original=nullptr;
-constexpr uintptr_t rva=0x995ad0;
+constexpr uintptr_t rva=0x996eb0;
 constexpr const char* pattern="48 89 5C 24 18 48 89 74 24 20 89 54 24 10 55 57 41 55 41";
 struct Presence {bool present=false;uintptr_t record=0;uint64_t capacity=0;uint32_t count=0,counter=0;uint8_t worldKind=0;};
 inline Presence presence(uintptr_t world,uint32_t entity){
@@ -134,9 +134,9 @@ __declspec(noinline) uint8_t __fastcall destroy(void* worldArg,uint32_t entity,u
 inline void install(){
  const auto bytes=parsePattern(pattern);
  if(scan(reinterpret_cast<const uint8_t*>(baseAddress+rva),bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("native entity destruction signature differs");
- for(const auto& pair:std::array<std::pair<uintptr_t,uintptr_t>,2>{{{0x8b8adf,0x8cf670},{0x8b8b03,0x8fc540}}})if(read<uint8_t>(baseAddress+pair.first)!=0xe8||uintptr_t(int64_t(pair.first+5)+read<int32_t>(baseAddress+pair.first+1))!=pair.second)throw std::runtime_error("native entity destructor/map erasure calls differ");
+ for(const auto& pair:std::array<std::pair<uintptr_t,uintptr_t>,2>{{{0x8b9d4d,0x8d08e0},{0x8b9d71,0x8fd7b0}}})if(read<uint8_t>(baseAddress+pair.first)!=0xe8||uintptr_t(int64_t(pair.first+5)+read<int32_t>(baseAddress+pair.first+1))!=pair.second)throw std::runtime_error("native entity destructor/map erasure calls differ");
  if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+rva),reinterpret_cast<void*>(&destroy),reinterpret_cast<void**>(&original))!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("entity lifetime hook failed");
- requested=enabled=true;accepting=true;logFile->event("contact_lifetime_enabled","\"rva\":\"0x995ad0\",\"pattern\":"+jsonString(pattern)+",\"read_only\":true,\"retires_ledger_entries\":false");
+ requested=enabled=true;accepting=true;logFile->event("contact_lifetime_enabled","\"rva\":\"0x996eb0\",\"pattern\":"+jsonString(pattern)+",\"read_only\":true,\"retires_ledger_entries\":false");
 }
 inline void disable(){
  accepting=false;if(!enabled)return;

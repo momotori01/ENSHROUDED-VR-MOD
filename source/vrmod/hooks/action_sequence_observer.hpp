@@ -70,7 +70,7 @@ inline void capture(uintptr_t actor,uint32_t entity,uint32_t local,uint32_t tick
             ",\"input_digital\":"+std::to_string(read<uint64_t>(input+game::playerInputDigital))+",\"ready_for_gameplay\":"+std::to_string(read<uint8_t>(input+game::playerInputReady))+
             ",\"tick\":"+std::to_string(tick)+",\"milliseconds\":"+std::to_string(GetTickCount64())+
             ",\"thread\":"+std::to_string(GetCurrentThreadId())+
-            ",\"caller\":\"0x2de5c5\",\"base_actor_bytes\":\""+bytes+"\",\"stable_read\":true,\"read_only\":true"+geometry.str());
+            ",\"caller\":\"0x2de765\",\"base_actor_bytes\":\""+bytes+"\",\"stable_read\":true,\"read_only\":true"+geometry.str());
     }catch(const std::exception& e){if(++failures==1)logFile->event("action_sequence_failure","\"reason\":"+jsonString(e.what()));}
 }
 inline void removed(bool restored,unsigned callbacks){

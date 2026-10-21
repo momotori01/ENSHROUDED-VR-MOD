@@ -23,7 +23,7 @@ inline uintptr_t object(uint32_t handle){
 inline void remove(uint32_t handle){
     object(handle); // Never call native lookup on an unbounded or stale handle.
     std::array<uintptr_t,2> span{reinterpret_cast<uintptr_t>(&handle),1};
-    reinterpret_cast<Remove>(baseAddress+0x10df20)(reinterpret_cast<void*>(scene),span.data());
+    reinterpret_cast<Remove>(baseAddress+0x10e000)(reinterpret_cast<void*>(scene),span.data());
 }
 inline void exercise(uintptr_t view){
     uint32_t created=0;
@@ -49,11 +49,11 @@ inline void exercise(uintptr_t view){
         const auto sdfCount=hasSdf?read<uint64_t>(sdf+0x78):0;
         auto transform=read<std::array<uint8_t,56>>(source+0x38);
         const auto beforeTransform=transform;
-        created=reinterpret_cast<Create>(baseAddress+0xfb450)(reinterpret_cast<void*>(scene),guid.data(),transform.data());
+        created=reinterpret_cast<Create>(baseAddress+0xfb4e0)(reinterpret_cast<void*>(scene),guid.data(),transform.data());
         if(!created||created==sourceHandle){created=0;throw std::runtime_error("native clone creation failed/aliased source");}
         const auto clone=object(created);
         if(read<uint32_t>(clone+layout::modelMask)!=1)throw std::runtime_error("native constructor default mask changed");
-        reinterpret_cast<Mask>(baseAddress+0xf7030)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
+        reinterpret_cast<Mask>(baseAddress+0xf70c0)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
         if(hasSdf&&(!read<uint32_t>(clone+layout::modelSdf)||read<uint64_t>(sdf+0x78)!=sdfCount+1))throw std::runtime_error("native SDF instance accounting mismatch");
         logFile->event("model_instance_sdf_created","\"present\":"+std::string(hasSdf?"true":"false")+",\"count_before\":"+std::to_string(sdfCount)+",\"count_after\":"+std::to_string(hasSdf?read<uint64_t>(sdf+0x78):0));
         if(read<uintptr_t>(clone+layout::modelResource)!=resource||read<uint32_t>(clone+layout::modelMask)!=0||read<uint32_t>(resource+0x10)!=refs+1)
@@ -95,7 +95,7 @@ inline void* __fastcall render(void* out,void* context,void* view,void* params,v
     const ObserverLastError preserve;
     if(accepting.load()&&!complete.load())try{
         const auto v=reinterpret_cast<uintptr_t>(view);
-        if(read<uintptr_t>(v+8)==scene&&reinterpret_cast<Wait>(baseAddress+0x109200)(reinterpret_cast<void*>(scene),0)){
+        if(read<uintptr_t>(v+8)==scene&&reinterpret_cast<Wait>(baseAddress+0x1092e0)(reinterpret_cast<void*>(scene),0)){
             if(heldHandle.load())holdTick(v);else if(!claimed.exchange(true))exercise(v);
         }
     }catch(const std::exception& e){logFile->event("model_instance_failure","\"reason\":"+jsonString(e.what()));complete=true;}
@@ -123,14 +123,14 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeModelInstance(void* direc
         const auto nt=read<IMAGE_NT_HEADERS64>(baseAddress+dos.e_lfanew);
         if(nt.Signature!=IMAGE_NT_SIGNATURE||nt.FileHeader.TimeDateStamp!=evr::gameBuild::timeDateStamp||nt.OptionalHeader.SizeOfImage!=evr::gameBuild::sizeOfImage)throw std::runtime_error("model unsupported build");
         for(auto e:std::array<std::pair<uintptr_t,const char*>,8>{{
-            {0x129ec0,"4c 89 4c 24 20 4c 89 44 24 18 48 89 54 24 10 48 89 4c 24 08 55 53 56 57 41 54 48 8d"},
-            {0x109200,"48 89 5c 24 10 55 56 57 48 83 ec 50 48 8b 79 40 48 8b da 48"},
-            {0xfb450,"40 55 57 41 54 41 56 41 57 48 83 ec 30 48 8b 42 08 4d 8b f8"},
-            {0x115160,"48 8b c4 44 88 48 20 4c 89 40 18 55 56 41 55 41 57 48 81 ec 98 00 00 00"},
-            {0x10df20,"48 89 6c 24 20 57 41 54 41 56 48 83 ec 30 45 33 e4 4c 8b f2"},
-            {0xf7030,"44 89 82 14 01 00 00 4c 8b ca 4c 8b c2 48 b8 5f 42 7b 09 ed"},
-            {0x16f8e0,"48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 56 48 83 ec"},
-            {0x15a540,"85 d2 0f 84 fa 04 00 00 89 54 24 10 4c 8b dc 49 89 4b 08 55"}}}){
+            {0x129fc0,"4c 89 4c 24 20 4c 89 44 24 18 48 89 54 24 10 48 89 4c 24 08 55 53 56 57 41 54 48 8d"},
+            {0x1092e0,"48 89 5c 24 10 55 56 57 48 83 ec 50 48 8b 79 40 48 8b da 48"},
+            {0xfb4e0,"40 55 57 41 54 41 56 41 57 48 83 ec 30 48 8b 42 08 4d 8b f8"},
+            {0x115240,"48 8b c4 44 88 48 20 4c 89 40 18 55 56 41 55 41 57 48 81 ec 98 00 00 00"},
+            {0x10e000,"48 89 6c 24 20 57 41 54 41 56 48 83 ec 30 45 33 e4 4c 8b f2"},
+            {0xf70c0,"44 89 82 14 01 00 00 4c 8b ca 4c 8b c2 48 b8 5f 42 7b 09 ed"},
+            {0x16f9e0,"48 89 6c 24 10 48 89 74 24 18 48 89 7c 24 20 41 56 48 83 ec"},
+            {0x15a640,"85 d2 0f 84 ? ? ? ? 89 54 24 10 4c 8b dc 49 89 4b 08 55"}}}){
             const auto p=parsePattern(e.second);if(scan(reinterpret_cast<const uint8_t*>(baseAddress+e.first),p.size(),p)!=std::vector<size_t>{0})throw std::runtime_error("model lifecycle signature mismatch");
             logFile->event("model_instance_signature","\"rva\":"+hex(e.first)+",\"pattern\":"+jsonString(e.second)+",\"matched\":true");}
         target=reinterpret_cast<void*>(baseAddress+renderRva);require(MH_Initialize(),"model MH initialize");

@@ -25,7 +25,7 @@ inline BowNativeIdentity bowIdentity(uintptr_t input,uintptr_t weapon){
 
 
 inline bool liveEquipmentWatch=false; // opt-in read-only actionbar evidence for held effects
-constexpr uintptr_t callerRva=0x2e90d4;
+constexpr uintptr_t callerRva=0x2e9274;
 inline std::atomic<unsigned> calls{0},samples{0},failures{0},selectionEvents{0};
 // keen::ecs::SlotSelection (reflection size 256): equipment 0..215 (EquipmentSlotData,
 // layout not in reflection), actionbarEntityIds +216 (2 EntityId), actionItem +224

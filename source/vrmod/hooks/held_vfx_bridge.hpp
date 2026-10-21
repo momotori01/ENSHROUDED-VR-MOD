@@ -23,14 +23,14 @@ inline uint64_t moved=0,restored=0,rejected=0,failures=0;
 inline void validate(){
  if(validated)return;
  for(const auto& e:std::array<std::pair<uintptr_t,const char*>,2>{{
-    {0xf5330,"85 d2 ? ? 48 8b 81 98 00 00 00 48 8b 88 50 09 00 00 48 85 c9 0f 85 15 c9"},
-    {0x17dc00,"4c 8b d1 85 d2 0f 84 11 01 00 00 48 8b 49 68 44 0f b7 ca 41 8b c1 48 d3 e8 49 8b"}}}){
+    {0xf53c0,"85 d2 ? ? 48 8b 81 98 00 00 00 48 8b 88 50 09 00 00 48 85 c9 0f 85 d5 c9"},
+    {0x17dd2a,"4c 8b d1 85 d2 0f 84 11 01 00 00 48 8b 49 68 44 0f b7 ca 41 8b c1 48 d3 e8 49 8b"}}}){
     const auto p=parsePattern(e.second);if(scan(reinterpret_cast<const uint8_t*>(baseAddress+e.first),p.size(),p)!=std::vector<size_t>{0})throw std::runtime_error("held VFX update signature differs");
     logFile->event("held_vfx_mount_signature","\"rva\":"+hex(e.first)+",\"matched\":true");
  }validated=true;
 }
 using Update=void(__fastcall*)(void*,uint32_t,const void*);
-inline void change(uintptr_t scene,uint32_t handle,const std::array<uint8_t,56>& pose){reinterpret_cast<Update>(baseAddress+0xf5330)(reinterpret_cast<void*>(scene),handle,pose.data());}
+inline void change(uintptr_t scene,uint32_t handle,const std::array<uint8_t,56>& pose){reinterpret_cast<Update>(baseAddress+0xf53c0)(reinterpret_cast<void*>(scene),handle,pose.data());}
 struct Scope {
  heldVfxObserver::Snapshot sample{};uintptr_t emitter=0,resource=0,record=0,source=0;bool active=false;
  std::array<uint8_t,56> before{},target{},sourceBefore{},nativeBefore{};

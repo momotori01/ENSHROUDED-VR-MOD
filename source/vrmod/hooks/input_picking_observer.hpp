@@ -6,7 +6,7 @@ inline Submit original=nullptr;
 inline bool enabled=false;
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},calls{0},samples{0},failures{0};
-constexpr uintptr_t rva=0x953da0,callerRva=0x47769d;
+constexpr uintptr_t rva=0x955010,callerRva=0x477a1d;
 constexpr const char* pattern="48 89 5C 24 08 48 89 7C 24 10 55 48 8D 6C 24 B0 48 81 EC 50 01 00 00 8B 85 80 00 00 00 0F 57 C0 0F 11 44 24 70 48 8B";
 struct CallbackScope {CallbackScope(){callbacks.fetch_add(1);}~CallbackScope(){callbacks.fetch_sub(1);}};
 __declspec(noinline) void* __fastcall submit(void* context,void* output,uint32_t entity,const void* transform,

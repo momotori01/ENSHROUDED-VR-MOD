@@ -24,7 +24,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t currentSerial){
         const auto old=motionVisual::object(handle);
         if(read<uintptr_t>(old+layout::modelResource)!=resource||read<uint32_t>(old+layout::modelMask)||read<uint32_t>(old+layout::modelSdf))throw std::runtime_error("shield retirement invariant differs");
         const auto id=handle,refs=read<uint32_t>(resource+16);std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1};
-        reinterpret_cast<motionVisual::Remove>(baseAddress+0x10df20)(reinterpret_cast<void*>(scene),ids.data());handle=0;
+        reinterpret_cast<motionVisual::Remove>(baseAddress+0x10e000)(reinterpret_cast<void*>(scene),ids.data());handle=0;
         const bool invalid=read<uint8_t>(read<uintptr_t>(scene+0x1c8)+(id&0xffffff))!=uint8_t(id>>24);
         const bool released=refs==1||(refs>1&&read<uint32_t>(resource+16)==refs-1);
         logFile->event("motion_shield_retired","\"handle\":"+std::to_string(id)+",\"previous_item\":"+std::to_string(item)+",\"next_item\":"+std::to_string(current.item)+",\"generation_invalidated\":"+(invalid?"true":"false")+",\"reference_released\":"+(released?"true":"false"));
@@ -51,17 +51,17 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t currentSerial){
     if(!handle){
         motionVisual::validate();const auto refs=read<uint32_t>(res+16);if(!refs||refs==UINT32_MAX)throw std::runtime_error("shield resource reference bound");
         resource=res;item=current.item;
-        handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfb450)(reinterpret_cast<void*>(scene),current.modelGuid.data(),transform.data());
+        handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfb4e0)(reinterpret_cast<void*>(scene),current.modelGuid.data(),transform.data());
         if(!handle||handle==current.handle)throw std::runtime_error("shield creation failed/aliased");
         auto clone=motionVisual::object(handle);
-        reinterpret_cast<motionVisual::Mask>(baseAddress+0xf7030)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
+        reinterpret_cast<motionVisual::Mask>(baseAddress+0xf70c0)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
         clone=motionVisual::object(handle);
         if(read<uintptr_t>(clone+layout::modelResource)!=res||read<uint32_t>(res+16)!=refs+1||read<uint32_t>(clone+layout::modelMask)||read<uint32_t>(clone+layout::modelAuxiliary)||read<uint32_t>(clone+layout::modelPose))throw std::runtime_error("shield clone resource/pose differs");
         const auto sdfId=read<uint32_t>(clone+layout::modelSdf);
         if(sdfId){
             if(sdfId==read<uint32_t>(motionVisual::object(current.handle)+layout::modelSdf))throw std::runtime_error("shield SDF aliases source");
             const auto sdf=read<uintptr_t>(scene+layout::sceneSdf);const auto count=read<uint64_t>(sdf+0x78);if(!count)throw std::runtime_error("shield SDF count");
-            using RemoveSdf=void(__fastcall*)(void*,uint32_t);reinterpret_cast<RemoveSdf>(baseAddress+0x15a540)(reinterpret_cast<void*>(sdf),sdfId);
+            using RemoveSdf=void(__fastcall*)(void*,uint32_t);reinterpret_cast<RemoveSdf>(baseAddress+0x15a640)(reinterpret_cast<void*>(sdf),sdfId);
             *reinterpret_cast<uint32_t*>(motionVisual::object(handle)+layout::modelSdf)=0;
             if(read<uint64_t>(sdf+0x78)!=count-1)throw std::runtime_error("shield SDF removal failed");
         }
@@ -88,7 +88,7 @@ inline void dispose(uintptr_t s){
     const auto clone=motionVisual::object(handle);
     if(read<uintptr_t>(clone+layout::modelResource)!=resource||read<uint32_t>(clone+layout::modelMask)||read<uint32_t>(clone+layout::modelSdf))throw std::runtime_error("shield disposal invariant differs");
     const auto id=handle,refs=read<uint32_t>(resource+16);std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1};
-    reinterpret_cast<motionVisual::Remove>(baseAddress+0x10df20)(reinterpret_cast<void*>(s),ids.data());handle=0;ready=false;
+    reinterpret_cast<motionVisual::Remove>(baseAddress+0x10e000)(reinterpret_cast<void*>(s),ids.data());handle=0;ready=false;
     const bool invalid=read<uint8_t>(read<uintptr_t>(s+0x160)+(id&0xffffff))!=uint8_t(id>>24);
     const bool released=refs==1||(refs>1&&read<uint32_t>(resource+16)==refs-1);
     logFile->event("motion_shield_disposed","\"handle\":"+std::to_string(id)+",\"updates\":"+std::to_string(updates)+

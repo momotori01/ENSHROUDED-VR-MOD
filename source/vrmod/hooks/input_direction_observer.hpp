@@ -25,7 +25,7 @@ inline std::atomic<unsigned> copyCalls{0},copySamples{0};
 inline unsigned movementInterval=16,senderInterval=8;
 struct CallbackScope{CallbackScope(){callbacks.fetch_add(1);}~CallbackScope(){callbacks.fetch_sub(1);}};
 constexpr uintptr_t rva=0x42880;
-constexpr uintptr_t copyRva=0xb0abb0,copyCaller=0x3a2580;
+constexpr uintptr_t copyRva=0xb0c6d0,copyCaller=0x3a2720;
 constexpr const char* copyPattern="8B 02 89 01 8B 42 04 89 41 04 8B 42 08 89 41 08";
 constexpr const char* pattern="48 8B C4 48 83 EC 68 F3 0F 10 61 0C F3 0F 10 05";
 __declspec(noinline) void __fastcall convert(const void* quaternion,void* matrix){
@@ -34,7 +34,7 @@ __declspec(noinline) void __fastcall convert(const void* quaternion,void* matrix
     const CallbackScope callback;
     original(quaternion,matrix);
     {const ObserverLastError preserve;
-     if(accepting.load()&&(caller==baseAddress+0x2dce7f||caller==baseAddress+0x2dcf0e)){
+     if(accepting.load()&&(caller==baseAddress+0x2dd01f||caller==baseAddress+0x2dd0ae)){
         const bool logThis=calls.fetch_add(1)%movementInterval==0&&samples.load()<256;
         if(!logThis&&!inputHeadIdle::requested)return;
         try{
@@ -142,7 +142,7 @@ inline void install(){
     const auto bytes=parsePattern(pattern);
     if(scan(reinterpret_cast<const uint8_t*>(baseAddress+rva),bytes.size(),bytes)!=std::vector<size_t>{0})
         throw std::runtime_error("movement quaternion signature changed");
-    for(uintptr_t after:{uintptr_t(0x2dce7f),uintptr_t(0x2dcf0e)}){
+    for(uintptr_t after:{uintptr_t(0x2dd01f),uintptr_t(0x2dd0ae)}){
         const auto call=baseAddress+after-5;
         if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+rva)
             throw std::runtime_error("movement quaternion caller changed");

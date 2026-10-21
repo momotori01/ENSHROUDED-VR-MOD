@@ -234,7 +234,7 @@ int main(){try{std::cout<<std::unitbuf;unsigned passed=0,failed=0;auto check=[&]
         f::onScope(0,true);check(f::serviceStoppedFrontend(0)&&!f::failed,"stopped reader never dereferences missing frontend or calls gameplay observers");
         f::publishAttack(255);f::state(0,&s);check(!s.Gamepad.wButtons&&f::observedPacket==stopped,"real native polling may still consume the immutable neutral release");
         const auto logs=logger.events.size();f::stopGameplayReaders();check(f::attackPacket.load()==stopped&&logger.events.size()==logs,"reader stop is idempotent and does not invent another input packet");
-        const auto token=f::beginBackendExit(back(),0xf97414);check(token.valid()&&f::finishBackendExit(token)&&nativeTable(),"genuine owner may finish a reader-stopped motion input");f::drain();
+        const auto token=f::beginBackendExit(back(),0xf99fd4);check(token.valid()&&f::finishBackendExit(token)&&nativeTable(),"genuine owner may finish a reader-stopped motion input");f::drain();
         check(!f::failed&&f::done&&!f::disconnects&&!f::nativeDisconnectedSeen,"owner completion stays distinct from ordinary polled disconnect");
     }
     reset();f::backendExitRequested=true;f::onScope(front(),true);f::state(0,&s);consumeConnect();f::gestureRequested=true;
@@ -251,14 +251,14 @@ int main(){try{std::cout<<std::unitbuf;unsigned passed=0,failed=0;auto check=[&]
         nowMs+=10000;f::serviceStoppedFrontend(front());
         check(f::connected&&f::installed&&!f::done&&!f::disconnectAt&&!f::failed&&!uint8_t(f::attackPacket.load()),"explicit terminal hold neither times out to stale restore nor resumes Actor reads");
         f::state(0,&s);check(!s.Gamepad.wButtons&&f::observedPacket==f::attackPacket.load(),"held terminal connection still delivers real neutral poll");
-        f::stopGameplayReaders();const auto heldOwner=f::beginBackendExit(back(),0xf97414);
+        f::stopGameplayReaders();const auto heldOwner=f::beginBackendExit(back(),0xf99fd4);
         check(f::finishBackendExit(heldOwner)&&nativeTable()&&!f::disconnects,"owner returns through independent proof after completed-action hold");f::drain();
     }
     // Native-owner handoff is a separate completion from neutral polling.
     reset();f::backendExitRequested=true;f::onScope(front(),true);consumeConnect();
     f::publishAttack(255);f::attackTicket.valid=true;
     const auto beforePacket=f::observedPacket.load();
-    const auto ownerExit=f::beginBackendExit(back(),0xf97414);
+    const auto ownerExit=f::beginBackendExit(back(),0xf99fd4);
     check(ownerExit.valid()&&nativeTable()&&!f::active&&!f::connected&&!f::installed&&!f::done&&f::inputModulePinned&&modulePins==1,"owner entry restores exact API table and pins DLL before native destruction");
     check(read<uint8_t>(back()+0x50)==1&&f::disconnects==0&&!f::nativeDisconnectedSeen&&f::observedPacket.load()==beforePacket,"owner handoff does not fake a neutral poll or write native connection status");
     f::publishAttack(255);check(uint8_t(f::attackPacket.load())==0&&!f::ticketSnapshot().valid&&f::ticketSnapshot().revoked,"owner stop latches input and revokes active ticket");
@@ -266,34 +266,34 @@ int main(){try{std::cout<<std::unitbuf;unsigned passed=0,failed=0;auto check=[&]
     check(!f::finishBackendExit(ownerExit),"duplicate owner return cannot finish twice");
     f::drain();check(!f::failed&&f::disconnects==0,"owner drain has its own proof and never fabricates disconnected-poll counts");
     reset();f::backendExitRequested=true;f::onScope(front(),true);consumeConnect();
-    check(!f::beginBackendExit(0,0xf97414).valid()&&!f::backendExitBegun&&f::installed,"foreign owner argument is rejected without reading its memory");
+    check(!f::beginBackendExit(0,0xf99fd4).valid()&&!f::backendExitBegun&&f::installed,"foreign owner argument is rejected without reading its memory");
     bool wrongCaller=false;try{f::beginBackendExit(back(),0);}catch(...){wrongCaller=true;}
     check(wrongCaller&&!f::backendExitBegun&&f::installed,"unverified native caller cannot start handoff");
-    bool wrongThread=false;std::thread foreignThread([&]{try{f::beginBackendExit(back(),0xf97414);}catch(...){wrongThread=true;}});foreignThread.join();
+    bool wrongThread=false;std::thread foreignThread([&]{try{f::beginBackendExit(back(),0xf99fd4);}catch(...){wrongThread=true;}});foreignThread.join();
     check(wrongThread&&!f::backendExitBegun,"handoff must run on the original frontend owner thread");
-    write(back()+8,HMODULE(2));bool changedOwner=false;try{f::beginBackendExit(back(),0xf97414);}catch(...){changedOwner=true;}
+    write(back()+8,HMODULE(2));bool changedOwner=false;try{f::beginBackendExit(back(),0xf99fd4);}catch(...){changedOwner=true;}
     check(changedOwner&&!f::backendExitBegun&&f::installed,"different module/owner identity refuses table mutation");
     reset();f::backendExitRequested=true;pinAllowed=false;f::onScope(front(),true);
     check(f::failed&&!f::installed&&nativeTable()&&!f::inputModulePinned,"failed module pin prevents wrapper installation");
     reset();f::backendExitRequested=true;pinnedResult=HMODULE(2);f::onScope(front(),true);
     check(f::failed&&!f::installed&&nativeTable(),"pinning a different module cannot authorize the owner path");
     reset();f::backendExitRequested=true;f::onScope(front(),true);write(back()+0x20,uintptr_t(0x333));
-    auto conflictExit=f::beginBackendExit(back(),0xf97414);
+    auto conflictExit=f::beginBackendExit(back(),0xf99fd4);
     check(f::failed&&read<uintptr_t>(back()+0x20)==0x333&&read<uintptr_t>(back()+0x10)==uintptr_t(&fakeState),"handoff restores only our entries and retains foreign replacement as failure");
     check(!f::finishBackendExit(conflictExit)&&f::done,"native return cannot hide a table ownership conflict");
     for(unsigned field=0;field<5;++field){
-        reset();f::backendExitRequested=true;f::onScope(front(),true);auto token=f::beginBackendExit(back(),0xf97414);auto bad=token;
+        reset();f::backendExitRequested=true;f::onScope(front(),true);auto token=f::beginBackendExit(back(),0xf99fd4);auto bad=token;
         switch(field){case 0:++bad.serial;break;case 1:++bad.backend;break;case 2:++bad.manager;break;case 3:++bad.module;break;case 4:++bad.thread;break;}
         check(!f::finishBackendExit(bad)&&!f::done&&f::finishBackendExit(token),"return token requires exact serial/backend/manager/module/thread");
     }
-    reset();f::backendExitRequested=true;f::onScope(front(),true);const auto old=f::beginBackendExit(back(),0xf97414);f::finishBackendExit(old);
-    reset();f::backendExitRequested=true;f::onScope(front(),true);const auto fresh=f::beginBackendExit(back(),0xf97414);
+    reset();f::backendExitRequested=true;f::onScope(front(),true);const auto old=f::beginBackendExit(back(),0xf99fd4);f::finishBackendExit(old);
+    reset();f::backendExitRequested=true;f::onScope(front(),true);const auto fresh=f::beginBackendExit(back(),0xf99fd4);
     check(old.backend==fresh.backend&&old.serial!=fresh.serial&&!f::finishBackendExit(old)&&!f::done&&f::finishBackendExit(fresh),"same backend address reused by a new installation rejects the old completion");
-    reset();f::backendExitRequested=true;f::onScope(front(),true);auto pending=f::beginBackendExit(back(),0xf97414);f::callbacks=1;
+    reset();f::backendExitRequested=true;f::onScope(front(),true);auto pending=f::beginBackendExit(back(),0xf99fd4);f::callbacks=1;
     check(!f::finishBackendExit(pending)&&f::failed,"outstanding wrapper callback cannot produce a successful owner completion");f::callbacks=0;
-    reset();f::backendExitRequested=true;f::onScope(front(),true);f::state(0,&s);const auto neutralToken=f::beginBackendExit(back(),0xf97414);
+    reset();f::backendExitRequested=true;f::onScope(front(),true);f::state(0,&s);const auto neutralToken=f::beginBackendExit(back(),0xf99fd4);
     check(logger.events.back().find("\"packet_kind\":buttons")!=std::string::npos&&logger.events.back().find("\"neutral_was_polled\":true")!=std::string::npos,"neutral button packet audit uses its actual 16-bit packed representation");f::finishBackendExit(neutralToken);
-    reset();f::backendExitRequested=true;f::attackRequested=true;f::observeAttack=[](){return evr::game::AttackObservation{1,100,true,false,0};};f::onScope(front(),true);f::publishAttack(255);f::state(0,&s);const auto attackToken=f::beginBackendExit(back(),0xf97414);
+    reset();f::backendExitRequested=true;f::attackRequested=true;f::observeAttack=[](){return evr::game::AttackObservation{1,100,true,false,0};};f::onScope(front(),true);f::publishAttack(255);f::state(0,&s);const auto attackToken=f::beginBackendExit(back(),0xf99fd4);
     check(logger.events.back().find("\"packet_kind\":attack")!=std::string::npos&&logger.events.back().find("\"neutral_was_polled\":false")!=std::string::npos&&!uint8_t(f::attackPacket.load()),"unpolled attack release is never confused with neutral buttons or claimed consumed");f::finishBackendExit(attackToken);
     // Protect actual owner pages after a simulated native destructor. Any stale
     // read in finish, restore, onScope or drain would fault this test process.
@@ -308,7 +308,7 @@ int main(){try{std::cout<<std::unitbuf;unsigned passed=0,failed=0;auto check=[&]
     if(!VirtualProtect(reinterpret_cast<void*>(dynamicBackend),4096,PAGE_NOACCESS,&oldProtect)||!VirtualProtect(reinterpret_cast<void*>(dynamicManager),4096,PAGE_NOACCESS,&oldProtect))throw std::runtime_error("protect worker-inaccessible owners failed");
     f::stopGameplayReaders();f::onScope(0,false);check(f::serviceStoppedFrontend(0)&&!f::done&&f::installed,"worker reader stop does not read PAGE_NOACCESS backend or manager and cannot claim completion");
     if(!VirtualProtect(reinterpret_cast<void*>(dynamicBackend),4096,PAGE_READWRITE,&oldProtect)||!VirtualProtect(reinterpret_cast<void*>(dynamicManager),4096,PAGE_READWRITE,&oldProtect))throw std::runtime_error("restore native owner entry pages failed");
-    const auto gone=f::beginBackendExit(dynamicBackend,0xf97414);
+    const auto gone=f::beginBackendExit(dynamicBackend,0xf99fd4);
     if(!VirtualProtect(reinterpret_cast<void*>(dynamicBackend),4096,PAGE_NOACCESS,&oldProtect)||!VirtualProtect(reinterpret_cast<void*>(dynamicManager),4096,PAGE_NOACCESS,&oldProtect))throw std::runtime_error("protect destroyed owners failed");
     check(f::finishBackendExit(gone),"original-return completion never reads PAGE_NOACCESS destroyed owners");
     f::restore();f::onScope(0,false);check(f::serviceStoppedFrontend(0),"late frontend/restore skip all destroyed owner reads");f::drain();

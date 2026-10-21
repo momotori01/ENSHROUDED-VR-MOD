@@ -10,7 +10,7 @@ using Evaluate=int(__fastcall*)(void*,void*,void*,void*);
 inline Evaluate original=nullptr;inline bool enabled=false,requested=false;
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},calls{0},failures{0},logged{0};
-constexpr uintptr_t rva=0xfa97c0,caller=0x10048d4;
+constexpr uintptr_t rva=0xfac380,caller=0x1007534;
 constexpr const char* pattern="48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 40 49 8B F8 49";
 constexpr unsigned logLimit=4000;
 inline bool registerDiagnostics=false;inline VkDevice diagDevice{};inline std::mutex diagMutex;inline std::array<uintptr_t,2> diagOutputs{};inline unsigned diagCount=0;
@@ -105,7 +105,7 @@ __declspec(noinline) int __fastcall evaluate(void* command,void* handle,void* pa
 using SetValue=void(__fastcall*)(void*,const char*,uint32_t);
 inline SetValue originalSetUI=nullptr,originalSetI=nullptr;inline bool setEnabled=false;
 inline std::atomic<unsigned> setLogged{0};
-constexpr uintptr_t setUIRva=0x12d0870,setIRva=0x12d0810;
+constexpr uintptr_t setUIRva=0x12d2b20,setIRva=0x12d2ac0;
 constexpr const char* setUIPattern="48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56 48 83 EC 20 48 8B 01 4C 8B F1 41 8B F8 48 8B F2 48 8B 58 20";
 constexpr const char* setIPattern="48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56 48 83 EC 20 48 8B 01 4C 8B F1 41 8B F8 48 8B F2 48 8B 58 18";
 inline bool interesting(const char* name){
@@ -146,7 +146,7 @@ inline void install(){
        MH_EnableHook(reinterpret_cast<void*>(baseAddress+setUIRva))!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+setIRva))!=MH_OK)
         throw std::runtime_error("NGX parameter setter observer hook failed");
     setEnabled=true;accepting=true;
-    logFile->event("dlss_eval_observer_enabled","\"rva\":\"0xfa97c0\",\"caller\":\"0x10048cf\",\"log_limit\":"+std::to_string(logLimit)+",\"read_only\":true");
+    logFile->event("dlss_eval_observer_enabled","\"rva\":\"0xfac380\",\"caller\":\"0x100752f\",\"log_limit\":"+std::to_string(logLimit)+",\"read_only\":true");
 }
 inline void disable(){
     accepting=false;if(!enabled)return;

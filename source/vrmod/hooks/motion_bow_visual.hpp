@@ -97,11 +97,11 @@ inline void prepare(uint64_t serial){
   if(read<uint32_t>(motionVisual::object(modelId)+layout::modelPose))throw std::runtime_error("bow clone already has a pose");
   const auto refs=read<uint32_t>(owner+16);if(!refs||refs==UINT32_MAX)throw std::runtime_error("bow pose reference bound");
   entry->model=modelId;entry->owner=owner;entry->type=spec->type;entry->item=motionVisual::item;
-  entry->pose=reinterpret_cast<motionHandVisual::PoseCreate>(baseAddress+0xfb850)(reinterpret_cast<void*>(scene),expected.data());
+  entry->pose=reinterpret_cast<motionHandVisual::PoseCreate>(baseAddress+0xfb8e0)(reinterpret_cast<void*>(scene),expected.data());
   if(!entry->pose||entry->pose==sourcePose){entry->pose=0;throw std::runtime_error("bow private pose failed/aliased");}
   if(read<uintptr_t>(handPoseMetadata::pose(scene,entry->pose))!=owner||read<uint32_t>(owner+16)!=refs+1)throw std::runtime_error("bow pose owner/reference differs");
   std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&entry->model),1};
-  reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x110880)(reinterpret_cast<void*>(scene),ids.data(),entry->pose);
+  reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x110960)(reinterpret_cast<void*>(scene),ids.data(),entry->pose);
   if(read<uint32_t>(motionVisual::object(modelId)+layout::modelPose)!=entry->pose||read<uint64_t>(handPoseMetadata::pose(scene,entry->pose)+0x58)!=1)throw std::runtime_error("bow private pose binding differs");
   created=true;
   logFile->event(eventPrefix+"created","\"handle\":"+std::to_string(modelId)+",\"pose_handle\":"+std::to_string(entry->pose)+
@@ -110,7 +110,7 @@ inline void prepare(uint64_t serial){
  if(entry->owner!=owner||entry->pose==sourcePose||entry->type!=spec->type||entry->item!=motionVisual::item)throw std::runtime_error("bow source identity changed");
  const auto target=read<std::array<uint8_t,56>>(motionVisual::object(modelId)+0x38);
  std::array<uintptr_t,2> span{reinterpret_cast<uintptr_t>(joints.data()),spec->count};
- reinterpret_cast<motionHandVisual::PoseUpdate>(baseAddress+0x110f80)(reinterpret_cast<void*>(scene),entry->pose,span.data());
+ reinterpret_cast<motionHandVisual::PoseUpdate>(baseAddress+0x111060)(reinterpret_cast<void*>(scene),entry->pose,span.data());
  if(created){
   // The weapon clone was created at its final rigid transform. Initialize
   // dynamic skinning by moving it through the source transform after binding,
@@ -151,7 +151,7 @@ inline void dispose(uintptr_t scene){
  for(auto& e:owned)if(e.pose){
   const auto id=e.pose;const auto record=handPoseMetadata::pose(scene,id);const auto refs=read<uint32_t>(e.owner+16);
   if(read<uint64_t>(record+0x58))throw std::runtime_error("private bow pose still bound");
-  reinterpret_cast<motionHandVisual::PoseRemove>(baseAddress+0x10e180)(reinterpret_cast<void*>(scene),id);e.pose=0;
+  reinterpret_cast<motionHandVisual::PoseRemove>(baseAddress+0x10e260)(reinterpret_cast<void*>(scene),id);e.pose=0;
   bool invalid=false;try{handPoseMetadata::pose(scene,id);}catch(...){invalid=true;}
   const bool released=refs==1||(refs>1&&read<uint32_t>(e.owner+16)==refs-1);
   logFile->event(e.type==4?"motion_bow_pose_disposed":"motion_ranged_pose_disposed","\"handle\":"+std::to_string(e.model)+",\"pose_handle\":"+std::to_string(id)+",\"generation_invalidated\":"+(invalid?"true":"false")+

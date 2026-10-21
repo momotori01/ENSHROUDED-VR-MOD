@@ -34,7 +34,7 @@ inline void release(uint32_t entity,Driven& d,const char* reason) noexcept {
 inline void retire(uint32_t entity,Driven& d,const char* reason) noexcept {
     release(entity,d,reason);
     try{if(d.poseHandle&&poseAlive(scene,d.poseHandle)&&!read<uint64_t>(handPoseMetadata::pose(scene,d.poseHandle)+0x58))
-            reinterpret_cast<motionHandVisual::PoseRemove>(baseAddress+0x10e180)(reinterpret_cast<void*>(scene),d.poseHandle);}catch(...){}
+            reinterpret_cast<motionHandVisual::PoseRemove>(baseAddress+0x10e260)(reinterpret_cast<void*>(scene),d.poseHandle);}catch(...){}
     d.poseHandle=0;d.nativePose=0;
 }
 // One character, this frame. handles: its part models (equipment observer). own: the local player's character (the
@@ -64,7 +64,7 @@ inline bool drive(uint32_t entity,const std::array<uint32_t,24>& handles,bool ow
         std::vector<hand::Joint> animated(102);std::memcpy(animated.data(),animatedBytes.data(),animatedBytes.size());
         if(!d.poseHandle){
             const auto hierarchy=read<std::array<uint32_t,4>>(owner);
-            d.poseHandle=reinterpret_cast<motionHandVisual::PoseCreate>(baseAddress+0xfb850)(reinterpret_cast<void*>(s),hierarchy.data());
+            d.poseHandle=reinterpret_cast<motionHandVisual::PoseCreate>(baseAddress+0xfb8e0)(reinterpret_cast<void*>(s),hierarchy.data());
             if(!d.poseHandle||d.poseHandle==native||d.poseHandle==motionHandVisual::poseHandle||d.poseHandle==motionBodyIk::poseHandle){d.poseHandle=0;throw std::runtime_error("pose creation failed/aliased");}
             d.nativePose=native;
             if(logs++<60)logFile->event("remote_body_created","\"entity\":"+std::to_string(entity)+",\"own_character\":"+(own?"true":"false")+",\"pose_handle\":"+std::to_string(d.poseHandle)+",\"native_pose\":"+std::to_string(native)+
@@ -111,7 +111,7 @@ inline bool drive(uint32_t entity,const std::array<uint32_t,24>& handles,bool ow
             joints[j].position=animated[j].position+(joints[j].position-animated[j].position)*d.weight;}
         if(!fadingOut){d.last=body;d.haveLast=true;d.lastOwn=own;d.lastHandles=handles;}
         std::array<uintptr_t,2> span{reinterpret_cast<uintptr_t>(joints.data()),joints.size()};
-        reinterpret_cast<motionHandVisual::PoseUpdate>(baseAddress+0x110f80)(reinterpret_cast<void*>(s),d.poseHandle,span.data());
+        reinterpret_cast<motionHandVisual::PoseUpdate>(baseAddress+0x111060)(reinterpret_cast<void*>(s),d.poseHandle,span.data());
         unsigned moved=0;
         for(unsigned part=0;part<handles.size();part++)if(const auto handle=handles[part]){
             if(own&&(part==11||handle==motionHandVisual::sourceHandle))continue;

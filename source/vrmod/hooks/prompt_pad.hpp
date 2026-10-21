@@ -14,7 +14,7 @@
 namespace promptPad {
 using IsPad=uint8_t(__fastcall*)(void*);
 inline IsPad original=nullptr;inline bool enabled=false;
-constexpr uintptr_t rva=0xa3f7c0;
+constexpr uintptr_t rva=0xa412f0;
 constexpr const char* pattern="48 8B 41 10 0F B6 40 01 C3";
 inline const int mode=[]{char v[4]{};return GetEnvironmentVariableA("EVR_PROMPT_PAD",v,sizeof v)==1&&v[0]>='0'&&v[0]<='2'?v[0]-'0':2;}();
 inline std::atomic<unsigned> logged{0},forced{0};inline std::atomic<uint64_t> calls{0},inside{0};

@@ -110,7 +110,7 @@ inline void recycleBlocked(const motion::ContactBoundary& b){
  std::ostringstream o;o<<"\"watch_slot\":"<<token.slot<<",\"watch_serial\":"<<token.serial<<",\"watch_slots_remaining\":"<<pool.size()<<",\"world\":"<<hex(b.world)<<",\"actor\":"<<b.actor<<",\"sequence\":"<<key.sequence<<",\"item\":"<<key.item<<",\"trigger\":"<<key.trigger<<",\"call\":"<<unsigned(key.call)<<",\"sub\":"<<unsigned(key.sub)<<",\"tick\":"<<b.tick<<",\"events_before\":"<<count<<",\"events_after\":"<<motionEventSelection::retimeLedger.size()<<",\"suppressions\":"<<blockedActionLifetime::suppressions<<",\"matching_colliders\":"<<blockedActionLifetime::colliders<<",\"actor_cleared\":true,\"quiet\":true,\"writes_gameplay\":false,\"changes_mod_ledgers\":true";
  logFile->event("blocked_event_recycled",o.str());
 }
-constexpr uintptr_t rva=0xa15960,callerRva=0xa1e4ff;
+constexpr uintptr_t rva=0xa17490,callerRva=0xa2002f;
 constexpr const char* pattern="40 53 41 54 48 83 ec 38 45 33 e4 48 8b d9 41 8b d4";
 inline void observe(uintptr_t world){
  // This explicit one-action bridge has already observed its normal idle.
@@ -169,7 +169,7 @@ inline void install(){
  const auto bytes=parsePattern(pattern);const auto call=baseAddress+callerRva-5;
  if(scan(reinterpret_cast<const uint8_t*>(baseAddress+rva),bytes.size(),bytes)!=std::vector<size_t>{0}||read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+rva)throw std::runtime_error("native flush signature/caller differs");
  if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+rva),reinterpret_cast<void*>(&flush),reinterpret_cast<void**>(&original))!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("native flush observer hook failed");
- enabled=true;accepting=true;logFile->event("contact_quiescence_enabled","\"rva\":\"0xa15960\",\"caller\":\"0xa1e4ff\",\"pattern\":"+jsonString(pattern)+",\"read_only\":true,\"retires_ledger_entries\":"+(retiresAnyLedger()?"true":"false"));
+ enabled=true;accepting=true;logFile->event("contact_quiescence_enabled","\"rva\":\"0xa17490\",\"caller\":\"0xa2002f\",\"pattern\":"+jsonString(pattern)+",\"read_only\":true,\"retires_ledger_entries\":"+(retiresAnyLedger()?"true":"false"));
 }
 inline bool stop(){
  accepting=false;if(!enabled)return false;

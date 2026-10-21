@@ -23,7 +23,7 @@ constexpr bool borrowOnly=true;constexpr uintptr_t counterAt=0xb60;
 inline std::atomic<unsigned> borrowed{0},skipped{0};
 // A frame the borrowing does not fit (no owner's list, the counters equal) is left as the game's own - recorded, not failed.
 inline void skip(const char* reason) noexcept {if(skipped.fetch_add(1)<8)try{logFile->event("vfx_transparent_borrow_skipped","\"reason\":"+jsonString(reason));}catch(...){}}
-constexpr uintptr_t rva=0x1883c0,callerRva=0x188778;
+constexpr uintptr_t rva=0x1883c0,callerRva=0x1888b5;
 constexpr const char* pattern="48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57";
 struct Source {
     PairResources* pair=nullptr;uint64_t serial=0;unsigned calls=0;
@@ -87,15 +87,15 @@ using Descriptor=void*(__fastcall*)(void*,void*);
 inline Allocate originalAllocate=nullptr;
 inline Descriptor originalCounter=nullptr,originalResource=nullptr;
 struct Hook{uintptr_t rva,caller;const char* pattern;bool enabled=false;};
-constexpr uintptr_t bindingResourceCaller=0x141a8c;
+constexpr uintptr_t bindingResourceCaller=0x141b8c;
 inline std::array<Hook,6> hooks{{
     {0x4e5f0,0x188486,"4C 89 4C 24 20 53 48 81 EC A0 00 00 00"},
-    {0xa9a10,0x1885b6,"8B 42 50 0F 10 42 28 C1 E0 02 89 41 24 48 8B C1 C6 01 08 0F"},
-    {0x19bd50,0xf3e05,"40 53 48 83 EC 40 48 8B D9 48 81 C2 20 06 00 00 48 8D 4C 24 20 E8 ? ? ? ? C6 03 08"},
+    {0xa9a80,0x1885b6,"8B 42 50 0F 10 42 28 C1 E0 02 89 41 24 48 8B C1 C6 01 08 0F"},
+    {0x19be90,0xf3e05,"40 53 48 83 EC 40 48 8B D9 48 81 C2 20 06 00 00 48 8D 4C 24 20 E8 ? ? ? ? C6 03 08"},
     // 1.0: the draw (View in rbx), "forward_transparent_vfx" (r13) and the bindings' branch (r13) on the VfxView
-    {0x137eb5,0,"0F 84 ? ? ? ? 48 8B 7C 24 58 48 8D 8D B0 AB"},
-    {0x127b2b,0,"0F 84 ? ? ? ? 48 8D 05 ? ? ? ? 33 D2 41"},
-    {0x141a47,0,"0F 84 ? ? ? ? 0F 10 05 ? ? ? ? 48 8D 8D"}
+    {0x137fb5,0,"0F 84 ? ? ? ? 48 8B 7C 24 58 48 8D 8D B0 AB"},
+    {0x127c1b,0,"0F 84 ? ? ? ? 48 8D 05 ? ? ? ? 33 D2 41"},
+    {0x141b47,0,"0F 84 ? ? ? ? 0F 10 05 ? ? ? ? 48 8D 8D"}
 }};
 inline void fail(const char* reason) noexcept {
     failed=true;try{logFile->event("vfx_transparent_failure","\"reason\":"+jsonString(reason));}catch(...){}
@@ -177,7 +177,7 @@ void* __fastcall getCounter(void* output,void* pool){
         throw std::runtime_error("VFX counter descriptor layout changed");
     // Native 7b6b0 is the same pool's RW byte-address descriptor (tag 10).
     // This informs native resource transitions; changing SPIR-V alone is insufficient.
-    reinterpret_cast<Descriptor>(baseAddress+0xa9a40)(output,pool);expected[0]=10;
+    reinterpret_cast<Descriptor>(baseAddress+0xa9ab0)(output,pool);expected[0]=10;
     if(read<std::array<uint8_t,40>>(address)!=expected)throw std::runtime_error("VFX writable descriptor changed resource/range");
     ++c.counterBindings;return result;
 }
@@ -379,7 +379,7 @@ inline void observeEye(void* graphContext,PairResources& pair,unsigned eye) noex
 // itself while 0x124490 ran (the log showed the right matrix shifted, but these constants are made outside that call).
 // EVR_VFX_PARTICLE_SHIFT=0: as before.
 extern "C" {inline void* evr_vfx_constants_trampoline=nullptr;void evr_vfx_constants_stub();}
-constexpr uintptr_t constantsRva=0x14029b;
+constexpr uintptr_t constantsRva=0x14039b;
 constexpr const char* constantsPattern="48 8D 95 D0 3F 00 00 41 B8 10 09 00 00 E8";
 constexpr size_t constantsRows=0x4840,cameraMatrix=0x520,cameraMatrixFlagged=0x620;
 inline bool constantsEnabled=false;
@@ -439,7 +439,7 @@ inline void install(){
         const auto status=module?reinterpret_cast<Status>(GetProcAddress(module,"evrVfxTransparentShaderStatus")):nullptr;
         if(!status||!status())throw std::runtime_error("VFX transparent shader not prepared at process launch");
         const auto rw=parsePattern("8B 42 50 0F 10 42 28 C1 E0 02 89 41 24 48 8B C1 C6 01 0A");
-        if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0xa9a40),rw.size(),rw)!=std::vector<size_t>{0})
+        if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0xa9ab0),rw.size(),rw)!=std::vector<size_t>{0})
             throw std::runtime_error("VFX writable pool descriptor signature changed");
         const auto bindingCall=baseAddress+bindingResourceCaller-5;
         if(read<uint8_t>(bindingCall)!=0xe8||uintptr_t(int64_t(bindingCall+5)+read<int32_t>(bindingCall+1))!=baseAddress+hooks[2].rva)

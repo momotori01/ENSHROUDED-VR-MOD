@@ -6,7 +6,7 @@ inline thread_local bool actorImpact=false;   // 1.0: the advance hook names thi
 inline std::mutex quotaMutex;inline std::map<std::pair<uint32_t,bool>,unsigned> quotas;
 // 1.0 (Hotfix 1.0.0.1): the impact simulation's query is 0x498 bytes (June 0x4c0), its first advance at 0x3ef1d0 and the
 // loop's at 0x3ef3e7 (return 0x3ef3ec; June 0x36b628) in 0x3ef190. The slots are placed by the query census first.
-constexpr uintptr_t callerRva=0x3ef9fc;
+constexpr uintptr_t callerRva=0x3efd7c;
 // The query census (Mock game-20261016-112850, three impacts of the world): DespawnLink 3, ImpactHierarchy 4 (16 bytes),
 // Impact 8 (24 bytes; June 20 read). The optional item config (44 bytes) and sequence event (24) were absent there: they
 // are taken as 5 and 6 (June: hierarchy 9, item 10, sequence 13, impact 17) until a swing of the player's shows them -

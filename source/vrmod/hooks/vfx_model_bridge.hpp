@@ -48,21 +48,21 @@ inline std::atomic<unsigned> failures{0},scopes{0};
 enum Step:unsigned {Culling,PrepareStep,BindInstances,BindMaterials,DrawPrepass,DrawShadow,DrawGbuffer,WritebackStep,StepCount};
 struct Gate {uintptr_t rva;const char* pattern;unsigned viewAt;const char* name;bool ownFrame;bool enabled=false;};
 inline std::array<Gate,StepCount> gates{{
-    {0x1321f3,"74 5A 48 8B 85 C8 B6 02 00",16,"culling",true},
-    {0x130131,"0F 84 03 01 00 00 48 8D 8D 50 74 00 00",16,"prepare",true},
-    {0x143783,"0F 84 E6 03 00 00 44 8B 0D",112,"bind_instances",false},
-    {0x143b8b,"0F 84 C3 01 00 00 44 8B 0D",112,"bind_materials",false},
-    {0x1348df,"0F 84 9B 00 00 00 48 8B 54 24 58",40,"draw_prepass",true},
-    {0x134f03,"0F 84 99 00 00 00 49 8B D5 48 8D 8D E0 DD 00 00",40,"draw_shadow",true},
-    {0x129436,"0F 84 6D 01 00 00 41 0F 10 86 68 6D 01 00",112,"draw_gbuffer",false},
-    {0x131841,"74 13 4C 8D 85 C0 2E 00 00",16,"writeback",true}}};
+    {0x1322f3,"74 5A 48 8B 85 C8 B6 02 00",16,"culling",true},
+    {0x130231,"0F 84 03 01 00 00 48 8D 8D 50 74 00 00",16,"prepare",true},
+    {0x143883,"0F 84 E6 03 00 00 44 8B 0D",112,"bind_instances",false},
+    {0x143c8b,"0F 84 C3 01 00 00 44 8B 0D",112,"bind_materials",false},
+    {0x1349df,"0F 84 9B 00 00 00 48 8B 54 24 58",40,"draw_prepass",true},
+    {0x135003,"0F 84 99 00 00 00 49 8B D5 48 8D 8D E0 DD 00 00",40,"draw_shadow",true},
+    {0x129526,"0F 84 6D 01 00 00 41 0F 10 86 68 6D 01 00",112,"draw_gbuffer",false},
+    {0x131941,"74 13 4C 8D 85 C0 2E 00 00",16,"writeback",true}}};
 struct Call {uintptr_t rva;const char* pattern;bool enabled=false;};
 inline std::array<Call,4> calls{{
-    {0x19f820,"4C 8B DC 49 89 5B 08 49 89 6B 10 49 89 73 18 49 89 7B 20 41 56 48 81 EC C0 00 00 00"},
-    {0x197fd0,"4C 8B DC 55 57 41 54 41 57 49 8D AB 48 FC FF FF 48 81 EC 98 04 00 00"},
-    {0x1af7e0,"4C 8B DC 55 56 41 54 41 55 41 56 41 57 49 8D AB 98 FC FF FF 48 81 EC 38"},
-    {0x1aed70,"48 8B C4 55 53 56 41 56 48 8D A8 F8 FE FF FF 48 81 EC E8 01 00 00"}}};
-constexpr uintptr_t prepareCaller=0x13023a,cullCaller=0x13224f,writebackCaller=0x131856;constexpr std::array<uintptr_t,3> recordCallers{0x134980,0x134fa2,0x1295a9};
+    {0x19f970,"4C 8B DC 49 89 5B 08 49 89 6B 10 49 89 73 18 49 89 7B 20 41 56 48 81 EC C0 00 00 00"},
+    {0x198110,"4C 8B DC 55 57 41 54 41 57 49 8D AB 48 FC FF FF 48 81 EC 98 04 00 00"},
+    {0x1af930,"4C 8B DC 55 56 41 54 41 55 41 56 41 57 49 8D AB 98 FC FF FF 48 81 EC 38"},
+    {0x1aeec0,"48 8B C4 55 53 56 41 56 48 8D A8 F8 FE FF FF 48 81 EC E8 01 00 00"}}};
+constexpr uintptr_t prepareCaller=0x13033a,cullCaller=0x13234f,writebackCaller=0x131956;constexpr std::array<uintptr_t,3> recordCallers{0x134a80,0x1350a2,0x129699};
 struct Eye {PairResources* pair=nullptr;int eye=-1;std::array<unsigned,StepCount> taken{};unsigned prepares=0,culls=0,records=0,writebacks=0,held=0;uintptr_t vfx=0;};
 inline thread_local Eye* current=nullptr;
 inline void fail(const char* reason) noexcept {
@@ -208,7 +208,7 @@ inline void install(void* const* stubs,void** trampolines){
         gates[i].enabled=true;}
     installed=true;cullingHistory::eyeRegeneratesModels=&regenerates;
     if(eyeWriteback){sharedPointLights::eyeWroteLists=&wroteLists;sharedPointLights::eyeWritesLists=&writesLists;}
-    logFile->event("vfx_model_bridge_enabled","\"branches\":"+std::to_string(eyeWriteback?8:7)+",\"calls\":[\"0x19f820\",\"0x197fd0\",\"0x1af7e0\""+std::string(eyeWriteback?",\"0x1aed70\"":"")+
+    logFile->event("vfx_model_bridge_enabled","\"branches\":"+std::to_string(eyeWriteback?8:7)+",\"calls\":[\"0x19f970\",\"0x198110\",\"0x1af930\""+std::string(eyeWriteback?",\"0x1aeec0\"":"")+
         "],\"eye_writes_its_own_vfx_lists\":"+(eyeWriteback?"true":"false")+",\"prepare_through_vfx_culling_hook\":"+std::string(sharedPrepare?"true":"false")+",\"only_saved_zf_and_one_argument_changed\":true");
 }
 inline void disable() noexcept {

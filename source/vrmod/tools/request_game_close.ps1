@@ -2,6 +2,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Launch,
     [string]$ExpectedExecutable,
     [ValidateRange(1,600)][int]$WaitSeconds=180,
+    [ValidateRange(0,60)][int]$WarnSeconds=10,
     [switch]$DryRun
 )
 # Ordinary UI close request for one managed diagnostic launch (Claude replacement for the
@@ -9,6 +10,9 @@ param(
 # unowned top-level game window, posts WM_SYSCOMMAND/SC_CLOSE once (the command DefWindowProc
 # produces for Alt+F4) and then only observes. It never kills, never calls a native game exit
 # function, never retries with a stronger method and never changes settings.
+# User 2026-10-21 17:20 (a Mock close took their open CLIP STUDIO down with it; how is not known - this request goes to the
+# game's own window only, see ui-close-request.json of game-20261021-170950): "play a sound 10 seconds before the close, I
+# will save". The alarm sound (notify_user_sound.ps1 -Kind GameClosing), then $WarnSeconds, then the request.
 $ErrorActionPreference='Stop'
 $launchDir=(Resolve-Path -LiteralPath $Launch).Path
 if(!$ExpectedExecutable){$ExpectedExecutable=Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'enshrouded.exe'}
@@ -67,6 +71,17 @@ try {
     $record.target=[ordered]@{hwnd=$target.hwnd;class=$target.class;title=$target.title;visible=$target.visible}
     if($DryRun){$record.status='dry_run_identified'}
     else {
+    if($WarnSeconds -gt 0){
+        $warnAt=Get-Date;$record.warning_utc=$warnAt.ToUniversalTime().ToString('o');$record.warning_seconds=$WarnSeconds
+        $record.warning_sound=(& (Join-Path $PSScriptRoot 'notify_user_sound.ps1') -Kind GameClosing | Select-Object -Last 1)
+        $left=$WarnSeconds-((Get-Date)-$warnAt).TotalSeconds;if($left -gt 0){Start-Sleep -Milliseconds ([int]($left*1000))}
+        $process.Refresh()
+        if($process.HasExited){
+            $code=[BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$process.ExitCode),0)
+            $record.status='exited_during_warning';$record.exit_code=$code;$record.exit_code_hex=('0x{0:x8}' -f $code);$record.exit_time=$process.ExitTime.ToString('o')
+            throw 'The game exited during the warning; no request was sent.'
+        }
+    }
     $record.qpc_frequency=[Diagnostics.Stopwatch]::Frequency
     $record.request_begin_utc=(Get-Date).ToUniversalTime().ToString('o')
     $record.request_begin_qpc=[Diagnostics.Stopwatch]::GetTimestamp()
@@ -88,11 +103,11 @@ try {
     }
 } catch {
     if($record.status -in @('not_started','UI_CLOSE_SENT')){$record.status='error'}
-    $record.error=$_.Exception.Message
+    if($record.status -ne 'exited_during_warning'){$record.error=$_.Exception.Message}
 } finally {
     $record.observed_end_utc=(Get-Date).ToUniversalTime().ToString('o')
     $record | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $tracePath -Encoding utf8
     if($process){$process.Dispose()}
 }
 Write-Output ("{0} {1}" -f $record.status,$tracePath)
-if($record.status -notin @('exited_after_request','dry_run_identified')){exit 1}
+if($record.status -notin @('exited_after_request','exited_during_warning','dry_run_identified')){exit 1}

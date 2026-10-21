@@ -18,7 +18,7 @@ namespace sequenceRequestObserver {
 // ten through (Mock game-20261015-143424: four alone crashed the game at the first airborne press, 0xc0000005).
 using Request=uint64_t(__fastcall*)(void*,void*,void*,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t,uint64_t);
 inline Request original=nullptr;inline bool enabled=false;
-constexpr uintptr_t rva=0x216150,meleeTriggerCall=0x2c5bde;   // the return address of the call at 2758ad
+constexpr uintptr_t rva=0x2162f0,meleeTriggerCall=0x2c5d7e;   // the return address of the call at 2758ad
 constexpr const char* pattern="48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 40 48 8B EA 49 8B F8 4C 8B";
 constexpr std::array<uint32_t,4> slashUp{2251110514u,1990608986u,1548769672u,1253034539u};
 constexpr std::array<uint32_t,5> crashDown{3198880426u,1061916186u,2045364040u,2614964733u,755063106u};

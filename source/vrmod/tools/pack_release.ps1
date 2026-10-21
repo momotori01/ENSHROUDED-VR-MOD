@@ -69,7 +69,7 @@ Copy-Item -LiteralPath "$mod/package/README.txt" -Destination $evr
 Copy-Item -LiteralPath "$mod/package/Update-EnshroudedVR.ps1" -Destination $evr   # the update button's (settings/vr_setting_app.cpp)
 Copy-Item -LiteralPath (Join-Path $game 'references/OpenXR-SDK/LICENSE') -Destination "$evr/licenses/OpenXR-SDK-LICENSE.txt"
 Copy-Item -LiteralPath (Join-Path $game 'references/minhook/LICENSE.txt') -Destination "$evr/licenses/MinHook-LICENSE.txt"
-$build=(Get-Content -LiteralPath "$mod/config/profiles/build25988036.json" -Raw | ConvertFrom-Json)
+$build=(Get-Content -LiteralPath "$mod/config/profiles/build26082781.json" -Raw | ConvertFrom-Json)
 [IO.File]::WriteAllText("$evr/version.txt","$Version (packed $stamp; for the game build of enshrouded.exe $($build.exe_sha256.Substring(0,12)))`r`n",(New-Object Text.UTF8Encoding $false))
 # Nothing of this PC in the package's text files.
 $here=@($game,$env:USERPROFILE,$env:USERNAME) | Where-Object { $_ }

@@ -6,7 +6,7 @@ inline float clipDistance=0,glideClipDistance=0,motionClipDistance=0;inline std:
 inline std::array<bool,2> enabled{};
 inline std::array<std::array<uint64_t,3>,2> counts{};
 inline std::atomic<uint64_t> ignored{0};
-constexpr std::array<uintptr_t,2> sites{0x10bbdf,0x10e1a6};
+constexpr std::array<uintptr_t,2> sites{0x10bcbb,0x10e284};
 constexpr std::array<size_t,2> sourceOffsets{0xf60,0x1ae0},descriptorOffsets{0xf30,0xea0},sizes{992,480};
 constexpr std::array<const char*,2> patterns{
     "48 8B 85 50 0F 00 00 48 8D 8D 60 0F 00 00",

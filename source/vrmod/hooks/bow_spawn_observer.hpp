@@ -7,17 +7,17 @@ inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},calls{0},samples{0},failures{0};
 using DispatchFn=bool(__fastcall*)(void*,void*,const void*,uint8_t,const void*,const void*);
 inline DispatchFn dispatchOriginal=nullptr;inline bool dispatchEnabled=false;
-constexpr uintptr_t dispatchRva=0x21e670,spawnParentRva=0x22512d;
+constexpr uintptr_t dispatchRva=0x21e810,spawnParentRva=0x2252cd;
 constexpr const char* dispatchPattern="44 88 4c 24 20 55 53 56 41 54 41 55 41 56 41 57 48 8d 6c 24 80 48 81 ec";
 struct Parent {uintptr_t caller=0;const void* context=nullptr;const void* event=nullptr;unsigned sample=0;bool crosshairOk=false;std::array<uint8_t,56> transform{};inputRanged::BowNativeIdentity identity{};uint8_t mode=0;};
 struct PendingSubmit {const void* params=nullptr;unsigned sample=0;std::array<uint8_t,56> transform{};inputRanged::BowNativeIdentity identity{};};
 inline thread_local PendingSubmit pendingSubmit;
 using SubmitFn=bool(__fastcall*)(void*,const void*);inline SubmitFn submitOriginal=nullptr;inline bool submitEnabled=false;
-constexpr uintptr_t submitRva=0x221230,submitCaller=0x225157;
-constexpr const char* submitPattern="40 55 56 41 54 41 56 48 8d ac 24 28 9a fe ff b8 d8 66 01 00 e8 ? ? ?";   // the call of the stack probe: its rel32 moves with every build
+constexpr uintptr_t submitRva=0x2213d0,submitCaller=0x2252f7;
+constexpr const char* submitPattern="40 55 56 41 54 41 56 48 8d ac 24 28 9a fe ff b8 d8 66 01 00 e8 c7 c1 10";   // the call of the stack probe: its rel32 moves with every build
 inline std::atomic<unsigned> dispatchSamples{0},submitSamples{0};
 inline thread_local Parent parent;
-constexpr uintptr_t rva=0x21f550,callerRva=0x21ebb2;
+constexpr uintptr_t rva=0x21f6f0,callerRva=0x21ed52;
 constexpr const char* pattern="48 8b c4 48 81 ec d8 00 00 00 f3 0f 10 25 ? ? ? ? 4c 8b d1 f3 0f 10";
 struct Scope{Scope(){callbacks.fetch_add(1);}~Scope(){callbacks.fetch_sub(1);}};
 inline void failure(const std::exception& e);
@@ -77,7 +77,7 @@ __declspec(noinline) bool __fastcall submitObserve(void* context,const void* par
 inline void failure(const std::exception& e){if(failures.fetch_add(1)==0)logFile->event("bow_spawn_failure","\"reason\":"+jsonString(e.what()));}
 // Staff casts reach the Crosshair placement from another event branch of the same
 // dispatch (survey game233325: return address 1e8f28, event without the projectile flag).
-constexpr uintptr_t staffParentRva=0x224ac8;
+constexpr uintptr_t staffParentRva=0x224c68;
 // A tracked shot must start near the player's own native aim focus. Measured in Mock: bow
 // 1.15 m, staff emitter 1.25 m, wand 0.72 m. An outstretched arm with a long staff, or standing
 // off-centre in the room, adds to that, so play uses 3 m; the one-shot diagnostic keeps 1.5 m.
@@ -345,9 +345,9 @@ inline void install(){
  // Successful native submit stores r15d in Actor.currentServerAction.lastSpawnedEntityId.
  // 1.0: Actor.currentServerAction (+0xc20) .lastSpawnedEntityId moved +0xf8 -> +0x10c (reflection), written at 223452 after the
  // write access call; the type hash at 22404e; the parent's call of the dispatch at 224db3 (June 1e81ec / 1e88eb / 1e9513).
- verifyBytes(0x2237ac,"44 89 b8 2c 0d 00 00");
- verifyBytes(0x2243be,"8b 03 3d f3 0b e2 51");
- verifyBytes(0x225123,"48 89 5c 24 20 e8 43 95 ff ff");   // build 25988036: the call to the dispatch 0x21e670 (1.0.0.1: e8 63 95 ff ff)
+ verifyBytes(0x22394c,"44 89 b8 2c 0d 00 00");
+ verifyBytes(0x22455e,"8b 03 3d f3 0b e2 51");
+ verifyBytes(0x2252c3,"48 89 5c 24 20 e8 43 95 ff ff");   // build 26082781: the call to the dispatch 0x21e810 (25988036: 0x225123 -> 0x21e670, the same bytes; 1.0.0.1: e8 63 95 ff ff)
  if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+dispatchRva),reinterpret_cast<void*>(&dispatchObserve),reinterpret_cast<void**>(&dispatchOriginal))!=MH_OK)throw std::runtime_error("bow spawn dispatch observer creation failed");
  if(MH_EnableHook(reinterpret_cast<void*>(baseAddress+dispatchRva))!=MH_OK)throw std::runtime_error("bow spawn dispatch observer enable failed");
  dispatchEnabled=true;

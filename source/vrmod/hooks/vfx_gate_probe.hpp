@@ -10,10 +10,10 @@ struct Site {uintptr_t rva;int viewSlot;const char* pattern;const char* name;};
 // viewSlot: the saved register holding the View, as an offset below the stub's original rsp (vfx_gate_stub.asm):
 // rbx -40, rdi -64, r13 -112.
 inline const std::array<Site,4> sites{{
-    {0x12a263,-64,"74 13 4C 8D 85 58 01 00 00","rdx_vfx_12a223"},
-    {0x12a52f,-64,"74 4C 44 8B 0D","cmp_rdi_12a4ef"},
-    {0x13547e,-40,"0F 84 1D 01 00 00 8B 83 D0 00 00 00","fog_injection_13543e"},
-    {0x13a4cb,-40,"0F 84 C8 08 00 00 48 8B 44 24 58","after_particles_13a48b"}}};
+    {0x12a363,-64,"74 13 4C 8D 85 58 01 00 00","rdx_vfx_12a223"},
+    {0x12a62f,-64,"74 4C 44 8B 0D","cmp_rdi_12a4ef"},
+    {0x13557e,-40,"0F 84 1D 01 00 00 8B 83 D0 00 00 00","fog_injection_13543e"},
+    {0x13a5cb,-40,"0F 84 C8 08 00 00 48 8B 44 24 58","after_particles_13a48b"}}};
 // Default 12 = after_particles_13a48b (8; Mock game-20261016-194804: opened for the eye without the VFX, the flame of the
 // held staff and the glowing motes in both eyes; no failure) and the fog's VFX injection 13543e (4; 2026-10-17, headset
 // reports 11 and 22: "the mist of the valley in the left eye only" - the gate was closed for the right eye every time,

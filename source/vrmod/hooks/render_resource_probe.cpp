@@ -25,7 +25,7 @@ uintptr_t gameBase = 0;
 std::atomic<bool> started{false}, active{false}, claimed{false}, done{false};
 std::atomic<unsigned> resultCode{4};
 Log *retainedLog = nullptr;
-constexpr uintptr_t renderRva = 0x129ec0;
+constexpr uintptr_t renderRva = 0x129fc0;
 constexpr const char *patternText = "4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10 48 89 4C 24 08 55 53 56 57 41 54 48 8D AC";
 using Handle = std::array<uint8_t, 16>;
 template<class T> T read(uintptr_t address)
@@ -167,15 +167,15 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeRenderResources(void *dir
         const auto createPattern=parsePattern("40 53 55 56 41 56 48 83 EC 48 4D 8B F0 48");
         const auto releasePattern=parsePattern("48 8B C4 55 57 48 81 EC 88 00");
         const auto importPattern=parsePattern("40 55 56 57 41 56 41 57 48 8D 6C 24 D1 48 81 EC");
-        if(scan(base+0x1010080,createPattern.size(),createPattern)!=std::vector<size_t>{0} ||
-           scan(base+0x1010330,importPattern.size(),importPattern)!=std::vector<size_t>{0} ||
-           scan(base+0x1012160,releasePattern.size(),releasePattern)!=std::vector<size_t>{0})
+        if(scan(base+0x1012ce0,createPattern.size(),createPattern)!=std::vector<size_t>{0} ||
+           scan(base+0x1012f90,importPattern.size(),importPattern)!=std::vector<size_t>{0} ||
+           scan(base+0x1014dc0,releasePattern.size(),releasePattern)!=std::vector<size_t>{0})
             throw std::runtime_error("texture lifecycle signatures changed");
         target=base+renderRva;
         require(MH_Initialize(),"MH_Initialize");
         require(MH_CreateHook(target,reinterpret_cast<void *>(&render),reinterpret_cast<void **>(&original)),"MH_CreateHook");
         active=true;require(MH_EnableHook(target),"MH_EnableHook");enabled=true;
-        retainedLog->event("render_resource_hook_enabled","\"mode\":\"allocate_unused_targets_only\",\"rva\":\"0x129ec0\"");
+        retainedLog->event("render_resource_hook_enabled","\"mode\":\"allocate_unused_targets_only\",\"rva\":\"0x129fc0\"");
         const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
         while(!done.load(std::memory_order_acquire) && std::chrono::steady_clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(2));
         active=false;require(MH_DisableHook(target),"MH_DisableHook");enabled=false;

@@ -4,8 +4,8 @@ namespace worldSharedStages {
 using Stage=void (__fastcall*)(void*,void*,void*);
 struct Entry {uintptr_t rva,caller;const char* pattern;Stage original=nullptr;bool enabled=false;};
 inline std::array<Entry,2> entries{{
-    {0x1fdf60,0x12c112,"4C 89 44 24 18 48 89 54 24 10 48 89 4C 24 08"},
-    {0x201c20,0x12c24d,"48 8B C4 48 89 50 10 55 53 56 41 54"}
+    {0x1fe0c0,0x12c212,"4C 89 44 24 18 48 89 54 24 10 48 89 4C 24 08 55 53 41 54 41 55 48 8D"},
+    {0x201d80,0x12c34d,"48 8B C4 48 89 50 10 55 53 56 41 54"}
 }};
 struct Completed {uintptr_t object=0;uint64_t serial=0;bool valid=false;};
 inline thread_local std::array<Completed,2> completed{};
@@ -40,7 +40,7 @@ inline thread_local Context* current=nullptr;
 // serial, and otherwise runs it as the game does. The next call, 0x57080 (the bricks' atlas imported into the View's
 // graph, for its own terrain), stays per View.
 namespace terrain {
-constexpr uintptr_t rva=0x5a8f0,caller=0x12c1ce;
+constexpr uintptr_t rva=0x5a8f0,caller=0x12c2ce;
 constexpr const char* pattern="4C 89 44 24 18 48 89 4C 24 08 55 53 56 57 41 55 41 56 41 57 48 8D AC 24 60 FD FD FF B8 A0 03 02 00";
 inline Stage original=nullptr;inline bool enabled=false;
 inline thread_local Completed completed{};
@@ -186,7 +186,7 @@ struct Scope {Context* previous=current;explicit Scope(Context* value){current=v
 // EVR_TERRAIN_RADIUS_SHARE=0: as before (the difference only recorded).
 namespace detailRadius {
 constexpr uintptr_t rva=0x49aa0;
-constexpr const char* pattern="4C 89 44 24 18 53 48 81 EC A0 00 00 00 41 0F 10 01 48 8D 44 24 30 48 8B DA";
+constexpr const char* pattern="4C 89 44 24 18 53 48 81 EC A0 00 00 00 41 0F 10 01 48 8D 44 24 30 48 8B DA 48 8B 11 41 B9 04 00 00";
 using Fn=void*(__fastcall*)(void*,void*,uint64_t,void*);
 inline Fn original=nullptr;inline bool enabled=false;
 inline const bool share=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_TERRAIN_RADIUS_SHARE",v,sizeof v);return !(n==1&&v[0]=='0');}();
@@ -214,7 +214,7 @@ inline void* __fastcall invoke(void* allocator,void* out,uint64_t size,void* opt
 // at 0x131bbd (another terrain pass of the View render). Here the right eye's reads get the left eye's value of the same
 // frame, before any constant is built - the patch of the blocks after the eye (finishEye) then finds nothing to lend.
 namespace getter {
-constexpr uintptr_t rva=0x1de3d0;constexpr const char* pattern="F3 0F 10 81 44 C4 00 00 C3";
+constexpr uintptr_t rva=0x1de530;constexpr const char* pattern="F3 0F 10 81 44 C4 00 00 C3";
 using Fn=float(__fastcall*)(const void*);inline Fn original=nullptr;inline bool enabled=false;
 inline std::atomic<uintptr_t> leftObject{0};inline std::atomic<uint64_t> leftSerial{0},own{0},lentCalls{0},lastLentSerial{0};
 inline float __fastcall invoke(const void* object){
@@ -233,7 +233,7 @@ inline float __fastcall invoke(const void* object){
 // (view_resource_probe.cpp StreamingLend), skip says to leave the object as the eyes made it (2026-10-19 experiment,
 // EVR_SKIP_ORIGINAL_STREAMING_UPDATE=1: the right eye lost bricks on every refresh frame, Mock game-20261019-061432).
 namespace streamingUpdate {
-constexpr uintptr_t rva=0x1e2d20,callReturn=0x12a3bf;constexpr const char* pattern="48 89 5C 24 10 4C 89 44 24 18 55 56 57 41 54 41 55 41 56 41 57";
+constexpr uintptr_t rva=0x1e2e80,callReturn=0x12a4bf;constexpr const char* pattern="48 89 5C 24 10 4C 89 44 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 50 E0 FF FF";
 using Fn=void(__fastcall*)(void*,void*,void*);inline Fn original=nullptr;inline bool enabled=false;
 inline const bool wanted=[]{char v[4]{};return GetEnvironmentVariableA("EVR_SKIP_ORIGINAL_STREAMING_UPDATE",v,sizeof v)==1&&v[0]=='1';}();
 inline thread_local bool skip=false;inline std::atomic<uint64_t> skipped{0},passed{0};

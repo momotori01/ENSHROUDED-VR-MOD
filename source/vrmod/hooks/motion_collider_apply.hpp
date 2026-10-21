@@ -127,30 +127,30 @@ inline thread_local unsigned readySample=0;
 inline thread_local bool activeScope=false,cancelScope=false,lookupSeen=false;
 using Lookup=void*(__fastcall*)(void*,uint32_t,uint8_t,const void*);
 inline Lookup originalLookup=nullptr;inline bool lookupEnabled=false;inline std::atomic<unsigned> lookupCallbacks{0};
-constexpr uintptr_t lookupRva=0x213930;
+constexpr uintptr_t lookupRva=0x213ad0;
 constexpr const char* lookupPattern="40 53 48 83 ec 20 49 8b d9 e8 ? ? ? ?";
 inline bool owns(uintptr_t world,uint32_t entity,const std::array<uint8_t,24>& event){std::lock_guard<std::mutex> lock(mutex);const auto key=combatEpochGate::collider({world,entity,event});return requested&&(live?liveLease.owns(key,GetTickCount64()):lease.owns(key));}
 __declspec(noinline) void* __fastcall lookup(void* registry,uint32_t sequence,uint8_t sub,const void* guid){
  const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress;
  struct Guard {Guard(){++lookupCallbacks;}~Guard(){--lookupCallbacks;}} guard;
  auto* result=originalLookup(registry,sequence,sub,guid);const ObserverLastError preserve;
- if(!activeScope||!cancelScope||caller!=0x3eff42)return result;
+ if(!activeScope||!cancelScope||caller!=0x3f02c2)return result;
  try{
   uint32_t expected=0;std::memcpy(&expected,scopeKey.event.data(),4);
   const auto bytes=read<std::array<uint8_t,16>>(reinterpret_cast<uintptr_t>(guid));
   const bool matched=expected==sequence&&scopeKey.event[4]==sub&&!std::memcmp(scopeKey.event.data()+8,bytes.data(),16);
   if(!matched)++failures;lookupSeen=true;
-  logFile->event("motion_collider_lookup_suppressed","\"ready_sample\":"+std::to_string(readySample)+",\"entity\":"+std::to_string(scopeKey.entity)+",\"world\":"+hex(scopeKey.world)+",\"caller\":\"0x3eff42\",\"original_resource_present\":"+(result?"true":"false")+",\"event_matches\":"+(matched?"true":"false")+",\"returned_null\":true");
+  logFile->event("motion_collider_lookup_suppressed","\"ready_sample\":"+std::to_string(readySample)+",\"entity\":"+std::to_string(scopeKey.entity)+",\"world\":"+hex(scopeKey.world)+",\"caller\":\"0x3f02c2\",\"original_resource_present\":"+(result?"true":"false")+",\"event_matches\":"+(matched?"true":"false")+",\"returned_null\":true");
  }catch(...){++failures;}
  // This exact caller belongs to the owned entity iteration even on log/read
  // failure; returning null asks native code to remove only that query's collider.
  return nullptr;
 }
 inline void install(){
- const auto bytes=parsePattern(lookupPattern);const auto call=baseAddress+0x3eff3d;
+ const auto bytes=parsePattern(lookupPattern);const auto call=baseAddress+0x3f02bd;
  if(scan(reinterpret_cast<const uint8_t*>(baseAddress+lookupRva),bytes.size(),bytes)!=std::vector<size_t>{0}||read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+lookupRva)throw std::runtime_error("collider cancellation lookup signature/caller differs");
  if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+lookupRva),reinterpret_cast<void*>(&lookup),reinterpret_cast<void**>(&originalLookup))!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+lookupRva))!=MH_OK)throw std::runtime_error("collider cancellation lookup hook failed");
- lookupEnabled=true;logFile->event("motion_collider_lookup_enabled","\"rva\":\"0x213930\",\"pattern\":"+jsonString(lookupPattern)+",\"caller\":\"0x3eff42\",\"cancel_after\":"+std::to_string(cancelAfter));
+ lookupEnabled=true;logFile->event("motion_collider_lookup_enabled","\"rva\":\"0x213ad0\",\"pattern\":"+jsonString(lookupPattern)+",\"caller\":\"0x3f02c2\",\"cancel_after\":"+std::to_string(cancelAfter));
 }
 // remote: another player's weapon as their mod sent it (sequence_collider_observer.hpp remoteMelee) - no lead from the
 // local weapon's last poses and no sweep from the tip (its length is not sent).

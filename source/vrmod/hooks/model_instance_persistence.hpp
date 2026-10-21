@@ -14,7 +14,7 @@ inline void beginHold(uint32_t handle,uintptr_t view,uintptr_t resource){
         // Same native destructor as d9f40; clear only our lifetime-owned handle
         // so native movement/retirement sees the documented no-SDF sentinel.
         using SdfRemove=void(__fastcall*)(void*,uint32_t);
-        reinterpret_cast<SdfRemove>(baseAddress+0x15a540)(reinterpret_cast<void*>(sdf),id);
+        reinterpret_cast<SdfRemove>(baseAddress+0x15a640)(reinterpret_cast<void*>(sdf),id);
         *reinterpret_cast<uint32_t*>(clone+layout::modelSdf)=0;
         if(read<uint64_t>(sdf+0x78)!=count-1)throw std::runtime_error("owned SDF detach count mismatch");
         logFile->event("model_instance_sdf_detached","\"handle\":"+std::to_string(id)+",\"count_before\":"+std::to_string(count)+",\"count_after\":"+std::to_string(count-1)+",\"only_owned_handle_cleared\":true");

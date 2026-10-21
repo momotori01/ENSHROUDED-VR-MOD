@@ -14,7 +14,7 @@
 namespace meleeTriggerObserver {
 using Trigger=uint64_t(__fastcall*)(void*,void*,void*);
 inline Trigger original=nullptr;inline bool enabled=false;
-constexpr uintptr_t rva=0x2c5320,callerRva=0x2d9de8;
+constexpr uintptr_t rva=0x2c54c0,callerRva=0x2d9f88;
 constexpr const char* pattern="48 8B C4 4C 89 40 18 48 89 48 08 55 53 56 57 41 54 41 55 41 57 48 8D A8 E8 FE FF FF 48 81 EC E0 01 00 00 8B 79";
 inline std::atomic<unsigned> logged{0},calls{0},inside{0};
 struct Inside {Inside(){++inside;}~Inside(){--inside;}};

@@ -131,7 +131,7 @@ __declspec(noinline) void __fastcall update(void* context){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());callbacks.fetch_add(1);
     original(context);
     {const ObserverLastError lastError;
-     if(accepting.load()&&caller==baseAddress+0x382fab){
+     if(accepting.load()&&caller==baseAddress+0x38314b){
         try{capture(context);}catch(const std::exception& error){{std::lock_guard<std::mutex> lock(snapshotMutex);latest.milliseconds=0;}if(failures.fetch_add(1)<3)try{
             logFile->event("equipment_observer_read_failure","\"reason\":"+jsonString(error.what()));}catch(...){} }
      }}
@@ -139,13 +139,13 @@ __declspec(noinline) void __fastcall update(void* context){
 }
 inline void install(){
     const char* text=patternText;
-    const auto bytes=parsePattern(text);target=reinterpret_cast<void*>(baseAddress+0x383690);
-    const auto call=baseAddress+0x382fa6;
+    const auto bytes=parsePattern(text);target=reinterpret_cast<void*>(baseAddress+0x383830);
+    const auto call=baseAddress+0x383146;
     if(scan(static_cast<const uint8_t*>(target),bytes.size(),bytes)!=std::vector<size_t>{0}||read<uint8_t>(call)!=0xe8||
        uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=reinterpret_cast<uintptr_t>(target))throw std::runtime_error("equipment observer signature mismatch");
     if(MH_CreateHook(target,reinterpret_cast<void*>(&update),reinterpret_cast<void**>(&original))!=MH_OK)throw std::runtime_error("equipment observer hook creation failed");
     accepting=true;if(MH_EnableHook(target)!=MH_OK){accepting=false;throw std::runtime_error("equipment observer enable failed");}enabled=true;
-    logFile->event("equipment_observer_enabled","\"rva\":\"0x383690\",\"caller_rva\":\"0x382fab\",\"max_samples\":20,\"continuous\":"+std::string(continuous?"true":"false")+",\"read_only\":true,\"pattern\":"+jsonString(text));
+    logFile->event("equipment_observer_enabled","\"rva\":\"0x383830\",\"caller_rva\":\"0x38314b\",\"max_samples\":20,\"continuous\":"+std::string(continuous?"true":"false")+",\"read_only\":true,\"pattern\":"+jsonString(text));
 }
 inline void disable(){
     accepting=false;if(!enabled)return;

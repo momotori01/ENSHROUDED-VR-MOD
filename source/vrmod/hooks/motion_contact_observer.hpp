@@ -8,9 +8,9 @@ inline std::array<std::atomic<unsigned>,3> baselineSamples{},actionSamples{};
 using Callback=void*(__fastcall*)(void*,void*,void*);
 struct Hook {const char* name;uintptr_t rva;const char* pattern;Callback original=nullptr;bool enabled=false;};
 inline std::array<Hook,3> hooks{{
- {"startQuery",0x3e58d0,"4C 89 44 24 18 53 55 57 41 54 41 55 41 57 48 83 EC"},
- {"GetSlotTransform",0x35c750,"40 53 56 41 54 41 55 41 56 48 81 EC A0 00 00 00"},
- {"fetchQueryResult",0x3da5e0,"4C 89 44 24 18 53 55 57 41 54 41 55 41 57 48 81 EC 88 00 00 00 4C"}
+ {"startQuery",0x3e5c50,"4C 89 44 24 18 53 55 57 41 54 41 55 41 57 48 83 EC"},
+ {"GetSlotTransform",0x35c8ec,"40 53 56 41 54 41 55 41 56 48 81 EC A0 00 00 00"},
+ {"fetchQueryResult",0x3da960,"4C 89 44 24 18 53 55 57 41 54 41 55 41 57 48 81 EC 88 00 00 00 4C"}
 }};
 inline constexpr std::array<std::array<unsigned,8>,3> sizes{{{{4,2,1,56,4,0,0,0}},{{56,12,1,4,0,0,0,0}},{{4,12,12,1,1,1,4,4}}}};
 inline constexpr unsigned counts[]{5,4,8};

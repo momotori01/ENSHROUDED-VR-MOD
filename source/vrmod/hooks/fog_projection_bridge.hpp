@@ -14,17 +14,17 @@ struct Scope {
 };
 inline void verify(){
  if(!policy)return;
- const auto* call=reinterpret_cast<const uint8_t*>(baseAddress+0x1bb25d);int32_t delta=0;std::memcpy(&delta,call+1,4);   // 1.0: 1babc0 calls 1180f0 there (June 192f68 -> e4a50)
- if(*call!=0xe8||reinterpret_cast<uintptr_t>(call+5)+delta!=baseAddress+0x118190)
+ const auto* call=reinterpret_cast<const uint8_t*>(baseAddress+0x1bb3ad);int32_t delta=0;std::memcpy(&delta,call+1,4);   // 1.0: 1babc0 calls 1180f0 there (June 192f68 -> e4a50)
+ if(*call!=0xe8||reinterpret_cast<uintptr_t>(call+5)+delta!=baseAddress+0x118270)
   throw std::runtime_error("fog projection callsite differs");
  // 1.0: the fog stage's camera is the render arguments +0x38 as before, now loaded from the frame (rbp+2b6c8) at 1386f7.
  const auto cameraLoad=parsePattern("48 8B 85 C8 B6 02 00 48 83 C0 38 48 89 85 68 16 00 00");
- if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0x138797),cameraLoad.size(),cameraLoad)!=std::vector<size_t>{0})
+ if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0x138897),cameraLoad.size(),cameraLoad)!=std::vector<size_t>{0})
   throw std::runtime_error("fog camera owner load differs");
  logFile->event("fog_projection_enabled","\"policy\":"+std::to_string(policy)+",\"private_eye_only\":true");
 }
 void convert(void* output,const void* camera,uintptr_t caller) noexcept {
- if(!policy||!current||caller!=baseAddress+0x1bb262)return;
+ if(!policy||!current||caller!=baseAddress+0x1bb3b2)return;
  try{
   const ObserverLastError preserve;auto& c=*current;
   if(failed||c.eye>1||GetCurrentThreadId()!=c.thread||camera!=c.camera||!c.descriptor||eyeProjection!=c.descriptor||++c.calls!=1)

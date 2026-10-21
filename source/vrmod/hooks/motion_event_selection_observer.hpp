@@ -23,7 +23,7 @@ inline void restrictToRetained(const motion::EventActionKey& key){
 inline bool shadowRequested=false;inline std::atomic<unsigned> shadowCalls{0};
 inline Select original=nullptr;inline bool requested=false,enabled=false;inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},samples{0},failures{0};
-constexpr uintptr_t rva=0x2139b0,callerRva=0x224384;
+constexpr uintptr_t rva=0x213b50,callerRva=0x224524;
 constexpr const char* pattern="48 89 5c 24 18 48 89 6c 24 20 56 48 83 ec 50 f6 82 b1 01";
 inline evr::motion::EventActionKey actionKey(const std::array<uint8_t,3104>& b,uintptr_t world,uint32_t entity){
  evr::motion::EventActionKey k;k.world=world;k.entity=entity;std::memcpy(&k.sequence,b.data(),4);std::memcpy(&k.item,b.data()+0x38,4);std::memcpy(&k.trigger,b.data()+8,8);k.call=b[20];k.sub=b[0x170];return combatEpochGate::action(k);
@@ -1027,7 +1027,7 @@ __declspec(noinline) uintptr_t __fastcall select(void* output,const void* actor,
    if(const auto size=read<uint32_t>(event+8);size>=120&&size<=4096)o<<",\"tail\":"<<jsonString(sequenceAssetObserver::blob<24>(data+96));else if(size>=104&&size<=4096)o<<",\"tail\":"<<jsonString(sequenceAssetObserver::blob<8>(data+96));
    if(type==0x64b5dc20)o<<",\"spawn_impact\":"<<jsonString(sequenceAssetObserver::blob<488>(data));o<<'}';
   }
-  o<<"],\"state_tags\":"<<jsonString(sequenceAssetObserver::blob<128>(reinterpret_cast<uintptr_t>(before.data()+0xec)))<<",\"actor_unchanged\":"<<(stable?"true":"false")<<",\"milliseconds\":"<<GetTickCount64()<<",\"thread\":"<<GetCurrentThreadId()<<",\"caller\":\"0x224384\",\"read_only\":true,\"return_unchanged\":true";
+  o<<"],\"state_tags\":"<<jsonString(sequenceAssetObserver::blob<128>(reinterpret_cast<uintptr_t>(before.data()+0xec)))<<",\"actor_unchanged\":"<<(stable?"true":"false")<<",\"milliseconds\":"<<GetTickCount64()<<",\"thread\":"<<GetCurrentThreadId()<<",\"caller\":\"0x224524\",\"read_only\":true,\"return_unchanged\":true";
   logFile->event(observation.record?"motion_event_selection":"motion_event_selection_budget_witness",o.str());
   if(observation.record)++recordedSamples;else ++witnessSamples;
   }catch(const std::exception& e){if(failures.fetch_add(1)<3)logFile->event("motion_event_recording_failure","\"reason\":"+jsonString(e.what()));}
@@ -1049,7 +1049,7 @@ inline void install(){
  const auto bytes=parsePattern(pattern);const auto call=baseAddress+callerRva-5;
  if(scan(reinterpret_cast<const uint8_t*>(baseAddress+rva),bytes.size(),bytes)!=std::vector<size_t>{0}||read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+rva)throw std::runtime_error("native event selection signature differs");
  if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+rva),reinterpret_cast<void*>(&select),reinterpret_cast<void**>(&original))!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("native event selection hook failed");
- enabled=true;accepting=true;logFile->event("motion_event_selection_enabled","\"rva\":\"0x2139b0\",\"caller\":\"0x224384\",\"pattern\":"+jsonString(pattern)+",\"read_only\":"+(retimeRequested?"false":"true")+",\"one_impact_retime\":"+(retimeRequested?"true":"false"));
+ enabled=true;accepting=true;logFile->event("motion_event_selection_enabled","\"rva\":\"0x213b50\",\"caller\":\"0x224524\",\"pattern\":"+jsonString(pattern)+",\"read_only\":"+(retimeRequested?"false":"true")+",\"one_impact_retime\":"+(retimeRequested?"true":"false"));
 }
 inline void disable(){
  accepting=false;if(!enabled)return;

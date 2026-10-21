@@ -20,7 +20,7 @@ inline bool requested=false,enabled=false;
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},casts{0},applied{0},failures{0};
 inline std::atomic<unsigned> entered{0},updates{0},left{0},elsewhere{0};   // the handler's calls by mode, and from another caller
-constexpr uintptr_t rva=0x388210,caller=0x39a577;
+constexpr uintptr_t rva=0x3883b0,caller=0x39a717;
 constexpr const char* pattern="48 89 5C 24 08 57 48 83 EC 30 48 8B 59 08 48 8B F9 0F B6 CA 84 D2 0F 84";
 // context: +0 StateMachine*, +18 the tick's keen::fishing::Input, +38 the byte the handler asks a transition with.
 constexpr uintptr_t machineCharge=0x44,contextWanted=0x38;constexpr uint8_t updateMode=1,castTransition=1;

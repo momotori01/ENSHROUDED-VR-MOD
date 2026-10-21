@@ -156,7 +156,7 @@ __declspec(noinline) void __fastcall build(void* output,void* controller){
     callbacks.fetch_add(1,std::memory_order_acq_rel);
     original(output,controller);
     {const ObserverLastError lastError;
-     if(accepting.load(std::memory_order_acquire)&&caller==baseAddress+0x2b2af7){
+     if(accepting.load(std::memory_order_acquire)&&caller==baseAddress+0x2b2c97){
         try{observe(callerRsp,output,controller);}
         catch(const std::exception& error){
             failures.fetch_add(1);std::lock_guard<std::mutex> lock(mutex);lastFailure=error.what();
@@ -300,15 +300,15 @@ inline void install(){
         logFile->event("optional_hook_skipped","\"hook\":\"camera_control\",\"reason\":"+jsonString(e.what())+",\"heading\":\"native_camera\"");}
     const char* signature="48 8B C4 48 89 58 08 48 89 78 10 55 48 8D 68 A1 48 81 EC F0 00 00 00 0F 10 82 B0";
     auto bytes=parsePattern(signature);
-    const uint8_t call[]{0xe8,0x99,0xc7,0xbc,0x00};   // build 25988036: call 0xe7f290 at 0x2b2af2 (1.0.0.1: e8 99 c4 bc 00, 0xe7ec70 at 0x2b27d2; 1.0: e8 79 c4 bc 00)
-    target=reinterpret_cast<void*>(baseAddress+0xe7f290);
+    const uint8_t call[]{0xe8,0xb9,0xf1,0xbc,0x00};   // build 26082781: call 0xe81e50 at 0x2b2c92 (25988036: e8 99 c7 bc 00, 0xe7f290 at 0x2b2af2) (1.0.0.1: e8 99 c4 bc 00, 0xe7ec70 at 0x2b27d2; 1.0: e8 79 c4 bc 00)
+    target=reinterpret_cast<void*>(baseAddress+0xe81e50);
     if(scan(static_cast<const uint8_t*>(target),bytes.size(),bytes)!=std::vector<size_t>{0}||
-       std::memcmp(reinterpret_cast<void*>(baseAddress+0x2b2af2),call,sizeof(call)))throw std::runtime_error("unshaken camera constructor/caller signature changed");
+       std::memcmp(reinterpret_cast<void*>(baseAddress+0x2b2c92),call,sizeof(call)))throw std::runtime_error("unshaken camera constructor/caller signature changed");
     if(MH_CreateHook(target,reinterpret_cast<void*>(&build),reinterpret_cast<void**>(&original))!=MH_OK)throw std::runtime_error("unshaken camera hook creation failed");
     accepting=true;
     if(MH_EnableHook(target)!=MH_OK){accepting=false;throw std::runtime_error("unshaken camera hook enable failed");}
     enabled=true;
-    logFile->event("root_camera_hook_enabled","\"rva\":\"0xe7f290\",\"caller_rva\":\"0x2b2af7\",\"query_stack_offset\":96,\"mode\":"+std::to_string(mode)+",\"pattern\":"+jsonString(signature));
+    logFile->event("root_camera_hook_enabled","\"rva\":\"0xe81e50\",\"caller_rva\":\"0x2b2c97\",\"query_stack_offset\":96,\"mode\":"+std::to_string(mode)+",\"pattern\":"+jsonString(signature));
     // 2026-10-16: the game updates its camera only while its window is in front (two Mock auto starts ended here, the
     // window came to the front 4 and 12 s after the world). The three seconds count only while it is; two minutes at most.
     const auto start=GetTickCount64();auto deadline=start+3000;uint64_t behind=0;

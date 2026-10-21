@@ -28,10 +28,10 @@
 namespace vfxSpringRebase {
 using Upload=void*(__fastcall*)(void*,void*,void*,void*);
 inline Upload original=nullptr;inline bool enabled=false;inline std::atomic<bool> failed{false};
-constexpr uintptr_t rva=0x10150e0,callerRva=0x19ee4e;
+constexpr uintptr_t rva=0x1017d40,callerRva=0x19ef9e;
 constexpr const char* pattern="48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 81 EC 90 00 00 00 49 8B E9 49 8B";
 constexpr const char* callerPattern="44 39 83 68 07 00 00";   // 19ee29: cmp dword ptr [rbx+768], r8d (the copy loop's count)
-constexpr uintptr_t callerPatternAt=0x19ee69;
+constexpr uintptr_t callerPatternAt=0x19efb9;
 constexpr size_t instanceBytes=80,sourceStride=0x54,sourceInstance=4,recordBytes=0x2c;
 constexpr uintptr_t countAt=0x768,capacityAt=0x6c0,bufferAt=0x6c8,sourceAt=0x6b8,listsAt=0x6d8,listStride=0x28;
 struct Written {uint64_t serial=0;uintptr_t vfx=0;uint32_t count=0;std::array<uint32_t,2> base{};std::array<bool,2> has{};};
@@ -124,7 +124,7 @@ inline void install() noexcept {
         const auto bytes=parsePattern(pattern),after=parsePattern(callerPattern);const auto site=baseAddress+rva,call=baseAddress+callerRva-5;
         if(scan(reinterpret_cast<const uint8_t*>(site),bytes.size(),bytes)!=std::vector<size_t>{0}||read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=site||
            scan(reinterpret_cast<const uint8_t*>(baseAddress+callerPatternAt),after.size(),after)!=std::vector<size_t>{0}||
-           read<uint32_t>(baseAddress+0x19edd9+2)!=capacityAt||read<uint32_t>(baseAddress+0x1af80b+4)!=listsAt+8||read<uint32_t>(baseAddress+0x1af813+4)!=listsAt)
+           read<uint32_t>(baseAddress+0x19ef29+2)!=capacityAt||read<uint32_t>(baseAddress+0x1af95b+4)!=listsAt+8||read<uint32_t>(baseAddress+0x1af963+4)!=listsAt)
             throw std::runtime_error("spring instance upload signature/caller changed");
         if(MH_CreateHook(reinterpret_cast<void*>(site),reinterpret_cast<void*>(&upload),reinterpret_cast<void**>(&original))!=MH_OK||
            MH_EnableHook(reinterpret_cast<void*>(site))!=MH_OK)throw std::runtime_error("spring instance upload hook failed");

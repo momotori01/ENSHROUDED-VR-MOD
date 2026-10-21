@@ -9,11 +9,11 @@ struct Entry {uintptr_t function,caller;const char* pattern;void* original=nullp
 // View+0xb40), the water (0x1ec5b0, View+0xb48) and the post object's asynchronous preparation (0xa4c220, the same
 // one-instruction flag read as June's 9625b0). The matcher had paired them with other calls.
 std::array<Entry,5> entries{{
-    {0x11dd70,0x12a42b,"48 8D 81 48 6D 01 00 48 8D 88 B0 00 00 00 48 3B"},
-    {0x47d60,0x12a43f,"48 89 5C 24 08 48 89 74 24 10 57 48 81 EC A0 00"},
-    {0x1b2080,0x12a458,"40 53 48 83 EC 40 48 8B 19 48 8D 4C 24 20 44 8B"},
-    {0x1ec900,0x12a471,"40 53 48 83 EC 40 48 85 C9 0F 84 F5 00 00 00 48"},
-    {0xa4c860,0x12a486,"0F B6 81 FC 00 00 00 C3"}}};
+    {0x11de60,0x12a52b,"48 8D 81 48 6D 01 00 48 8D 88 B0 00 00 00 48 3B"},
+    {0x47d60,0x12a53f,"48 89 5C 24 08 48 89 74 24 10 57 48 81 EC A0 00 00 00 48 8B F9 48 85 C9"},
+    {0x1b21d0,0x12a558,"40 53 48 83 EC 40 48 8B 19 48 8D 4C 24 20 44 8B"},
+    {0x1eca60,0x12a571,"40 53 48 83 EC 40 48 85 C9 0F 84 ? ? ? ? 48"},
+    {0xa4e3a0,0x12a586,"0F B6 81 FC 00 00 00 C3"}}};
 struct Observation {size_t entry=0;uintptr_t object=0;bool result=false;};
 struct Scope {std::array<Observation,8> observations{};size_t count=0;bool overflow=false;};
 thread_local Scope* current=nullptr;

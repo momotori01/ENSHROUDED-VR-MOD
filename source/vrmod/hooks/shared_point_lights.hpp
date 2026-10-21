@@ -27,8 +27,8 @@ inline bool decalsRequested=false;inline std::atomic<unsigned> decalFailures{0},
 // own shifted copy. This borrowing stays opt-in until an effect is found that it does bring into the other eye.
 using DecalDescriptor=void*(__fastcall*)(void*,void*);
 inline DecalDescriptor originalDecalDescriptor=nullptr;inline bool decalDescriptorEnabled=false;
-constexpr uintptr_t decalDescriptorRva=0x11fc70;constexpr std::array<uintptr_t,2> decalDescriptorCallers{0x12ddc9,0x12ddc9};   // 1.0: built once, by the render itself before the shading bindings
-constexpr const char* decalDescriptorPattern="48 83 EC 58 48 83 BA 80 05 00 00 00 74 41";
+constexpr uintptr_t decalDescriptorRva=0x11fd60;constexpr std::array<uintptr_t,2> decalDescriptorCallers{0x12dec9,0x12dec9};   // 1.0: built once, by the render itself before the shading bindings
+constexpr const char* decalDescriptorPattern="48 83 EC 58 48 83 BA 80 05 00 00 00 ? ? 0F 10 82 80 05 00 00 8B 82 C8 00 00 00 C6 04 24 09 0F 11 44 24 08 48 C7 44 24 18 00 00 00 00 0F";
 // The point lights have the same trap (2026-10-14, user: "the brightness of the walls differs between the eyes here
 // and there - that is what feels wrong"; Mock self-test game-20261014-184902: a warm light on the logs in one eye
 // only, the brighter eye changing from place to place). f7c50 hands View+918 to four users through eec60: 10aaf0
@@ -44,10 +44,10 @@ constexpr const char* decalDescriptorPattern="48 83 EC 58 48 83 BA 80 05 00 00 0
 using ShadingBindings=uint64_t(__fastcall*)(void*,void*,void*,void*,void*,void*,uint64_t,void*,uint64_t);
 inline ShadingBindings originalShading=nullptr;inline bool shadingEnabled=false;
 inline std::atomic<unsigned> lightDescriptorFailures{0},lightDescriptorStates{0};
-constexpr uintptr_t shadingRva=0x13d810,shadingCaller=0x130405;
-constexpr const char* shadingPattern="4C 89 44 24 18 48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57";   // 1.0: 8 arguments (9 before); the 9-argument detour passes them on
-constexpr uintptr_t rva=0x65200,callerRva=0x131a9d;
-constexpr const char* pattern="48 8B C4 48 89 58 08 55 56 57 41 54 41 55 41 56 41 57";
+constexpr uintptr_t shadingRva=0x13d910,shadingCaller=0x130505;
+constexpr const char* shadingPattern="4C 89 44 24 18 48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 A8 9D FF FF";   // 1.0: 8 arguments (9 before); the 9-argument detour passes them on
+constexpr uintptr_t rva=0x65200,callerRva=0x131b9d;
+constexpr const char* pattern="48 8B C4 48 89 58 08 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 68";
 // 1.0 (2026-10-16): the View's lists moved (lights 0x918 -> 0x570, decals 0x928 -> 0x580, fog instances 0x938 -> 0x590; a
 // fourth list at 0x5a0), their capacities (0x7c / 0x80 / 0x84 -> 0xc4 / 0xc8 / 0xcc) and counter ids (0x8e0 / 0x8e4 / 0x8e8 ->
 // 0xb6c / 0xb70 / 0xb74: the reset 107570 against d3bf0). The clustered culling 65170 (called at 1319f8) takes the descriptors at
@@ -604,7 +604,7 @@ inline void install(){
         if(MH_CreateHook(reinterpret_cast<void*>(decalTarget),reinterpret_cast<void*>(&decalDescriptor),reinterpret_cast<void**>(&originalDecalDescriptor))!=MH_OK||
            MH_EnableHook(reinterpret_cast<void*>(decalTarget))!=MH_OK)throw std::runtime_error("decal descriptor hook failed");
         decalDescriptorEnabled=true;
-        logFile->event("shared_decals_hook_enabled","\"rva\":"+hex(decalDescriptorRva)+",\"callers\":[\"0x13ea95\",\"0x1405ce\"],\"pattern\":"+jsonString(decalDescriptorPattern));
+        logFile->event("shared_decals_hook_enabled","\"rva\":"+hex(decalDescriptorRva)+",\"callers\":[\"0x13eb95\",\"0x1406ce\"],\"pattern\":"+jsonString(decalDescriptorPattern));
     }
     logFile->event("shared_point_lights_hook_enabled","\"rva\":"+hex(rva)+",\"caller\":"+hex(callerRva)+",\"pattern\":"+jsonString(pattern));
 }

@@ -58,7 +58,7 @@ using Create=uint32_t(__fastcall*)(void*,const void*,const void*);
 // 1.0 (2026-10-16): the batch transform change is 1150c0 (June c77d0) and takes a fourth byte: not 0 = a jump (the motion
 // history of the model starts again, 1150c0 skips its distance test); 0 = as c77d0 did.
 using Change=void(__fastcall*)(void*,const void*,const void*,uint8_t);
-constexpr uintptr_t changeRva=0x115160;
+constexpr uintptr_t changeRva=0x115240;
 inline void change(void* scene,const void* ids,const void* transforms){reinterpret_cast<Change>(baseAddress+changeRva)(scene,ids,transforms,0);}
 using Mask=void(__fastcall*)(void*,void*,uint32_t);
 using Remove=void(__fastcall*)(void*,const void*);
@@ -82,11 +82,11 @@ inline void dormant(const char* reason,uint32_t selected){
 inline void validate(){
     if(validated)return;
     for(auto e:std::array<std::pair<uintptr_t,const char*>,5>{{
-        {0xfb450,"40 55 57 41 54 41 56 41 57 48 83 ec 30 48 8b 42 08 4d 8b f8"},
-        {0x115160,"48 8b c4 44 88 48 20 4c 89 40 18 55 56 41 55 41 57 48 81 ec 98 00 00 00"},
-        {0x10df20,"48 89 6c 24 20 57 41 54 41 56 48 83 ec 30 45 33 e4 4c 8b f2"},
-        {0xf7030,"44 89 82 14 01 00 00 4c 8b ca 4c 8b c2 48 b8 5f 42 7b 09 ed"},
-        {0x15a540,"85 d2 0f 84 fa 04 00 00 89 54 24 10 4c 8b dc 49 89 4b 08 55"}}}){
+        {0xfb4e0,"40 55 57 41 54 41 56 41 57 48 83 ec 30 48 8b 42 08 4d 8b f8"},
+        {0x115240,"48 8b c4 44 88 48 20 4c 89 40 18 55 56 41 55 41 57 48 81 ec 98 00 00 00"},
+        {0x10e000,"48 89 6c 24 20 57 41 54 41 56 48 83 ec 30 45 33 e4 4c 8b f2"},
+        {0xf70c0,"44 89 82 14 01 00 00 4c 8b ca 4c 8b c2 48 b8 5f 42 7b 09 ed"},
+        {0x15a640,"85 d2 0f 84 ? ? ? ? 89 54 24 10 4c 8b dc 49 89 4b 08 55"}}}){
         const auto p=parsePattern(e.second);
         if(scan(reinterpret_cast<const uint8_t*>(baseAddress+e.first),p.size(),p)!=std::vector<size_t>{0})throw std::runtime_error("motion visual signature mismatch");
         logFile->event("motion_visual_signature","\"rva\":"+hex(e.first)+",\"pattern\":"+jsonString(e.second)+",\"matched\":true");
@@ -319,10 +319,10 @@ inline void prepare(uintptr_t s,uintptr_t v,const game::StableAnchor& anchor,uin
     if(!handle){
         const auto refs=read<uint32_t>(res+0x10);if(!refs||refs==UINT32_MAX)throw std::runtime_error("motion resource reference bound");
         resource=res;guid=read<std::array<uint32_t,4>>(res+0x18);sourceHandle=current.handle;item=current.item;child=current.entity;
-        handle=reinterpret_cast<Create>(baseAddress+0xfb450)(reinterpret_cast<void*>(scene),guid.data(),transform.data());
+        handle=reinterpret_cast<Create>(baseAddress+0xfb4e0)(reinterpret_cast<void*>(scene),guid.data(),transform.data());
         if(!handle||handle==sourceHandle)throw std::runtime_error("motion clone creation failed/aliased");
         auto clone=object(handle);
-        reinterpret_cast<Mask>(baseAddress+0xf7030)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
+        reinterpret_cast<Mask>(baseAddress+0xf70c0)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
         clone=object(handle);
         if(read<uintptr_t>(clone+layout::modelResource)!=res||read<uint32_t>(res+0x10)!=refs+1||read<uint32_t>(clone+layout::modelMask)||read<uint32_t>(clone+layout::modelAuxiliary))
             throw std::runtime_error("motion clone resource/mask/auxiliary mismatch");
@@ -332,7 +332,7 @@ inline void prepare(uintptr_t s,uintptr_t v,const game::StableAnchor& anchor,uin
             const auto sdf=read<uintptr_t>(scene+layout::sceneSdf);const auto count=read<uint64_t>(sdf+0x78);
             if(!count)throw std::runtime_error("motion clone SDF count invalid");
             using SdfRemove=void(__fastcall*)(void*,uint32_t);
-            reinterpret_cast<SdfRemove>(baseAddress+0x15a540)(reinterpret_cast<void*>(sdf),sdfId);
+            reinterpret_cast<SdfRemove>(baseAddress+0x15a640)(reinterpret_cast<void*>(sdf),sdfId);
             *reinterpret_cast<uint32_t*>(object(handle)+layout::modelSdf)=0;
             if(read<uint64_t>(sdf+0x78)!=count-1)throw std::runtime_error("motion clone SDF removal failed");
         }
@@ -464,7 +464,7 @@ inline void disposeActive(){
     const auto clone=object(handle);if(read<uintptr_t>(clone+layout::modelResource)!=resource||read<uint32_t>(clone+layout::modelMask)||read<uint32_t>(clone+layout::modelSdf))throw std::runtime_error("motion visual disposal invariant differs");
     const auto refs=read<uint32_t>(resource+0x10),id=handle;
     std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1};
-    reinterpret_cast<Remove>(baseAddress+0x10df20)(reinterpret_cast<void*>(scene),ids.data());handle=0;poseReady=false;
+    reinterpret_cast<Remove>(baseAddress+0x10e000)(reinterpret_cast<void*>(scene),ids.data());handle=0;poseReady=false;
     const auto gens=read<uintptr_t>(scene+0x1c8);
     const bool invalid=read<uint8_t>(gens+(id&0xffffff))!=uint8_t(id>>24);
     // Resource can be freed if the original item was already unequipped. Read

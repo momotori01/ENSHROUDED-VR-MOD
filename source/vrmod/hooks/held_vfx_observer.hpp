@@ -40,7 +40,7 @@ inline uintptr_t effect(uintptr_t controller,uint32_t key){
     return entry+8;
 }
 inline void capture(uintptr_t caller,uintptr_t sp,void* context,void* query,uint32_t bytes){
-    if(!requested||caller!=0x2b051a)return;
+    if(!requested||caller!=0x2b06ba)return;
     try{
         rootCamera::Sample local;if(!rootCamera::trySnapshot(local)||!local.entity)return;
         if(bytes!=0x68||reinterpret_cast<uintptr_t>(query)!=sp+0x30||read<uintptr_t>(sp+0x30)!=reinterpret_cast<uintptr_t>(context))

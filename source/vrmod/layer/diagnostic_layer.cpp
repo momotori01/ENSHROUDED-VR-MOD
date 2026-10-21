@@ -126,7 +126,7 @@ bool preflightCandidate(const VkInstanceCreateInfo &info, bool &fixture)
     // the render function's first bytes (1.0: 0x129e20; tools/match_functions.py maps it at the next update)
     const uint8_t signature[]{0x4c,0x89,0x4c,0x24,0x20,0x4c,0x89,0x44,0x24,0x18,0x48,0x89,0x54,0x24,0x10,0x48,0x89,0x4c,0x24,0x08};
     if (nt->FileHeader.TimeDateStamp != evr::gameBuild::timeDateStamp || nt->OptionalHeader.SizeOfImage != evr::gameBuild::sizeOfImage ||
-        std::memcmp(base + 0x129ec0, signature, sizeof(signature)))
+        std::memcmp(base + 0x129fc0, signature, sizeof(signature)))
     { note("preflight_disabled", "\"reason\":\"unsupported_loaded_game_build\""); return false; }
     const auto names = diagnostic::extensionNames(info.enabledExtensionCount, info.ppEnabledExtensionNames);
     return std::find(names.begin(), names.end(), "VK_KHR_win32_surface") != names.end() &&

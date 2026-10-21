@@ -375,7 +375,7 @@ def main():
             motion_hands=True,hands_only=True,vfx_transparent_shader=True,body_clip_shader=True,vr_sharpness='game')),encoding='utf-8')
     if not args.launch:p.error('--launch required')
     game=mod.parent/'enshrouded.exe'
-    profile=json.loads((mod/'config/profiles/build25988036.json').read_text())
+    profile=json.loads((mod/'config/profiles/build26082781.json').read_text())
     if hashlib.sha256(game.read_bytes()).hexdigest()!=profile['exe_sha256']:raise ValueError('unsupported game hash')
     launch=json.loads((args.launch/'launch.json').read_text(encoding='utf-8-sig'))
     if args.write_profile:(args.write_profile/'launch.json').unlink()

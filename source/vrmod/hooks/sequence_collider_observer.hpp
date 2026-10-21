@@ -112,7 +112,7 @@ inline std::mutex quotaMutex;inline std::map<std::pair<uint32_t,bool>,unsigned> 
 inline bool requested=false;
 inline std::atomic<unsigned> samples{0},foreignSamples{0},localSamples{0},calls{0},failures{0};
 inline thread_local unsigned currentReadySample=0;
-constexpr uintptr_t callerRva=0x3f02dd;
+constexpr uintptr_t callerRva=0x3f065d;
 inline actionSequenceObserver::Status qualifiedActor(uintptr_t state,const actionSequenceObserver::Status& fallback){
  const auto world=read<uintptr_t>(state+0x30);if(!world||!fallback.entity)return {};
  return actionSequenceObserver::forWorld(world,fallback.entity);
@@ -206,7 +206,7 @@ inline void ready(uintptr_t sp,void* context,void* query,uint32_t bytes,bool jun
 // at zeros), handed to ready() / the finishes as before, and the two transform slots the borrowing put in the copy are
 // written into the game's query - for this one iteration; the next advance puts the originals back.
 namespace colliderSweep {
-constexpr uintptr_t firstReturn=0x32c271,nextReturn=0x32c45e;constexpr uint32_t queryBytes=0x38;constexpr uintptr_t queryAt=0x80;
+constexpr uintptr_t firstReturn=0x32c411,nextReturn=0x32c5fe;constexpr uint32_t queryBytes=0x38;constexpr uintptr_t queryAt=0x80;
 inline const std::array<uint8_t,16> noCollider{};
 inline thread_local std::array<uintptr_t,10> shape{};inline thread_local uintptr_t* game=nullptr;inline thread_local bool open=false;
 inline std::atomic<unsigned> iterations{0},misplaced{0},worldless{0};

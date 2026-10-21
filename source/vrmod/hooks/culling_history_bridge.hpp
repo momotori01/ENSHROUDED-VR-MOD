@@ -38,10 +38,10 @@ inline int keepGenerated=-1;
 inline std::atomic<unsigned> keptGenerated{0},keepFallbacks{0};
 struct Hook {uintptr_t rva,caller;const char* pattern;bool enabled=false;};
 inline std::array<Hook,4> hooks{{
-    {0xaaaf0,0xad36b,"48 89 5C 24 08 57 48 83 EC 40 48 8B DA 48 8B F9 48 83"},
-    {0xad080,0x12ece6,"4C 89 4C 24 20 48 89 54 24 10 48 89 4C 24 08"},
-    {0xaae60,0x12a40f,"40 55 53 57 41 55 41 56 41 57 48 8D 6C 24 A8 48 81 EC"},
-    {0xaac50,0x12a423,"48 83 EC 38 48 83 C2 38 C7 44 24 20 00 00 00 00 41 B9 04 00 00 00 45 33 C0"}
+    {0xaab60,0xad3db,"48 89 5C 24 08 57 48 83 EC 40 48 8B DA 48 8B F9 48 83"},
+    {0xad0f0,0x12ede6,"4C 89 4C 24 20 48 89 54 24 10 48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 68 F5 FE FF B8 98 0B 01 00 E8 ? ? ? ? 48 2B"},
+    {0xaaed0,0x12a50f,"40 55 53 57 41 55 41 56 41 57 48 8D 6C 24 A8 48 81 EC"},
+    {0xaacc0,0x12a523,"48 83 EC 38 48 83 C2 38 C7 44 24 20 00 00 00 00 41 B9 04 00 00 00 45 33 C0"}
 }};
 inline uintptr_t address(const std::array<uint8_t,16>& h){return read<uintptr_t>(reinterpret_cast<uintptr_t>(h.data()));}
 inline uint16_t index(const std::array<uint8_t,16>& h){return read<uint16_t>(reinterpret_cast<uintptr_t>(h.data())+8);}
@@ -58,7 +58,7 @@ inline void release(State& s){
     if(!s.graph)return;
     for(int eye=1;eye>=0;--eye)if(address(s.handles[eye])){
         const auto id=index(s.handles[eye]);object(s.graph,s.handles[eye]);
-        reinterpret_cast<Free>(baseAddress+0x1011880)(reinterpret_cast<void*>(s.graph),s.handles[eye].data());
+        reinterpret_cast<Free>(baseAddress+0x10144e0)(reinterpret_cast<void*>(s.graph),s.handles[eye].data());
         if(address(s.handles[eye]))throw std::runtime_error("native culling buffer handle not cleared");
         logFile->event("culling_history_released","\"eye\":"+std::to_string(eye)+",\"index\":"+std::to_string(id)+
             ",\"substitutions\":"+std::to_string(s.substitutions[eye])+",\"reset_commands\":"+std::to_string(s.resets[eye]));
@@ -73,9 +73,9 @@ inline void release(State& s){
 }
 inline void create(State& s,uintptr_t scene){
     for(const auto& entry:std::array<std::pair<uintptr_t,const char*>,4>{{
-        {0x100caa0,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 49 8B E8 48 8D"},
-        {0x1011880,"48 89 74 24 18 48 89 7C 24 20 41 57 48 83 EC 20"},
-        {0x1010800,"48 8B 02 44 0F B7 42 08 0F 10 02 4D 03 C0"},
+        {0x100f700,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 49 8B E8 48 8D"},
+        {0x10144e0,"48 89 74 24 18 48 89 7C 24 20 41 57 48 83 EC 20"},
+        {0x1013460,"48 8B 02 44 0F B7 42 08 0F 10 02 4D 03 C0"},
         {0x7cb10,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 48 8B F2"}}}){
         const auto p=parsePattern(entry.second);
         if(scan(reinterpret_cast<const uint8_t*>(baseAddress+entry.first),p.size(),p)!=std::vector<size_t>{0})
@@ -107,7 +107,7 @@ inline void create(State& s,uintptr_t scene){
     // f8dbd0 creates an UNBOUND buffer for a later allocation-group binding.
     std::array<uint8_t,32> descriptor{};std::memcpy(descriptor.data(),&bytes,8);std::memcpy(descriptor.data()+8,&flags,4);
     for(unsigned eye=0;eye<2;eye++){
-        reinterpret_cast<CreateBuffer>(baseAddress+0x100caa0)(s.handles[eye].data(),reinterpret_cast<void*>(s.graph),descriptor.data());
+        reinterpret_cast<CreateBuffer>(baseAddress+0x100f700)(s.handles[eye].data(),reinterpret_cast<void*>(s.graph),descriptor.data());
         const auto owned=object(s.graph,s.handles[eye]);
         if(!owned||owned==object(s.graph,s.source)||(eye&&owned==object(s.graph,s.handles[0])))throw std::runtime_error("private culling buffers alias");
         const auto allocation=read<uint32_t>(owned+0x14);
@@ -141,7 +141,7 @@ void* __fastcall get(void* output,void* manager){
            read<uint64_t>(reinterpret_cast<uintptr_t>(output)+0x90)!=0||read<uint64_t>(reinterpret_cast<uintptr_t>(output)+0x98)!=uint64_t(s.slots)*4)
             throw std::runtime_error("native culling output is not expected visibility history");
         std::array<uint8_t,32> replacement{};
-        reinterpret_cast<Get>(baseAddress+0x1010800)(replacement.data(),s.handles[currentEye].data());
+        reinterpret_cast<Get>(baseAddress+0x1013460)(replacement.data(),s.handles[currentEye].data());
         if(!s.initialized[currentEye]){fill(s,unsigned(currentEye),prepareGraph,0,s.slots);s.initialized[currentEye]=true;}
         if(fillOnly){++prepareGets;
             if(!s.fillOnlyObserved[currentEye]){s.fillOnlyObserved[currentEye]=true;

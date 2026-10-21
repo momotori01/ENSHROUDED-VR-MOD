@@ -26,7 +26,7 @@ using Handle=std::array<uint8_t,16>;
 using Writeback=void(__fastcall*)(void*,void*,void*);
 inline Writeback original=nullptr;
 inline bool enabled=false,allocationHooked=false;inline std::atomic<bool> failed{false};inline uint32_t marker=evr::vfx::decalMarkerInto;
-constexpr uintptr_t rva=0x1aed70,callerRva=0x131856,payloadCaller=0x1af08f;
+constexpr uintptr_t rva=0x1aeec0,callerRva=0x131956,payloadCaller=0x1af1df;
 constexpr const char* pattern="48 8B C4 55 53 56 41 56 48 8D A8 F8 FE FF FF 48 81 EC E8 01 00 00";
 constexpr size_t parameterBytes=0x480,objectBytes=0x400,target=0x1c8,countAt=0x248,counterAt=0x24c;
 constexpr std::array<size_t,3> otherPasses{0x200,0x278,0x2b0};constexpr size_t decalPass=0x240;
@@ -41,7 +41,7 @@ constexpr uintptr_t viewDecals=0x580,viewDecalCapacity=0xc8,viewDecalCounter=0xb
 // RenderDoc game-20261019-115549: both eyes' scatter reads buffer 187, one blade 0.522 in the left eye, 0.652 in the right).
 // The eye gets its own copy like the decals: writeEyeSecond. EVR_SECOND_REBASE=0: borrowed as before.
 constexpr size_t secondPass=0x278,secondTarget=0x1f0,secondCountAt=0x250,secondCounterAt=0x254;
-constexpr uintptr_t secondPayloadCaller=0x1af2d5,viewSecond=0x590,viewSecondCapacity=0xcc,viewSecondCounter=0xb74;
+constexpr uintptr_t secondPayloadCaller=0x1af425,viewSecond=0x590,viewSecondCapacity=0xcc,viewSecondCounter=0xb74;
 inline bool secondEnabled=false;inline std::atomic<uint64_t> eyeSecondWrites{0};inline std::atomic<bool> secondFailed{false};
 struct Source {PairResources* pair=nullptr;uint64_t serial=0;uintptr_t view=0;std::array<uint8_t,objectBytes> object{};std::array<uint8_t,parameterBytes> parameters{};bool ready=false;};
 inline thread_local Source source;

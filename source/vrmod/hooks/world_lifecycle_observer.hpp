@@ -111,7 +111,7 @@ __declspec(noinline) void __fastcall inputBackendDestroy(void* allocator,void* b
  ++callbacks;const auto number=++inputExitCalls;const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress;
  std::string saved;
  {const ObserverLastError preserve;try{
-  if(number!=1||caller!=0xf97414)throw std::runtime_error("unexpected input backend destruction scope");
+  if(number!=1||caller!=0xf99fd4)throw std::runtime_error("unexpected input backend destruction scope");
   const auto object=reinterpret_cast<uintptr_t>(backend),manager=read<uintptr_t>(object);
   if(!manager||read<uintptr_t>(manager+0x48)!=object)throw std::runtime_error("input backend has different native manager owner");
   std::ostringstream s;s<<"\"call\":"<<number<<",\"caller\":"<<hex(caller)<<",\"thread\":"<<GetCurrentThreadId()<<",\"allocator\":"<<hex(reinterpret_cast<uintptr_t>(allocator))<<",\"backend\":"<<hex(object)<<",\"manager\":"<<hex(manager)<<",\"module\":"<<hex(read<uintptr_t>(object+8))<<",\"api\":["<<hex(read<uintptr_t>(object+0x10))<<','<<hex(read<uintptr_t>(object+0x18))<<','<<hex(read<uintptr_t>(object+0x20))<<"],\"connected\":[";
@@ -269,16 +269,16 @@ __declspec(noinline) uintptr_t __fastcall preclose(void* root){
  return result;
 }
 inline std::array<Hook,8> hooks{{
- {0x976bc0,"40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 B8 FE FF FF",reinterpret_cast<void*>(&create),reinterpret_cast<void**>(&originalCreate)},
- {0x995050,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 40 80 39 03 48",reinterpret_cast<void*>(&destroyRoot),reinterpret_cast<void**>(&originalRoot)},
- {0x996940,"48 89 54 24 10 48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 E1 48 81 EC C8 00",reinterpret_cast<void*>(&cleanup),reinterpret_cast<void**>(&originalCleanup)},
- {0x9519f0,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20",reinterpret_cast<void*>(&storage),reinterpret_cast<void**>(&originalStorage)},
- {0x994000,"48 89 5c 24 10 48 89 74 24 18 55 57 41 54 41 55 41 56 48 8d ac 24",reinterpret_cast<void*>(&preclose),reinterpret_cast<void**>(&originalPreclose)},
- {0xf96db0,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 33 ED 48 8B DA 48 8B F1",reinterpret_cast<void*>(&inputBackendDestroy),reinterpret_cast<void**>(&originalInputBackendDestroy)},
+ {0x977f00,"40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 B8 FE FF FF",reinterpret_cast<void*>(&create),reinterpret_cast<void**>(&originalCreate)},
+ {0x996430,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 41 54 41 55 41 56 41 57 48 83 EC 40 80 39 03 48",reinterpret_cast<void*>(&destroyRoot),reinterpret_cast<void**>(&originalRoot)},
+ {0x997d20,"48 89 54 24 10 48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 E1 48 81 EC C8 00",reinterpret_cast<void*>(&cleanup),reinterpret_cast<void**>(&originalCleanup)},
+ {0x952c60,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20",reinterpret_cast<void*>(&storage),reinterpret_cast<void**>(&originalStorage)},
+ {0x9953e0,"48 89 5c 24 10 48 89 74 24 18 55 57 41 54 41 55 41 56 48 8d ac 24",reinterpret_cast<void*>(&preclose),reinterpret_cast<void**>(&originalPreclose)},
+ {0xf99970,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 33 ED 48 8B DA 48 8B F1",reinterpret_cast<void*>(&inputBackendDestroy),reinterpret_cast<void**>(&originalInputBackendDestroy)},
  {renderRva,renderPattern,reinterpret_cast<void*>(&progress::render),reinterpret_cast<void**>(&progress::originalRender)},
- {0xf3940,"40 53 48 83 EC 20 48 8B 19 48 85 DB 0F 84 4D 01",reinterpret_cast<void*>(&progress::owner),reinterpret_cast<void**>(&progress::originalOwner)}
+ {0xf39d0,"40 53 48 83 EC 20 48 8B 19 48 85 DB 0F 84 4D 01",reinterpret_cast<void*>(&progress::owner),reinterpret_cast<void**>(&progress::originalOwner)}
 }};
-inline bool selected(const Hook& h){if(h.rva==0xf96db0)return inputExitRequested;if(h.rva==renderRva||h.rva==0xf3940)return progress::requested;return h.rva!=0x994000||precloseRequested;}
+inline bool selected(const Hook& h){if(h.rva==0xf99970)return inputExitRequested;if(h.rva==renderRva||h.rva==0xf39d0)return progress::requested;return h.rva!=0x9953e0||precloseRequested;}
 inline void install(){
  for(auto& h:hooks)if(selected(h)){const auto b=parsePattern(h.pattern);if(scan(reinterpret_cast<const uint8_t*>(baseAddress+h.rva),b.size(),b)!=std::vector<size_t>{0})throw std::runtime_error("World lifecycle signature differs");}
  for(auto& h:hooks)if(selected(h)){if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+h.rva),h.target,h.original)!=MH_OK)throw std::runtime_error("World lifecycle create hook failed");h.created=true;}
@@ -289,7 +289,7 @@ inline void install(){
   logFile->event("world_broker_enabled",brokerFields(provider)+",\"single_process_provider\":true,\"gameplay_connected\":false");}
  if(progress::requested){const auto m=GetModuleHandleW(L"evr_diagnostic.dll");progress::armLayer=m?reinterpret_cast<progress::Arm>(GetProcAddress(m,"evrArmExitProgress")):nullptr;if(!progress::armLayer)throw std::runtime_error("exit progress export missing");}
  accepting=true;if(MH_ApplyQueued()!=MH_OK)throw std::runtime_error("World lifecycle enable failed");
- for(auto& h:hooks)if(selected(h))logFile->event(h.rva==0xf96db0?"input_backend_exit_hook":h.rva==0x994000?"world_preclose_hook":((h.rva==renderRva||h.rva==0xf3940)?"world_exit_progress_hook":"world_lifecycle_hook"),"\"rva\":"+hex(h.rva)+",\"pattern\":"+jsonString(h.pattern)+",\"read_only\":true");
+ for(auto& h:hooks)if(selected(h))logFile->event(h.rva==0xf99970?"input_backend_exit_hook":h.rva==0x9953e0?"world_preclose_hook":((h.rva==renderRva||h.rva==0xf39d0)?"world_exit_progress_hook":"world_lifecycle_hook"),"\"rva\":"+hex(h.rva)+",\"pattern\":"+jsonString(h.pattern)+",\"read_only\":true");
 }
 inline void disable(){
  accepting=false;bool disabled=true;

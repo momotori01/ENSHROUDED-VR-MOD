@@ -304,7 +304,7 @@ unsigned desktopCompareSequence=0;
 // menu tests after desktop skip has started at 120 pairs).
 uint32_t controllerFixtureArmPair=30;
 constexpr uint32_t desktopSkipWarmupPairs=120;
-constexpr uintptr_t emptyRenderResultRva=0x13b7650;
+constexpr uintptr_t emptyRenderResultRva=0x13b9650;
 uint64_t desktopSkipCandidates=0,desktopSkipped=0,desktopRendered=0;
 // Opt-in desktop discard (world-desktop-discard.txt): the original View renders normally (shared updates, VFX
 // simulation, borrowed lights/particles stay intact) but its result is replaced by the empty result, so c3ab7 does
@@ -392,7 +392,7 @@ namespace fogProjection { void convert(void*,const void*,uintptr_t) noexcept; }
 void* __fastcall convertEyeProjection(void* output,const void* camera,float aspect){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());
     auto result=originalProjection(output,camera,aspect);
-    if(eyeProjection&&caller==baseAddress+0x12ae4d){std::memcpy(output,eyeProjection->bytes.data(),80);++projectionCalls;}
+    if(eyeProjection&&caller==baseAddress+0x12af4d){std::memcpy(output,eyeProjection->bytes.data(),80);++projectionCalls;}
     fogProjection::convert(output,camera,caller);
     return result;
 }
@@ -479,7 +479,7 @@ bool awaitRenderCallbacks() noexcept {
     }
     return true;
 }
-constexpr uintptr_t renderRva=0x129ec0;
+constexpr uintptr_t renderRva=0x129fc0;
 // Bit 15 is native FSR3. Its resolution object at View+9b8 is individually
 // constructed by 52960 and destroyed by 537b0, like the per-View DLSS context.
 // 1.0 (2026-10-16): the world View carries bits 6 and 16 as well (the creation log names OcclusionCulling, Shadows, Vfx,
@@ -892,15 +892,15 @@ void configureControllerFixture(const std::filesystem::path& path,unsigned durat
             if(!flag||!flag.eof()||(value!="EVR_CONTROLLER_NEUTRAL_1"&&!controllerUiFixture::menuRequested&&!controllerUiFixture::motionRequested&&!controllerUiFixture::attackRequested&&!controllerUiFixture::motionAttackRequested&&!controllerUiFixture::gestureRequested&&!controllerUiFixture::equipmentRequested&&!controllerUiFixture::guardRequested&&!controllerUiFixture::liveRequested)||duration<((controllerUiFixture::motionRequested||controllerUiFixture::attackRequested)?20u:controllerUiFixture::tabsRequested?30u:controllerUiFixture::menuRequested?15u:10u))throw std::runtime_error("invalid controller fixture");
             for(const auto& check:std::array<std::pair<uintptr_t,const char*>,3>{{
                 // 1.0: the rescan's prologue was compiled differently; the store of the rescan flag ([[rcx+48]+28] = 1) is the same.
-                {0xf9cc20,"40 55 56 57 48 8D 6C 24 B9 48 81 EC 00 01 00 00"},
-                {0xf9d525,"48 8B 41 48 C6 40 28 01 B0 01"},
-                {0xf94f0b,"80 79 28 00 48 8B E9"}}}){
+                {0xf9f7e0,"40 55 56 57 48 8D 6C 24 B9 48 81 EC 00 01 00 00"},
+                {0xfa00e5,"48 8B 41 48 C6 40 28 01 B0 01"},
+                {0xf97acb,"80 79 28 00 48 8B E9"}}}){
                 const auto bytes=parsePattern(check.second);
                 if(scan(reinterpret_cast<const uint8_t*>(baseAddress+check.first),bytes.size(),bytes)!=std::vector<size_t>{0})
                     throw std::runtime_error("native hotplug/rescan signature differs");
             }
-            /* 1.0: the table is at 0xf9d548 (the matcher took 0xf9d539) */ if(read<uint32_t>(baseAddress+0xf9d548+15*4)!=0xf9d525)throw std::runtime_error("native hotplug event20 dispatch changed");
-            controllerUiFixture::nativeDeviceEvent=reinterpret_cast<controllerUiFixture::RescanFn>(baseAddress+0xf9cc20);
+            /* 1.0: the table is at 0xfa0108 (the matcher took 0xfa00f9) */ if(read<uint32_t>(baseAddress+0xfa0108+15*4)!=0xfa00e5)throw std::runtime_error("native hotplug event20 dispatch changed");
+            controllerUiFixture::nativeDeviceEvent=reinterpret_cast<controllerUiFixture::RescanFn>(baseAddress+0xf9f7e0);
         }
 
     controllerUiFixture::armed=!world;
@@ -936,7 +936,7 @@ namespace eyeExposure {
 using Update=uint64_t(__fastcall*)(void*,void*,void*,void*,void*);
 inline Update original=nullptr;inline bool enabled=false;
 inline std::atomic<uintptr_t> source{0},target{0};inline std::atomic<uint64_t> shared{0};inline std::atomic<bool> failed{false};
-constexpr uintptr_t rva=0xa4ca10,caller=0x12c8cf;
+constexpr uintptr_t rva=0xa4e550,caller=0x12c9cf;
 constexpr const char* pattern="48 8B C4 57 48 81 EC D0 00 00 00 80 B9 60 04 00 00 00";
 // 1.0 (Hotfix 1.0.0.1, 0xa4c450 against June's 0x962760): the result is eight values from +0x3c - the exposure (+0x3c,
 // and +0x40, the same value when the game adapts), its inverse +0x44, +0x48..+0x50 (written before), and the previous
@@ -1053,13 +1053,13 @@ bool finishEyeCpuTasks(uintptr_t scene,unsigned milliseconds){
     // game the same way (0x1faa40, 0x1fdcb1) and is left to it too. The two per-View collectors stay (the selected View's
     // own streaming and fog), with the status read where the game reads it: the byte the returned pointer points at.
     constexpr std::array<Collector,2> collectors{{
-        {0x1de250,layout::viewStreaming,true},{0x1b9100,layout::viewFog,true}}};
+        {0x1de3b0,layout::viewStreaming,true},{0x1b9250,layout::viewFog,true}}};
     const auto start=std::chrono::steady_clock::now(),deadline=start+std::chrono::milliseconds(milliseconds);
     const auto selectedView=read<uintptr_t>(scene+layout::sceneView);
     std::array<unsigned,2> statuses{};
     unsigned polls=0;bool complete=false;
     do {++polls;
-        if(!worldNativeDiagnostic)complete=reinterpret_cast<Wait>(baseAddress+0x109200)(reinterpret_cast<void*>(scene),0);
+        if(!worldNativeDiagnostic)complete=reinterpret_cast<Wait>(baseAddress+0x1092e0)(reinterpret_cast<void*>(scene),0);
         else {
             if(read<uintptr_t>(scene+layout::sceneView)!=selectedView)throw std::runtime_error("selected View changed during CPU completion");
             complete=true;
@@ -1098,14 +1098,14 @@ void dispose(uintptr_t scene,uintptr_t &view,std::array<PrivateSsr,2>& ssr) {
         if(read<uintptr_t>(slot)!=ssr[i].object)throw std::runtime_error("private SSR slot ownership changed during disposal");
         if(!ssr[i].resolutionInitialized)*reinterpret_cast<uintptr_t*>(slot)=0;
     }
-    reinterpret_cast<Destroy>(baseAddress+0x107bc0)(reinterpret_cast<void *>(view));
+    reinterpret_cast<Destroy>(baseAddress+0x107ca0)(reinterpret_cast<void *>(view));
     for(const auto& ssrObject:ssr)if(ssrObject.resolutionInitialized)
         throw std::runtime_error("private SSR resolution cleanup did not complete");
-    reinterpret_cast<Destroy>(baseAddress+0x1078d0)(reinterpret_cast<void *>(view));
+    reinterpret_cast<Destroy>(baseAddress+0x1079b0)(reinterpret_cast<void *>(view));
     for(auto& ssrObject:ssr)if(ssrObject.object){
-        reinterpret_cast<Destroy>(baseAddress+0x17b220)(reinterpret_cast<void*>(ssrObject.object));ssrObject={};
+        reinterpret_cast<Destroy>(baseAddress+0x17b340)(reinterpret_cast<void*>(ssrObject.object));ssrObject={};
     }
-    reinterpret_cast<Destroy>(baseAddress+0x107610)(reinterpret_cast<void *>(view));
+    reinterpret_cast<Destroy>(baseAddress+0x1076f0)(reinterpret_cast<void *>(view));
     view=0;
 }
 void setupFeatures(uintptr_t scene,uintptr_t wrapper,uintptr_t view,uint32_t features,uint32_t pool,uint32_t &group,
@@ -1121,12 +1121,12 @@ void setupFeatures(uintptr_t scene,uintptr_t wrapper,uintptr_t view,uint32_t fea
     alignas(16) std::array<uint8_t,32> allocator{};
     bool initialized=false;
     try {
-        reinterpret_cast<BuilderInit>(baseAddress+0x11ca840)(builder.bytes.data(),reinterpret_cast<void *>(read<uintptr_t>(renderer+layout::rendererBuilder)),read<uint8_t>(wrapper+8));
+        reinterpret_cast<BuilderInit>(baseAddress+0x11ccaf0)(builder.bytes.data(),reinterpret_cast<void *>(read<uintptr_t>(renderer+layout::rendererBuilder)),read<uint8_t>(wrapper+8));
         initialized=true;
         if(!pool)throw std::runtime_error("private feature memory pool missing");
-        reinterpret_cast<PoolInit>(baseAddress+0x11cb340)(allocator.data(),builder.bytes.data(),pool,0,0);
+        reinterpret_cast<PoolInit>(baseAddress+0x11cd5f0)(allocator.data(),builder.bytes.data(),pool,0,0);
         std::array<void *,2> context{allocator.data(),nullptr};
-        reinterpret_cast<Setup>(baseAddress+0x103ac0)(reinterpret_cast<void *>(view),&features,reinterpret_cast<const void*>(wrapper+layout::ownerSettings),context.data());
+        reinterpret_cast<Setup>(baseAddress+0x103ba0)(reinterpret_cast<void *>(view),&features,reinterpret_cast<const void*>(wrapper+layout::ownerSettings),context.data());
         // d43e0 borrows these two SSR objects from the global Renderer. Replace
         // them only in our new View, using the original factory and this group's
         // allocator. Per-eye resolution/history then has a private owner.
@@ -1138,7 +1138,7 @@ void setupFeatures(uintptr_t scene,uintptr_t wrapper,uintptr_t view,uint32_t fea
             using Factory=void* (__fastcall*)(void*,const void*);
             const std::array<uintptr_t,5> settings{read<uintptr_t>(renderer+layout::rendererGraphics),read<uintptr_t>(renderer+layout::rendererBuilder),
                 read<uintptr_t>(renderer+layout::rendererSsrSetting2),read<uintptr_t>(renderer+layout::rendererSsrSetting3),reinterpret_cast<uintptr_t>(allocator.data())};
-            const auto candidate=reinterpret_cast<uintptr_t>(reinterpret_cast<Factory>(baseAddress+0x17a2a0)(
+            const auto candidate=reinterpret_cast<uintptr_t>(reinterpret_cast<Factory>(baseAddress+0x17a3c0)(
                 reinterpret_cast<void*>(read<uintptr_t>(renderer)),settings.data()));
             // Do not publish an unvalidated pointer into our destruction list.
             // An alias rejection must never free another eye or a borrowed SSR.
@@ -1152,19 +1152,19 @@ void setupFeatures(uintptr_t scene,uintptr_t wrapper,uintptr_t view,uint32_t fea
                 ",\"object\":"+hex(candidate)+",\"original\":"+hex(borrowed));
         }
         std::array<uint8_t,32> status{}; status[0]=0xff;
-        reinterpret_cast<Commit>(baseAddress+0x11d21d0)(builder.bytes.data(),status.data(),&group,reinterpret_cast<void *>(read<uintptr_t>(renderer+layout::rendererMemory)));
+        reinterpret_cast<Commit>(baseAddress+0x11d4480)(builder.bytes.data(),status.data(),&group,reinterpret_cast<void *>(read<uintptr_t>(renderer+layout::rendererMemory)));
         if(status[0])throw std::runtime_error("native feature allocation error "+std::to_string(status[0]));
         if(!std::all_of(builder.guard.begin(),builder.guard.end(),[](uint8_t v){return v==0xa5;}) || read<uint32_t>(view+0x10)!=features)
             throw std::runtime_error("feature allocator guard/mask mismatch");
-        reinterpret_cast<Destroy>(baseAddress+0x11cb620)(builder.bytes.data());initialized=false;
+        reinterpret_cast<Destroy>(baseAddress+0x11cd8d0)(builder.bytes.data());initialized=false;
         logFile->event("native_view_features_initialized","\"view\":"+hex(view)+",\"features\":"+std::to_string(features)+",\"memory_group\":"+std::to_string(group));
-    } catch(...) { if(initialized)reinterpret_cast<Destroy>(baseAddress+0x11cb620)(builder.bytes.data());throw; }
+    } catch(...) { if(initialized)reinterpret_cast<Destroy>(baseAddress+0x11cd8d0)(builder.bytes.data());throw; }
 }
 void releaseGroup(uintptr_t scene,uint32_t &group) {
     if(!group)return;
     using ReleaseGroup=void (__fastcall *)(void *,uint32_t *);
     const auto renderer=read<uintptr_t>(scene+layout::sceneRenderer);
-    reinterpret_cast<ReleaseGroup>(baseAddress+0x11d0db0)(reinterpret_cast<void *>(read<uintptr_t>(renderer+layout::rendererMemory)),&group);
+    reinterpret_cast<ReleaseGroup>(baseAddress+0x11d3060)(reinterpret_cast<void *>(read<uintptr_t>(renderer+layout::rendererMemory)),&group);
 }
 template<class T,size_t N> void put(std::array<uint8_t,N> &bytes,size_t offset,T value) {
     if(offset+sizeof(T)>N)throw std::runtime_error("private owner field range");
@@ -1185,7 +1185,7 @@ void releasePrivateOwner(uintptr_t scene,std::array<uint8_t,layout::ownerBytes> 
     const auto resolution=read<uintptr_t>(address+layout::ownerResolution);
     if(resolution) {
         using FreeResolution=void (__fastcall *)(void *,void *);
-        reinterpret_cast<FreeResolution>(baseAddress+0xf38e0)(reinterpret_cast<void *>(resolution),reinterpret_cast<void *>(renderer));
+        reinterpret_cast<FreeResolution>(baseAddress+0xf3970)(reinterpret_cast<void *>(resolution),reinterpret_cast<void *>(renderer));
         put<uintptr_t>(owner,layout::ownerResolution,0);
     }
     auto group=read<uint32_t>(address+layout::ownerResolutionGroup); releaseGroup(scene,group);put<uint32_t>(owner,layout::ownerResolutionGroup,group);
@@ -1204,7 +1204,7 @@ void setupResolution(std::array<uint8_t,layout::ownerBytes> &owner,std::array<Pr
     const uint32_t control=0; // Force native resolution setup, without device-wide idle request.
     std::array<uint8_t,layout::ownerSettingsBytes> settings{};
     std::memcpy(settings.data(),owner.data()+layout::ownerSettings,settings.size());
-    reinterpret_cast<Configure>(baseAddress+0xf1c20)(owner.data(),settings.data(),control);
+    reinterpret_cast<Configure>(baseAddress+0xf1cb0)(owner.data(),settings.data(),control);
     const auto address=reinterpret_cast<uintptr_t>(owner.data());
     if(!read<uintptr_t>(address+layout::ownerResolution))throw std::runtime_error("native resolution setup did not commit");
     logFile->event("native_view_resolution_initialized","\"view\":"+hex(read<uintptr_t>(address+layout::ownerView))+
@@ -1222,7 +1222,7 @@ template<class Function> auto withNativeQueues(uintptr_t view,Function function)
     const auto count=read<uint64_t>(platform+layout::platformQueueCount),table=read<uintptr_t>(platform+layout::platformQueues);
     if(count<1||count>16||table%8)throw std::runtime_error("native queue table invalid");
     using TryLock=bool (__fastcall *)(void*);
-    const auto tryLock=reinterpret_cast<TryLock>(baseAddress+0x8acfa0);
+    const auto tryLock=reinterpret_cast<TryLock>(baseAddress+0x8ae210);
     struct Lease{std::vector<volatile LONG*> held;
         void release(){for(auto i=held.rbegin();i!=held.rend();++i)InterlockedExchange(*i,0);held.clear();}
         ~Lease(){release();}} lease;
@@ -1486,6 +1486,115 @@ struct FieldLend {uintptr_t view=0,own=0,offset=0;bool lent=false;
             if(own&&l&&own!=l){*reinterpret_cast<uintptr_t*>(to+at)=l;view=to;lent=true;}}catch(...){}}
     FieldLend(const FieldLend&)=delete;FieldLend& operator=(const FieldLend&)=delete;
     ~FieldLend(){if(lent)*reinterpret_cast<uintptr_t*>(view+offset)=own;}};
+// (A) one View state for both eyes (2026-10-21, the user: "the fixes feel ad hoc - is something more basic wrong?"): the two
+// eyes are two whole Views, so everything the game keeps from frame to frame grows on its own in each eye. To find all of
+// it at once, EVR_VIEW_COMPARE=1 writes, just before the right eye's render of the pairs viewCompare::serials, the three
+// Views (left, right, the desktop's; layout::viewBytes each, view-compare-<serial>-<name>.bin) and, for every 8 bytes the
+// eyes hold differently that look like pointers, the first 0x100 bytes each side points at (view-compare-<serial>.jsonl).
+// Read-only. docs/analysis/view_state_20261021.
+namespace viewCompare {
+inline bool wanted(){static const bool on=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_VIEW_COMPARE",v,sizeof v);return n==1&&v[0]=='1';}();return on;}
+constexpr std::array<uint64_t,4> serials{600,601,602,1500};
+inline std::vector<uint8_t> bytesAt(uintptr_t address,size_t n){
+    std::vector<uint8_t> data(n);for(size_t at=0;at<n;at+=0x100){SIZE_T got=0;const auto k=std::min<size_t>(0x100,n-at);
+        if(!address||!ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(address+at),data.data()+at,k,&got))std::fill_n(data.data()+at,k,uint8_t(0));}
+    return data;}
+inline std::string hexOf(const std::vector<uint8_t>& b){static const char* d="0123456789abcdef";std::string s;s.reserve(b.size()*2);for(auto v:b){s+=d[v>>4];s+=d[v&15];}return s;}
+// serial: the pairs counted from the first right eye's render this run (pair.serial counts from the game's start).
+inline std::atomic<uint64_t> pairsSeen{0};
+inline void dump(uint64_t,uintptr_t left,uintptr_t right,uintptr_t desktop) noexcept {
+    if(!wanted())return;const auto serial=++pairsSeen;
+    if(std::find(serials.begin(),serials.end(),serial)==serials.end())return;
+    try{
+        const std::array<std::pair<const char*,uintptr_t>,3> views{{{"left",left},{"right",right},{"desktop",desktop}}};
+        std::array<std::vector<uint8_t>,3> data;
+        for(size_t i=0;i<3;++i){data[i]=bytesAt(views[i].second,layout::viewBytes);
+            std::ofstream(calibrationDirectory/("view-compare-"+std::to_string(serial)+"-"+views[i].first+".bin"),std::ios::binary).write(reinterpret_cast<const char*>(data[i].data()),std::streamsize(data[i].size()));}
+        std::ofstream out(calibrationDirectory/("view-compare-"+std::to_string(serial)+".jsonl"));
+        out<<"{\"serial\":"<<serial<<",\"left\":\""<<hex(left)<<"\",\"right\":\""<<hex(right)<<"\",\"desktop\":\""<<hex(desktop)<<"\",\"base\":\""<<hex(baseAddress)<<"\"}\n";
+        unsigned pointers=0;
+        for(size_t at=0;at+8<=layout::viewBytes;at+=8){
+            uint64_t l=0,r=0,d=0;std::memcpy(&l,data[0].data()+at,8);std::memcpy(&r,data[1].data()+at,8);std::memcpy(&d,data[2].data()+at,8);
+            if(l==r)continue;
+            const auto pointerLike=[](uint64_t v){return v>=0x10000&&v<0x7fffffffffffull&&!(v&7);};
+            if(!pointerLike(l)||!pointerLike(r))continue;
+            ++pointers;
+            out<<"{\"offset\":\""<<hex(at)<<"\",\"left\":\""<<hex(l)<<"\",\"right\":\""<<hex(r)<<"\",\"desktop\":\""<<hex(d)
+               <<"\",\"left_bytes\":\""<<hexOf(bytesAt(l,0x100))<<"\",\"right_bytes\":\""<<hexOf(bytesAt(r,0x100))<<"\"}\n";}
+        logFile->event("view_compare_written","\"serial\":"+std::to_string(serial)+",\"pointers_differing\":"+std::to_string(pointers));
+    }catch(...){}
+}
+}
+// (A), the general lending: the right eye renders with the left eye's object for each listed View field, like the
+// streaming and many-lights lends above (FieldLend: put in just before the right eye's render, put back after its CPU
+// work). Experiment, EVR_LEND_VIEW_FIELDS="<hex>,<hex>;<frame>:<hex>,..." - groups apart by ';', a group with "<frame>:"
+// starts at that XR frame (liveFrame.frame, the key script's numbers; 0 without) and stays. The fields that hold the eye's own
+// owner, self pointers or camera (view-compare-600, game-20261021-170950: +0x0 the per-eye owner, +0x240/+0x3e0 point
+// into the View itself, +0x8d0/+0xfc0 the camera, +0x8e0/+0xfd0, +0x80/+0x840/+0xf48 per-eye slots next to each other)
+// are refused. Each group's lent and not lent fields are logged when it starts (view_lend_group).
+// Mock 2026-10-21 (the user's save, lent from a frame on, no failures, the pictures right): +0xee0/+0xef0, +0xf78..+0xf90,
+// +0x9b0..+0x9c0, +0xb40/+0xb48/+0xec8 (game-20261021-173451, -174628); +0x988/+0x990 (the sun's shadows) ends the series
+// (shadow_projection_failure "owner topology": the cascades are shared there already, the right eye's setup taking the
+// left eye's camera block and its map the left eye's copy, layer/shadow_share.hpp).
+// The fog (+0xb40, layout::viewFog) is lent by default (EVR_SHARE_EYE_FOG=0: each eye its own): with the draw
+// camera at report 161239 (the user's "shadows of another depth in the forest beyond the rock tunnel": a pond with mist
+// before the forest) and the head turned twice, the mist over the water stood in one eye only - the left/right ratio of
+// the pictures 0.974..0.984 and 6..12 % of the blocks more than 10 % apart (stereo_lr.py) in a turn of every run without
+// the fog lent (game-20261021-181553 second turn, -182713 both turns with the water's +0xb48/+0xec8 lent), 0.993..0.999
+// and 0.7..3 % in both turns with it (-183812). Each eye's fog volume grows from its own history; the copy of 10-17
+// (layer/gi_reproject.hpp fogEnabled, off since 10-20) made one eye's mist dense at the feet. The user on the headset
+// (19:01, 0.9.6): "smoother, more natural all over; the only problem is a reflection on the water in the left eye only"
+// (bug report 190412 at the pond: bright streaks of the water's reflection along the left eye's left edge, fewer in the
+// right eye; the eyes' water also of another tint) - the screen-space reflections (+0xf18/+0xf20, layout::viewSsr, two
+// slots) were lent too (EVR_SHARE_EYE_SSR=1; off by default since 20:40): one reflection history for both eyes, as
+// with the fog. The user on the headset (20:35): "the reflections feel different but it is not solved - they reflect
+// something other than where the head moves; compare the reflections at the pond's edge". Mock 2026-10-21 game-20261021-201120 (the draw camera at the report's pond, three head turns: own, the
+// fog, the fog and the reflections): no breakage, the eyes' left/right ratio and blocks the same in the second and third
+// turns (0.994..1.015, 0..2.4 %); the Mock's camera stands lower than the user's and showed no one-eyed reflection in
+// any turn, so the effect is for the headset to tell. Guess: the reflections, averaged over both eyes' frames, lose a
+// little of their depth.
+namespace viewLend {
+struct Group {uint64_t from=0;std::vector<uintptr_t> fields;bool said=false;};
+inline std::vector<Group> groups;
+inline std::atomic<uint64_t> pairs{0},lends{0};
+inline const bool parsed=[]{
+    char v[1024]{};const auto n=GetEnvironmentVariableA("EVR_LEND_VIEW_FIELDS",v,sizeof v);if(n>=sizeof v)return false;
+    if(!n){const auto off=[](const char* name){char f[8]{};const auto k=GetEnvironmentVariableA(name,f,sizeof f);return k==1&&f[0]=='0';};
+        Group g{0,{}};if(!off("EVR_SHARE_EYE_FOG"))g.fields.push_back(layout::viewFog);
+        {char f[8]{};const auto k=GetEnvironmentVariableA("EVR_SHARE_EYE_SSR",f,sizeof f);if(k==1&&f[0]=='1'){g.fields.push_back(layout::viewSsr);g.fields.push_back(layout::viewSsr+8);}}
+        if(g.fields.empty())return false;groups.push_back(std::move(g));return true;}
+    constexpr std::array<uintptr_t,11> refused{0x0,0x8,0x80,0x240,0x3e0,0x840,0x8d0,0x8e0,0xf48,0xfc0,0xfd0};
+    std::string text(v,n);size_t at=0;
+    while(at<=text.size()){
+        const auto end=std::min(text.find(';',at),text.size());std::string part=text.substr(at,end-at);at=end+1;
+        Group g;const auto colon=part.find(':');
+        if(colon!=std::string::npos){g.from=std::strtoull(part.substr(0,colon).c_str(),nullptr,10);part=part.substr(colon+1);}
+        size_t p=0;
+        while(p<part.size()){const auto comma=std::min(part.find(',',p),part.size());const auto item=part.substr(p,comma-p);p=comma+1;
+            if(item.empty())continue;const auto offset=uintptr_t(std::strtoull(item.c_str(),nullptr,16));
+            if(offset%8||offset+8>layout::viewBytes||std::find(refused.begin(),refused.end(),offset)!=refused.end())continue;
+            g.fields.push_back(offset);}
+        if(!g.fields.empty())groups.push_back(std::move(g));
+    }
+    return !groups.empty();}();
+struct Scope {
+    std::vector<std::unique_ptr<FieldLend>> held;
+    Scope(uintptr_t to,uintptr_t left,bool want){
+        if(!parsed||!want||!to||!left)return;const auto pair=++pairs;const auto frame=liveFrame.frame;
+        for(auto& g:groups){if(frame<g.from)continue;
+            const auto first=held.size();
+            for(const auto f:g.fields)held.push_back(std::make_unique<FieldLend>(to,left,f,true));
+            if(!g.said){g.said=true;std::string lent,kept;
+                for(size_t i=first;i<held.size();++i)(held[i]->lent?lent:kept)+=(std::string(held[i]->lent?(lent.empty()?"":","):(kept.empty()?"":","))+hex(held[i]->offset));
+                try{logFile->event("view_lend_group","\"pair\":"+std::to_string(pair)+",\"frame\":"+std::to_string(frame)+",\"from\":"+std::to_string(g.from)+",\"lent\":["+lent+"],\"not_lent\":["+kept+"]");}catch(...){}}
+        }
+        size_t n=0;for(const auto& h:held)n+=h->lent;
+        const auto k=++lends;if(k<=3||k%1800==0)try{logFile->event("view_lend","\"pair\":"+std::to_string(pair)+",\"lent\":"+std::to_string(n)+",\"listed\":"+std::to_string(held.size()));}catch(...){}
+    }
+    Scope(const Scope&)=delete;Scope& operator=(const Scope&)=delete;
+    ~Scope(){for(auto it=held.rbegin();it!=held.rend();++it)it->reset();}
+};
+}
 void recordPair(PairResources &pair,void* context,void* parameters,void* target){
     const cpuTiming::Span timed(cpuTiming::Record);
     if(pair.pairPending)throw std::runtime_error("previous native eye pair still pending");
@@ -1613,7 +1722,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         if(!read<uintptr_t>(reinterpret_cast<uintptr_t>(pair.targets[eye].data()))){
         auto eyeDescriptor=descriptor;
         if(runtimeEyes()){put<uint32_t>(eyeDescriptor,4,eyeWidth(eye));put<uint32_t>(eyeDescriptor,8,eyeHeight(eye));}
-        reinterpret_cast<TextureCreate>(baseAddress+0x1010080)(pair.targets[eye].data(),reinterpret_cast<void*>(pair.graph),eyeDescriptor.data());
+        reinterpret_cast<TextureCreate>(baseAddress+0x1012ce0)(pair.targets[eye].data(),reinterpret_cast<void*>(pair.graph),eyeDescriptor.data());
         const auto handle=reinterpret_cast<uintptr_t>(pair.targets[eye].data());
         if(read<uintptr_t>(handle)!=pair.graph)throw std::runtime_error("calibration target allocation failed");
         const auto ownedIndex=read<uint16_t>(handle+8);
@@ -1636,7 +1745,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         VkDebugUtilsObjectNameInfoEXT naming{VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT};
         naming.objectType=VK_OBJECT_TYPE_IMAGE;naming.objectHandle=read<uint64_t>(texture+0x30);naming.pObjectName=name.c_str();
         if(nameImage&&nameImage(device,&naming)!=VK_SUCCESS)throw std::runtime_error("calibration target naming failed");
-        reinterpret_cast<TextureImport>(baseAddress+0x1010330)(pair.aliases[eye].data(),reinterpret_cast<void*>(pair.graph),reinterpret_cast<void*>(texture),0,&sync);
+        reinterpret_cast<TextureImport>(baseAddress+0x1012f90)(pair.aliases[eye].data(),reinterpret_cast<void*>(pair.graph),reinterpret_cast<void*>(texture),0,&sync);
         const auto alias=reinterpret_cast<uintptr_t>(pair.aliases[eye].data());
         if(read<uintptr_t>(alias)!=pair.graph||(read<uint32_t>(alias+8)&0x06000000)!=0x04000000)throw std::runtime_error("calibration import flags mismatch");
         std::memcpy(pair.targetArguments[eye].data(),pair.aliases[eye].data(),16);
@@ -1715,6 +1824,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         std::optional<giShare::Scope> giScope;
         std::optional<StreamingLend> streamingLend;   // until the eye's CPU work is done (finishEyeCpuTasks)
         std::optional<FieldLend> shadowLend;          // the same: the many-lights shadow object (EVR_SHARE_MANY_LIGHT_SHADOWS=0: off)
+        std::optional<viewLend::Scope> fieldLends;    // the same: the fields of EVR_LEND_VIEW_FIELDS (viewLend above)
         std::optional<giShare::BorrowScope> giBorrow;   // the right eye lit by the left eye's screen GI (borrow-screen form)
         std::optional<DofScope> dofScope; // also kept until the eye CPU tasks finished
         worldSharedStages::Context sharedStage;
@@ -1777,6 +1887,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
                 const auto from=read<uintptr_t>(pair.created[0]+layout::viewPost),to=read<uintptr_t>(pair.created[1]+layout::viewPost);
                 if(from&&to&&from!=to)exposurePair.emplace(from,to);
             }catch(...){}
+            if(eye==1)viewCompare::dump(pair.serial,pair.created[0],pair.created[1],pair.originalView);
             // The right eye draws with the left eye's View streaming object (StreamingLend above).
             {const cpuTiming::Span eyeTimed(eye?cpuTiming::Eye1:cpuTiming::Eye0);
              streamingLend.emplace(eye==1?pair.created[1]:0,pair.created[0],shareStreaming&&eye==1&&(liveFrame.eyeMask&1));
@@ -1787,6 +1898,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
                  ",\"right\":"+hex(read<uintptr_t>(pair.created[1]+viewManyLightShadows))+",\"left\":"+hex(read<uintptr_t>(pair.created[0]+viewManyLightShadows)));}}
              {static std::atomic<uint64_t> lends{0};if(streamingLend->lent){const auto n=++lends;if(n<=3||n%1800==0)logFile->event("eye_streaming_lent","\"serial\":"+std::to_string(pair.serial)+
                  ",\"lends\":"+std::to_string(n)+",\"own\":"+hex(streamingLend->own)+",\"left\":"+hex(read<uintptr_t>(pair.created[1]+layout::viewStreaming)));}}
+             fieldLends.emplace(eye==1?pair.created[1]:0,pair.created[0],eye==1&&(liveFrame.eyeMask&1));
              original(pair.results[eye].data(),context,reinterpret_cast<void*>(pair.created[eye]),pair.parameters[eye].data(),pair.targetArguments[eye].data());}}
         if(stableFrustumBridge::observeEyes&&(eyeFrustum.failed||(projectionCalls==1&&(eyeFrustum.calls!=2||eyeFrustum.mask!=3))))
             throw std::runtime_error("eye frustum diagnostic boundary differs");
@@ -1856,7 +1968,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         // ending the series there left the headset without the world.
         {const cpuTiming::Span tasksTimed(eye?cpuTiming::Tasks1:cpuTiming::Tasks0);
          finishEyeCpuTasks(pair.scene);}
-        streamingLend.reset();shadowLend.reset();giScope.reset();giBorrow.reset();dofScope.reset();
+        fieldLends.reset();streamingLend.reset();shadowLend.reset();giScope.reset();giBorrow.reset();dofScope.reset();
         worldSharedStages::detailRadius::finishEye(int(eye),pair.serial);   // the right eye's terrain detail radius (2026-10-18)
         // Diagnostic (2026-10-19, EVR_DUMP_STREAMING_AT=<frame>[,<frame>...]): at those live frames, after the right eye, the
         // View streaming objects ([View+0x978], 128 KB each - the terrain detail radius sits at +0xc444) of both eyes and of the
@@ -2016,8 +2128,8 @@ void __fastcall destroyOwner(void* ownerAddress){
             logFile->event("calibration_scene_disposal_begin","\"scene\":"+hex(scene)+",\"frame_idle_forced\":false,\"world_left_while_drawing\":"+(leftWhileDrawing?"true":"false"));
             if(worldNativeDiagnostic)worldSharedDiagnostic::snapshot("before_private_disposal",scene);
             using Release=void (__fastcall *)(void*,void*);
-            for(auto& alias:pair->aliases)reinterpret_cast<Release>(baseAddress+0x1012160)(reinterpret_cast<void*>(pair->graph),alias.data());
-            for(auto& handle:pair->targets)reinterpret_cast<Release>(baseAddress+0x1012160)(reinterpret_cast<void*>(pair->graph),handle.data());
+            for(auto& alias:pair->aliases)reinterpret_cast<Release>(baseAddress+0x1014dc0)(reinterpret_cast<void*>(pair->graph),alias.data());
+            for(auto& handle:pair->targets)reinterpret_cast<Release>(baseAddress+0x1014dc0)(reinterpret_cast<void*>(pair->graph),handle.data());
             cullingHistory::release(pair->history);
             dispose(scene,pair->created[1],pair->privateSsr[1]);dispose(scene,pair->created[0],pair->privateSsr[0]);
             releasePrivateOwner(scene,pair->owners[1]);releasePrivateOwner(scene,pair->owners[0]);
@@ -2139,7 +2251,7 @@ void probe(void *viewPointer,void* context,void* parameters,void* target) noexce
         // 1.0: the scene's world tasks are busy at this moment far more often than before (Mock runs game-20261016-075827
         // and -080708 ended here). They run on other threads: ask again for up to 0.2 s before refusing (once a session).
         {bool idle=false;
-         for(unsigned attempt=0;attempt<100&&!(idle=reinterpret_cast<Wait>(baseAddress+0x109200)(reinterpret_cast<void *>(scene),0));++attempt)
+         for(unsigned attempt=0;attempt<100&&!(idle=reinterpret_cast<Wait>(baseAddress+0x1092e0)(reinterpret_cast<void *>(scene),0));++attempt)
              std::this_thread::sleep_for(std::chrono::milliseconds(2));
          if(!idle)throw std::runtime_error("existing scene tasks busy; no allocation attempted");}
         const auto before=read<std::array<uint8_t,layout::viewBytes>>(view);
@@ -2185,7 +2297,7 @@ void probe(void *viewPointer,void* context,void* parameters,void* target) noexce
                 put<uintptr_t>(config,0,selectedOwner);
                 put<uintptr_t>(owners[eye],layout::ownerMarker,allocateFeatureMarker(scene));
             }
-            const auto pointer=reinterpret_cast<Create>(baseAddress+0x103500)(reinterpret_cast<void *>(scene),config.data());
+            const auto pointer=reinterpret_cast<Create>(baseAddress+0x1035e0)(reinterpret_cast<void *>(scene),config.data());
             created[eye]=reinterpret_cast<uintptr_t>(pointer);
             if(!created[eye] || created[eye]==view || (eye && created[0]==created[1]) ||
                read<uintptr_t>(scene+layout::sceneView)!=created[eye] || read<uintptr_t>(created[eye]+8)!=scene ||
@@ -2283,8 +2395,8 @@ void probe(void *viewPointer,void* context,void* parameters,void* target) noexce
         if(state->recorded){selectView(scene,previous);state->failed=true;retainedPair.store(state.release(),std::memory_order_release);restore=false;}
         else if(state->graph){
             using Release=void (__fastcall *)(void*,void*);
-            for(auto& alias:state->aliases)if(read<uintptr_t>(reinterpret_cast<uintptr_t>(alias.data()))==state->graph)reinterpret_cast<Release>(baseAddress+0x1012160)(reinterpret_cast<void*>(state->graph),alias.data());
-            for(auto& handle:state->targets)if(read<uintptr_t>(reinterpret_cast<uintptr_t>(handle.data()))==state->graph)reinterpret_cast<Release>(baseAddress+0x1012160)(reinterpret_cast<void*>(state->graph),handle.data());
+            for(auto& alias:state->aliases)if(read<uintptr_t>(reinterpret_cast<uintptr_t>(alias.data()))==state->graph)reinterpret_cast<Release>(baseAddress+0x1014dc0)(reinterpret_cast<void*>(state->graph),alias.data());
+            for(auto& handle:state->targets)if(read<uintptr_t>(reinterpret_cast<uintptr_t>(handle.data()))==state->graph)reinterpret_cast<Release>(baseAddress+0x1014dc0)(reinterpret_cast<void*>(state->graph),handle.data());
         }
         if(restore) { cullingHistory::release(state->history);dispose(scene,created[1],state->privateSsr[1]);dispose(scene,created[0],state->privateSsr[0]);
             if(initializeResolution) {releasePrivateOwner(scene,owners[1]);releasePrivateOwner(scene,owners[0]);}
@@ -3284,32 +3396,32 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         }
         if(hits!=std::vector<uintptr_t>{renderRva})throw std::runtime_error("render signature missing/ambiguous");
         if(preparedSessionProbe||liveXr){const auto bytes=parsePattern("33 D2 41 B8 00 00 00 80 8B 01 90 85 C0 75");
-            if(scan(base+0x8acfa0,bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("native queue lock signature changed");}
+            if(scan(base+0x8ae210,bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("native queue lock signature changed");}
         if(useRecordedXr){
             std::ifstream input(calibrationDirectory/"recorded-xr.txt");recordedXr=diagnostic::RecordedXr::read(input);
             calibrationFrames=uint32_t(recordedXr.frames.size());
             logFile->event("recorded_xr_loaded","\"frames\":"+std::to_string(calibrationFrames)+",\"render_scale\":"+std::to_string(recordedXr.renderScale)+",\"live_openxr_session\":false");
         }
         const std::pair<uintptr_t,const char *> lifecycle[]={
-            {0x103500,"48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 55 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 60 48"},
-            {0x107bc0,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 79 08 48 8B D9 48"},
-            {0x1078d0,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 48 8B 91 28 11"},
-            {0x107610,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 48 8B 69 08"},
-            {0x109200,"48 89 5C 24 10 55 56 57 48 83 EC 50 48 8B 79"}};
+            {0x1035e0,"48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 55 41 54 41 55 41 56 41 57 48 8B EC 48 83 EC 60 48"},
+            {0x107ca0,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 79 08 48 8B D9 48"},
+            {0x1079b0,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 48 8B 91 28 11"},
+            {0x1076f0,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 56 48 83 EC 20 48 8B 69 08"},
+            {0x1092e0,"48 89 5C 24 10 55 56 57 48 83 EC 50 48 8B 79"}};
         for(const auto &entry:lifecycle) { const auto bytes=parsePattern(entry.second);
             if(scan(base+entry.first,bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("view lifecycle signature changed at "+hex(entry.first)); }
         if(initializeFeatures) {
             const std::pair<uintptr_t,const char *> featureSites[]={
-                {0x103ac0,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 54 41 56 41 57 48 83 EC 50 48 8B 41 08 4C 8D 25 ? ? ? ? 4D 8B F1 4D 8B F8"},
-                {0x17a2a0,"48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 55 48 8B EC 48 83 EC 60 48 8B 01 48 8B FA 41 B1 08 C6 44 24 20 00 BA B8 04 00 00 41 B8 08 00"},
-                {0x17b220,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 59 10 48 8D 91 70"},
-                {0x11ca840,"48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 54 41 55 41 56 41 57 48 83 EC 20 48 8B DA 48 8B F9 E8 ? ? ? ? 45 33 E4 48 8D 05 CF"},
-                {0x11cb340,"48 89 5C 24 10 57 48 83 EC 40 48 89 11 48"},
-                {0x11cf860,"48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 30 48 8B DA 48 8B F9 48 83"},
-                {0x11d0900,"40 53 57 48 83 EC 28 8B 1A 48 8B F9 44 8B C3"},
-                {0x11d21d0,"4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10 55 53 57 41 56 48"},
-                {0x11cb620,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20"},
-                {0x11d0db0,"48 8B C4 55 53 57 41 57 48 8D 68 A1"}};
+                {0x103ba0,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 48 89 7C 24 20 41 54 41 56 41 57 48 83 EC 50 48 8B 41 08 4C 8D 25 ? ? ? ? 4D 8B F1 4D 8B F8"},
+                {0x17a3c0,"48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 55 48 8B EC 48 83 EC 60 48 8B 01 48 8B FA 41 B1 08 C6 44 24 20 00 BA B8 04 00 00 41 B8 08 00"},
+                {0x17b340,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 59 10 48 8D 91 70"},
+                {0x11ccaf0,"48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 54 41 55 41 56 41 57 48 83 EC 20 48 8B DA 48 8B F9 E8 ? ? ? ? 45 33 E4 48 8D 05 CF"},
+                {0x11cd5f0,"48 89 5C 24 10 57 48 83 EC 40 48 89 11 48"},
+                {0x11d1b10,"48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 30 48 8B DA 48 8B F9 48 83"},
+                {0x11d2bb0,"40 53 57 48 83 EC 28 8B 1A 48 8B F9 44 8B C3"},
+                {0x11d4480,"4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10 55 53 57 41 56 48"},
+                {0x11cd8d0,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20"},
+                {0x11d3060,"48 8B C4 55 53 57 41 57 48 8D 68 A1"}};
             for(const auto &entry:featureSites) {const auto bytes=parsePattern(entry.second);
                 if(scan(base+entry.first,bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("feature signature changed at "+hex(entry.first));}
         }
@@ -3320,11 +3432,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             }
             const auto signature=parsePattern("48 8B C4 55 53 56 41 54 41 56 48 8D A8 98 FC");
             const auto cleanup=parsePattern("48 89 5C 24 08 57 48 83 EC 20 48 8B FA 48 8B D9 48 8D 51 08 48 8B 8F 28 01 00");
-            if(scan(base+0xf1c20,signature.size(),signature)!=std::vector<size_t>{0} ||
-               scan(base+0xf38e0,cleanup.size(),cleanup)!=std::vector<size_t>{0})throw std::runtime_error("resolution lifecycle signature changed");
+            if(scan(base+0xf1cb0,signature.size(),signature)!=std::vector<size_t>{0} ||
+               scan(base+0xf3970,cleanup.size(),cleanup)!=std::vector<size_t>{0})throw std::runtime_error("resolution lifecycle signature changed");
         }
         if(renderCalibration){
-            const std::pair<uintptr_t,const char*> sites[]={{0x1010080,"40 53 55 56 41 56 48 83 EC 48 4D 8B F0 48"},{0x1010330,"40 55 56 57 41 56 41 57 48 8D 6C 24 D1 48 81 EC"},{0x1012160,"48 8B C4 55 57 48 81 EC 88 00"}};
+            const std::pair<uintptr_t,const char*> sites[]={{0x1012ce0,"40 53 55 56 41 56 48 83 EC 48 4D 8B F0 48"},{0x1012f90,"40 55 56 57 41 56 41 57 48 8D 6C 24 D1 48 81 EC"},{0x1014dc0,"48 8B C4 55 57 48 81 EC 88 00"}};
             for(const auto& entry:sites){auto bytes=parsePattern(entry.second);if(scan(base+entry.first,bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("calibration signature changed");}
             const auto captureRequest=calibrationDirectory/"world-final-capture.txt";
             if(std::filesystem::exists(captureRequest)){
@@ -3813,22 +3925,22 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             optional("download_feedback_diagnostic",[&]{downloadFeedbackDiagnostic::install();},[&]{});}
         if(runtimeEyes()){
             const auto bytes=parsePattern("48 89 5C 24 10 57 48 83 EC 30 0F 29 74 24 20 48 8B FA 0F 28 F2 48 8B D9");
-            const uint8_t call[]{0xe8,0x43,0xd3,0xfe,0xff};projectionTarget=base+0x118190;   // 1.0: call 0x1180f0 at 0x12ada8
+            const uint8_t call[]{0xe8,0x23,0xd3,0xfe,0xff};projectionTarget=base+0x118270;   // build 26082781: call 0x118270 at 0x12af48 (1.0: e8 43 d3 fe ff, call 0x1180f0 at 0x12ada8)
             fogProjection::verify();
-            if(scan(base+0x118190,bytes.size(),bytes)!=std::vector<size_t>{0}||std::memcmp(base+0x12ae4d-5,call,5))throw std::runtime_error("eye projection signature changed");
+            if(scan(base+0x118270,bytes.size(),bytes)!=std::vector<size_t>{0}||std::memcmp(base+0x12af4d-5,call,5))throw std::runtime_error("eye projection signature changed");
             require(MH_CreateHook(projectionTarget,reinterpret_cast<void*>(&convertEyeProjection),reinterpret_cast<void**>(&originalProjection)),"MH_CreateHook eye projection");
             require(MH_EnableHook(projectionTarget),"MH_EnableHook eye projection");projectionEnabled=true;
         }
         if(sceneCleanup){
-            const auto bytes=parsePattern("40 53 48 83 EC 20 48 8B 19 48 85 DB 0F 84 4D 01");destroyOwnerTarget=base+0xf3940;
-            if(scan(base+0xf3940,bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("Scene owner destruction signature changed");
+            const auto bytes=parsePattern("40 53 48 83 EC 20 48 8B 19 48 85 DB 0F 84 4D 01");destroyOwnerTarget=base+0xf39d0;
+            if(scan(base+0xf39d0,bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("Scene owner destruction signature changed");
             require(MH_CreateHook(destroyOwnerTarget,reinterpret_cast<void*>(&destroyOwner),reinterpret_cast<void**>(&originalDestroyOwner)),"MH_CreateHook scene lifecycle");
             require(MH_EnableHook(destroyOwnerTarget),"MH_EnableHook scene lifecycle");destroyOwnerEnabled=true;
-            logFile->event("calibration_scene_hook_enabled","\"rva\":\"0xf3940\",\"pattern\":\"40 53 48 83 EC 20 48 8B 19 48 85 DB\"");
+            logFile->event("calibration_scene_hook_enabled","\"rva\":\"0xf39d0\",\"pattern\":\"40 53 48 83 EC 20 48 8B 19 48 85 DB\"");
         }
         if(dlssEval::requested||(dlssEval::depthNotes&&liveXr))dlssEval::install();
         active=true; require(MH_EnableHook(target),"MH_EnableHook");enabled=true;renderWasEnabled=true;
-        logFile->event("view_resource_hook_enabled","\"mode\":"+jsonString(detailFactoryProbe?"unused_detail_factory":renderCalibration?"native_retained_calibration":"unused_view_lifecycle_only")+",\"rva\":\"0x129ec0\"");
+        logFile->event("view_resource_hook_enabled","\"mode\":"+jsonString(detailFactoryProbe?"unused_detail_factory":renderCalibration?"native_retained_calibration":"unused_view_lifecycle_only")+",\"rva\":\"0x129fc0\"");
         const unsigned budgetSeconds=worldSession?(sessionMinutes?sessionMinutes*60:400u*86400u):worldEndurance?420:renderCalibration?60:preparedSessionProbe?40:10;
         logFile->event("view_resource_diagnostic_budget","\"seconds\":"+std::to_string(budgetSeconds)+",\"frames\":"+std::to_string(calibrationFrames)+",\"endurance\":"+(worldEndurance?"true":"false"));
         const auto sessionStart=std::chrono::steady_clock::now();

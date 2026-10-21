@@ -5,11 +5,14 @@
 #pragma once
 #include <cstdint>
 namespace evr::gameBuild {
-// Enshrouded, Steam build 25988036 (2026-10-16 23:56, a hotfix after 1.0.0.1); SHA-256 of enshrouded.exe 82e5020a8736348cd0374f004b2f5e5ef456b5bd27aa5420df34c7dd241cfeeb
-// (a copy in vrmod/output/exe-backups/82e5020a-20261017-build25988036/; the addresses carried from 1.0.0.1 by tools/shift_rematch.py).
-constexpr uint32_t timeDateStamp=1792148057u;   // IMAGE_FILE_HEADER.TimeDateStamp
-constexpr uint32_t sizeOfImage=44146688u;       // IMAGE_OPTIONAL_HEADER64.SizeOfImage (0x2a1a000)
-constexpr const char* sha256Prefix="82e5020a8736";
+// Enshrouded, Steam build 26082781 (2026-10-21 19:21, an update after build 25988036); SHA-256 of enshrouded.exe
+// d64966e23b1a458ee6f147bcbceac0b577fa7e39a212f371287d8cc119817882 (a copy in vrmod/output/exe-backups/d64966e2-20261021-build26082781/;
+// the addresses carried from build 25988036 by tools/shift_rematch.py).
+constexpr uint32_t timeDateStamp=1792507660u;   // IMAGE_FILE_HEADER.TimeDateStamp
+constexpr uint32_t sizeOfImage=44163072u;       // IMAGE_OPTIONAL_HEADER64.SizeOfImage (0x2a1e000)
+constexpr const char* sha256Prefix="d64966e23b1a";
+// Build 25988036 (2026-10-16 23:56, a hotfix after 1.0.0.1, SHA-256 82e5020a8736...): TimeDateStamp 1792148057, SizeOfImage
+// 44146688. Its executable is kept in vrmod/output/exe-backups/82e5020a-20261017-build25988036/.
 // Hotfix 1.0.0.1 (Steam build 25966634, 2026-10-16 09:33, SHA-256 4d6d43ea4a91...): TimeDateStamp 1792083981, SizeOfImage
 // 44142592. Its executable is kept in vrmod/output/exe-backups/4d6d43ea-20261016-hotfix-1.0.0.1/.
 // 1.0 (Steam build 25936191, 2026-10-16 morning, SHA-256 b331a6d037c5...): TimeDateStamp 1791978644, SizeOfImage 44142592.

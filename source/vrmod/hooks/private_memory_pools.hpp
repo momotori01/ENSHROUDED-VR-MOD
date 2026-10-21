@@ -35,7 +35,7 @@ void create(uintptr_t scene,uintptr_t wrapper,unsigned eye,bool resolution,EyePo
         // +0 is not an input to f9f1e0. The native configuration is
         // payload+4/+8/+c/+10/+18; preserve those runtime values.
         std::fill_n(descriptor.data(),4,uint8_t(0));
-        const auto created=reinterpret_cast<Create>(baseAddress+0x11cf860)(reinterpret_cast<void*>(manager),descriptor.data());
+        const auto created=reinterpret_cast<Create>(baseAddress+0x11d1b10)(reinterpret_cast<void*>(manager),descriptor.data());
         if(!created||created==source)throw std::runtime_error("private native memory pool allocation failed/aliased");
         for(const auto& owned:pools)for(auto other:owned)if(other&&other==created)
             throw std::runtime_error("private memory pool aliases an already owned pool");
@@ -64,7 +64,7 @@ void release(uintptr_t scene,EyePools& pools){
     // Call only after both Views, resolution groups and feature groups are gone.
     for(int eye=1;eye>=0;--eye)for(int kind=2;kind>=0;--kind)if(pools[eye][kind]){
         const auto id=pools[eye][kind];record(manager,id);
-        reinterpret_cast<Release>(baseAddress+0x11d0900)(reinterpret_cast<void*>(manager),&pools[eye][kind]);
+        reinterpret_cast<Release>(baseAddress+0x11d2bb0)(reinterpret_cast<void*>(manager),&pools[eye][kind]);
         if(pools[eye][kind])throw std::runtime_error("private native memory pool release did not clear ID");
         logFile->event("private_native_memory_pool_released","\"eye\":"+std::to_string(eye)+
             ",\"kind\":"+jsonString(kind==2?"transient":kind?"resolution":"feature")+",\"pool\":"+std::to_string(id));

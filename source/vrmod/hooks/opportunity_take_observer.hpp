@@ -13,7 +13,7 @@
 namespace opportunityTakeObserver {
 using Take=uint64_t(__fastcall*)(void*,void*,void*,void*);
 inline Take original=nullptr;inline bool enabled=false;
-constexpr uintptr_t rva=0x2145a0;
+constexpr uintptr_t rva=0x214740;
 constexpr const char* pattern="48 89 54 24 10 55 56 41 55 48 8D AC 24 90 FE FF FF 48 81 EC 70 02 00 00 48 8B F1 48 8B 89 98 00 00 00";
 inline std::atomic<unsigned> logged{0},calls{0},inside{0};
 struct Inside {Inside(){++inside;}~Inside(){--inside;}};

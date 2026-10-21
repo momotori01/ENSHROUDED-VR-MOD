@@ -11,7 +11,7 @@
 namespace snowDisplacementBridge {
 using Stage=void(__fastcall*)(void*,void*,void*);
 inline Stage original=nullptr;inline bool enabled=false;inline std::atomic<bool> failed{false};
-constexpr uintptr_t rva=0x1710c0,callerRva=0x131722;
+constexpr uintptr_t rva=0x1711d0,callerRva=0x131822;
 constexpr const char* pattern="48 89 54 24 10 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 78 FE FF FF 48 81 EC 88 02";
 using Fields=grassMovementBridge::Fields;
 struct Source {uint64_t serial=0;Fields fields;bool valid=false;};

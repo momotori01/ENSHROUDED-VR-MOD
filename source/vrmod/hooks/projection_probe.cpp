@@ -21,7 +21,7 @@ namespace
 using Convert = void *(__fastcall *)(void *, const void *, float);
 Convert original = nullptr;
 uintptr_t gameBase = 0;
-constexpr uintptr_t targetRva = 0x118190, callerRva = 0x12ae4d;
+constexpr uintptr_t targetRva = 0x118270, callerRva = 0x12af4d;
 constexpr const char *patternText = "48 89 5C 24 10 57 48 83 EC 30 0F 29 74 24 20 48 8B FA 0F 28 F2 48 8B D9";
 std::atomic<bool> started{false};
 std::atomic<unsigned> phase{5};
@@ -61,7 +61,7 @@ __declspec(noinline) void * __fastcall convert(void *output, const void *camera,
         {
             std::ostringstream fields;
             fields << "\"phase\":" << step << ",\"descriptor_overridden\":" << (applied ? "true" : "false")
-                   << ",\"caller_rva\":\"0x12ae4d\",\"original_type\":" << kind
+                   << ",\"caller_rva\":\"0x12af4d\",\"original_type\":" << kind
                    << ",\"output_type\":" << (applied ? 3 : kind)
                    << ",\"aspect\":" << values[0] << ",\"near\":" << values[1] << ",\"far\":" << values[2]
                    << ",\"fov\":[" << fov.angleLeft << ',' << fov.angleRight << ',' << fov.angleUp << ',' << fov.angleDown
@@ -112,14 +112,14 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeProjection(void *outputDi
         }
         if (hits.size()!=1 || hits[0]!=targetRva) throw std::runtime_error("projection signature missing/ambiguous");
         // Independently verify the exact caller instruction leading to f8acf.
-        const uint8_t call[]{0xe8,0x43,0xd3,0xfe,0xff};   // 1.0: call 0x1180f0 at 0x12ada8
+        const uint8_t call[]{0xe8,0x23,0xd3,0xfe,0xff};   // build 26082781: call 0x118270 at 0x12af48 (1.0: e8 43 d3 fe ff, call 0x1180f0 at 0x12ada8)
         if (std::memcmp(base+callerRva-5, call, sizeof(call))) throw std::runtime_error("projection caller changed");
         target=base+targetRva;
         require(MH_Initialize(), "MH_Initialize");
         require(MH_CreateHook(target, reinterpret_cast<void *>(&convert), reinterpret_cast<void **>(&original)), "MH_CreateHook");
         require(MH_EnableHook(target), "MH_EnableHook");
         enabled=true;
-        retainedLog->event("projection_hook_enabled", "\"rva\":\"0x118190\",\"pattern\":"+jsonString(patternText)+
+        retainedLog->event("projection_hook_enabled", "\"rva\":\"0x118270\",\"pattern\":"+jsonString(patternText)+
             ",\"mode\":\"bounded_projection_calibration\",\"stereo\":false,\"duration_seconds\":15");
         for (unsigned step=0; step<counts.size(); ++step)
         {

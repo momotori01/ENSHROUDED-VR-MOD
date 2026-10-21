@@ -37,10 +37,10 @@ using Task=void(__fastcall*)(void*);
 using Start=bool(__fastcall*)(void*,void*,void*,void*);
 inline Choose original=nullptr;inline Task originalClient=nullptr;inline Start originalServer=nullptr;
 inline bool enabled=false,clientHooked=false,serverHooked=false,swingParry=true;
-constexpr uintptr_t rva=0x2acf60,callerRva=0x2b0ba3;
+constexpr uintptr_t rva=0x2ad100,callerRva=0x2b0d43;
 constexpr const char* pattern="48 89 4C 24 08 55 53 56 57 48 8D AC 24 C8 FD FF FF 48 81 EC 38 03 00 00";
-constexpr uintptr_t clientRva=0x2b0ae0;constexpr const char* clientPattern="48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 41 B8";
-constexpr uintptr_t serverRva=0x2c7740,serverCallerRva=0x2dbb9b;
+constexpr uintptr_t clientRva=0x2b0c80;constexpr const char* clientPattern="48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 41 B8";
+constexpr uintptr_t serverRva=0x2c78e0,serverCallerRva=0x2dbd3b;
 constexpr const char* serverPattern="4C 89 4C 24 20 48 89 4C 24 08 55 41 54 41 55 41 57 48 8D AC 24 F8 FE FF";
 constexpr uint64_t clientWindowMs=150,serverWindowMs=300;
 // Where the rows keep what is written (2026-10-17, read in the build 25988036 and the same in 1.0.0.1): until then June's
@@ -74,7 +74,7 @@ inline std::atomic<uintptr_t> clientConsumer{0};
 // host's own); a guest's parry is decided by the host's game. EVR_PARRY_RELAX=0: the game's rules only.
 inline bool relax=true;inline bool relaxHooked=false;
 constexpr uint64_t relaxAfterSwingMs=200,opportunityFreshMs=80,relaxedTargetMs=500;
-constexpr uintptr_t flagTestRva=0x21a900,candidateRva=0x3b5110,entityRva=0x9a5910;
+constexpr uintptr_t flagTestRva=0x21aaa0,candidateRva=0x3b52b0,entityRva=0x9a6cf0;
 constexpr const char* flagTestPattern="4C 8B C1 0F B6 CA BA 01 00 00 00 48 D3 E2 41 F6 80 B1 01 00 00 01";
 constexpr const char* candidatePattern="48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 70 48 8B F2 49 8B F9 B2 04";
 constexpr const char* entityPattern="40 53 48 83 EC 20 48 8B 01 89 54 24 38 48 8D 54 24 38 48 8B 58 30";
@@ -113,7 +113,7 @@ using SecondCheck=void*(__fastcall*)(void*,void*,void*,void*,uint64_t);
 using FindTarget=void*(__fastcall*)(void*,void*,float);
 inline AbilityStart originalAbilityStart=nullptr;inline SecondCheck originalSecondCheck=nullptr;inline FindTarget originalFindTarget=nullptr;
 inline bool conditionsHooked=false;
-constexpr uintptr_t abilityStartRva=0x37eff0,abilityStartCaller=0x2c795f,secondCheckRva=0x3b16c0,secondCheckCaller=0x2c79d1,findTargetRva=0x3b6090,findTargetCaller=0x2c7a20;
+constexpr uintptr_t abilityStartRva=0x37f190,abilityStartCaller=0x2c7aff,secondCheckRva=0x3b1860,secondCheckCaller=0x2c7b71,findTargetRva=0x3b6230,findTargetCaller=0x2c7bc0;
 constexpr const char* abilityStartPattern="48 89 5C 24 08 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 F9 48 81 EC 00 01 00 00";
 constexpr const char* secondCheckPattern="48 89 6C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56 48 83 EC 30 83 7A 0C 00 49";
 constexpr const char* findTargetPattern="48 8B C4 48 89 58 20 48 89 50 10 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 F8 FD FF FF";
@@ -356,7 +356,7 @@ inline void install() noexcept {
         {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_SWING_PARRY",v,sizeof v);swingParry=!(m==1&&v[0]=='0');}
         {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_PARRY_RELAX",v,sizeof v);relax=!(m==1&&v[0]=='0');}
         if(swingParry&&relax&&conditionsHooked)try{
-            const auto call=baseAddress+0x2ad328;   // the choice's call of the per-enemy check
+            const auto call=baseAddress+0x2ad4c8;   // the choice's call of the per-enemy check
             if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+candidateRva)throw std::runtime_error("parry candidate caller changed");
             if(scan(reinterpret_cast<const uint8_t*>(baseAddress+entityRva),parsePattern(entityPattern).size(),parsePattern(entityPattern))!=std::vector<size_t>{0})throw std::runtime_error("entity lookup signature changed");
             entityOf=reinterpret_cast<Entity>(baseAddress+entityRva);

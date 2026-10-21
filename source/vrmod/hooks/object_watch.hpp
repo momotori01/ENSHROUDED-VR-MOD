@@ -11,13 +11,13 @@ namespace objectWatch {
 struct Target{uintptr_t rva;const char* pattern;unsigned arg;uint32_t bytes;const char* label;bool enabled=false;};
 // 18ae90 (fog readiness predicate) is owned by world_ready_probe.hpp and is not watched.
 inline std::array<Target,7> targets{{
-    {0x19da50,"48 8B C4 4C 89 40 18 55 53 56 57 41",1,0x83e0,"fog_world_19d9b0"},
-    {0x1bb160,"4C 89 44 24 18 48 89 54 24 10 48 89",1,0x83e0,"fog_view_192e70"},
-    {0x190ac0,"48 89 5C 24 08 57 48 83 EC 40 0F 10",1,0x83e0,"fog_190a20"},
-    {0x1b96a0,"48 85 C9 ? ? 48 8B 41 08 48 83 B8",0,0x83e0,"fog_1917d0"},
-    {0x1b8a00,"48 83 EC 58 0F 10 82 70 01 00 00 4C",1,0x83e0,"fog_190b50"},
+    {0x19db8d,"48 8B C4 4C 89 40 18 55 53 56 57 41",1,0x83e0,"fog_world_19d9b0"},
+    {0x1bb2b0,"4C 89 44 24 18 48 89 54 24 10 48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 38 98 FF FF B8 D8 68 00 00 E8 D3 22 17",1,0x83e0,"fog_view_192e70"},
+    {0x190c00,"48 89 5C 24 08 57 48 83 EC 40 0F 10",1,0x83e0,"fog_190a20"},
+    {0x1b97f0,"48 85 C9 ? ? 48 8B 41 08 48 83 B8",0,0x83e0,"fog_1917d0"},
+    {0x1b8b50,"48 83 EC 58 0F 10 82 70 01 00 00 4C",1,0x83e0,"fog_190b50"},
     {0x1904e0,"48 83 EC 28 0F 10 82 90 09 00 00 4C",1,0x83e0,"fog_190440"},
-    {0x1a3c30,"48 8B C4 48 89 58 08 48 89 70 10 57",0,0x83e0,"fog_1a3b90"},
+    {0x1a3d7a,"48 8B C4 48 89 58 08 48 89 70 10 57",0,0x83e0,"fog_1a3b90"},
 }};
 inline bool requested=false,enabled=false;
 inline std::atomic<bool> sampling{false};

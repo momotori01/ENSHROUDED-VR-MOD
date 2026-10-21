@@ -23,8 +23,8 @@ using Stage=void(__fastcall*)(void*,void*,void*);
 inline Stage original=nullptr;inline bool enabled=false;inline std::atomic<bool> failed{false};
 // 1.0 (Hotfix 1.0.0.1): the stage is 0xc22a0 (June 0x92870, the same prologue), called at 0x1316b7 for a View with
 // a grass movement state at View+0xf78 (June +0x9e8), the frame's list record the third argument as before.
-constexpr uintptr_t rva=0xc22d0,callerRva=0x1316fc;
-constexpr const char* pattern="48 89 5C 24 20 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57";
+constexpr uintptr_t rva=0xc2350,callerRva=0x1317fc;
+constexpr const char* pattern="48 89 5C 24 20 48 89 54 24 10 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D0 FE FF FF";
 struct Fields {uint32_t counter=0;std::array<uint8_t,16> list{};uint32_t offset=0;uint64_t bytes=0;};
 struct Role {uint64_t serial=0;int eye=-2;bool owner=false;};
 inline thread_local const Role* current=nullptr;

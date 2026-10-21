@@ -25,7 +25,7 @@ namespace
 {
 constexpr uint32_t limit = 20;
 #ifdef EVR_RENDER_ENTRY
-constexpr uintptr_t targetRva = 0x129ec0;
+constexpr uintptr_t targetRva = 0x129fc0;
 constexpr size_t componentBytes = 0xb98;
 constexpr const char *patternText =
     "4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10 48 89 4C 24 08 55 53 56 57 41 54 48 8D AC";
@@ -34,7 +34,7 @@ constexpr const wchar_t *logFilename = L"render-observer.jsonl";
 constexpr std::array<size_t, 10> readLengths{0, 64, 0xb98, 0x400, 24, 0x9a8, 8, 48, 8, 0xd0};
 #define EVR_OBSERVE_EXPORT EVR_ObserveRender
 #else
-constexpr uintptr_t targetRva = 0x2b2aa0;
+constexpr uintptr_t targetRva = 0x2b2c40;
 constexpr size_t componentBytes = 192;
 constexpr const char *patternText = "48 8B 5C 24 68 48 8D 95 48 01 00 00";
 constexpr const char *eventPrefix = "camera";

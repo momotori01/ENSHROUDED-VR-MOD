@@ -55,7 +55,7 @@ inline void exercise(){
         const auto defaults=bytes(uintptr_t(int64_t(hierarchy+64)+defaultOffset),count*48);
         logFile->event("hand_pose_source","\"handle\":"+std::to_string(sourceHandle)+",\"joints\":"+std::to_string(count)+
             ",\"references\":"+std::to_string(refs)+",\"scene_live\":"+std::to_string(liveBefore)+",\"unbound_test\":true");
-        owned=reinterpret_cast<Create>(baseAddress+0xfb850)(reinterpret_cast<void*>(scene),guid.data());
+        owned=reinterpret_cast<Create>(baseAddress+0xfb8e0)(reinterpret_cast<void*>(scene),guid.data());
         if(!owned||owned==sourceHandle){owned=0;throw std::runtime_error("private pose creation failed/aliased");}
         const auto record=handPoseMetadata::pose(scene,owned);
         if(read<uintptr_t>(record)!=resource||read<uint32_t>(resource+16)!=refs+1||read<uint64_t>(scene+layout::scenePoseLive)!=liveBefore+1||
@@ -66,21 +66,21 @@ inline void exercise(){
         if(!std::isfinite(old))throw std::runtime_error("nonfinite default root");const float moved=old+0.125f;
         std::memcpy(changed.data()+16,&moved,4);const auto beforeVersion=read<uint64_t>(record+24);
         std::array<uintptr_t,2> span{reinterpret_cast<uintptr_t>(changed.data()),count};
-        reinterpret_cast<Update>(baseAddress+0x110f80)(reinterpret_cast<void*>(scene),owned,span.data());
+        reinterpret_cast<Update>(baseAddress+0x111060)(reinterpret_cast<void*>(scene),owned,span.data());
         if(bytes(jointData(record),count*48)!=changed||read<uint64_t>(record+24)!=beforeVersion+1||
            bytes(jointData(source),count*48)!=sourceJoints||read<uint64_t>(source+24)!=sourceVersion||read<uint64_t>(record+0x58))
             throw std::runtime_error("private pose update/source isolation differs");
         handPoseMetadata::save(calibrationDirectory,"pose-original-joints.bin",reinterpret_cast<uintptr_t>(sourceJoints.data()),sourceJoints.size());
         handPoseMetadata::save(calibrationDirectory,"pose-owned-joints.bin",jointData(record),count*48);
         logFile->event("hand_pose_updated","\"native_update\":true,\"source_unchanged\":true,\"version_incremented\":true,\"delta\":0.125,\"bound_models\":0");
-        const auto retired=owned;reinterpret_cast<Remove>(baseAddress+0x10e180)(reinterpret_cast<void*>(scene),owned);owned=0;
+        const auto retired=owned;reinterpret_cast<Remove>(baseAddress+0x10e260)(reinterpret_cast<void*>(scene),owned);owned=0;
         bool invalid=false;try{handPoseMetadata::pose(scene,retired);}catch(...){invalid=true;}
         if(!invalid||read<uint32_t>(resource+16)!=refs||read<uint64_t>(scene+layout::scenePoseLive)!=liveBefore||
            bytes(jointData(source),count*48)!=sourceJoints||read<uint64_t>(source+24)!=sourceVersion)
             throw std::runtime_error("private pose cleanup accounting/source differs");
         logFile->event("hand_pose_retired","\"generation_invalidated\":true,\"references_restored\":true,\"live_restored\":true,\"source_unchanged\":true");result=0;
     }catch(const std::exception& e){
-        if(owned){try{handPoseMetadata::pose(scene,owned);reinterpret_cast<Remove>(baseAddress+0x10e180)(reinterpret_cast<void*>(scene),owned);
+        if(owned){try{handPoseMetadata::pose(scene,owned);reinterpret_cast<Remove>(baseAddress+0x10e260)(reinterpret_cast<void*>(scene),owned);
             logFile->event("hand_pose_failure_cleanup","\"native_remove_called\":true");}catch(...){logFile->event("hand_pose_failure_cleanup","\"native_remove_called\":false");}}
         logFile->event("hand_pose_failure","\"reason\":"+jsonString(e.what()));
     }
@@ -115,9 +115,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeHandPose(void* directory)
         if(nt.Signature!=IMAGE_NT_SIGNATURE||nt.FileHeader.TimeDateStamp!=evr::gameBuild::timeDateStamp||nt.OptionalHeader.SizeOfImage!=evr::gameBuild::sizeOfImage)throw std::runtime_error("pose unsupported build");
         for(auto e:std::array<std::pair<uintptr_t,const char*>,4>{{
           {renderRva,renderPattern},
-          {0xfb850,"40 55 53 56 41 57 48 8d 6c 24 c1 48 81 ec 88 00 00 00 48 8b 42 08 33 db"},
-          {0x110f80,"85 d2 0f 84 ? ? ? ? 48 89 74 24 20 41 56 48 83 ec 30 48 8b f1 44 0f"},
-          {0x10e180,"85 d2 0f 84 ? ? ? ? 48 89 5c 24 20 57 48 83 ec 20 48 8b f9 8b da 48"}}}){
+          {0xfb8e0,"40 55 53 56 41 57 48 8d 6c 24 c1 48 81 ec 88 00 00 00 48 8b 42 08 33 db"},
+          {0x111060,"85 d2 0f 84 ? ? ? ? 48 89 74 24 20 41 56 48 83 ec 30 48 8b f1 44 0f"},
+          {0x10e260,"85 d2 0f 84 ? ? ? ? 48 89 5c 24 20 57 48 83 ec 20 48 8b f9 8b da 48"}}}){
             const auto p=parsePattern(e.second);if(scan(reinterpret_cast<const uint8_t*>(baseAddress+e.first),p.size(),p)!=std::vector<size_t>{0})throw std::runtime_error("pose signature mismatch");
             logFile->event("hand_pose_signature","\"rva\":"+hex(e.first)+",\"pattern\":"+jsonString(e.second)+",\"matched\":true");}
         worldNativeDiagnostic=true;target=reinterpret_cast<void*>(baseAddress+renderRva);require(MH_Initialize(),"pose MH initialize");

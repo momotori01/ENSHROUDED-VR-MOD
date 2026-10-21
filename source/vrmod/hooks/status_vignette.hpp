@@ -22,8 +22,8 @@ inline float forceFreezing=-1;      // world-force-freezing.txt (diagnostic); <0
 inline std::atomic<uint64_t> freezingCalls{0},blurCalls{0},blurSuppressed{0};
 inline std::atomic<float> frost{0};  // smoothed freezing rim strength 0..1 (UI thread writes, render thread reads)
 inline std::chrono::steady_clock::time_point lastFreezingCall{};
-constexpr uintptr_t freezingRva=0xbbd7b0,hudCallerRva=0xc4eed2,uiGlobalRva=0x281b498;
-constexpr uintptr_t blurRva=0xb51310,blurCallerRva=0xb30db8;
+constexpr uintptr_t freezingRva=0xbbf330,hudCallerRva=0xc50a52,uiGlobalRva=0x281e498;
+constexpr uintptr_t blurRva=0xb52df0,blurCallerRva=0xb32898;
 constexpr const char* freezingPattern="48 8B C4 55 53 56 41 54 48 8D A8 38 FF FF FF 48 81 EC A8 01 00 00 48 8B 1D";
 constexpr const char* blurPattern="48 8B C4 48 89 58 20 55 48 8D 68 88 48 81 EC 70 01 00 00";
 inline uintptr_t freezingBlock(){

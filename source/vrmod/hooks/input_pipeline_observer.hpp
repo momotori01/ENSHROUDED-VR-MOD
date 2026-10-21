@@ -19,7 +19,7 @@ inline bool predictEnabled=false,encodeEnabled=false;
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},samples{0},failures{0};
 struct CallbackScope{CallbackScope(){callbacks.fetch_add(1);}~CallbackScope(){callbacks.fetch_sub(1);}};
-constexpr uintptr_t predictRva=0x954e40,encodeRva=0x3a54a0;
+constexpr uintptr_t predictRva=0x9560b0,encodeRva=0x3a5640;
 constexpr const char* predictPattern="89 54 24 10 53 56 57 41 56 41 57 48 81 EC 80 00 00 00";
 constexpr const char* encodePattern="48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56 48 83 EC 20 0F 10 42";
 inline void failure(const char* reason){if(failures.fetch_add(1)==0)logFile->event("input_pipeline_failure","\"reason\":"+jsonString(reason));}
@@ -33,7 +33,7 @@ inline void start(uintptr_t input,uintptr_t callerRsp,unsigned sample,uint32_t e
 __declspec(noinline) uintptr_t __fastcall predict(void* context,uint32_t entity,uint32_t tick,uint32_t component,const void* span){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());const CallbackScope callback;
     {const ObserverLastError preserve;
-     if(accepting.load()&&pending.active&&caller==baseAddress+0x3a2ad8){
+     if(accepting.load()&&pending.active&&caller==baseAddress+0x3a2c78){
         try{
             const auto descriptor=read<std::array<uintptr_t,2>>(reinterpret_cast<uintptr_t>(span));
             if(!descriptor[0]||descriptor[1]!=0x528||entity!=pending.entity||tick!=pending.tick)
@@ -48,7 +48,7 @@ __declspec(noinline) uintptr_t __fastcall encode(void* output,const void* input,
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());const CallbackScope callback;
     Pending captured;bool match=false;uint32_t historyTick=0;
     {const ObserverLastError preserve;
-     if(accepting.load()&&pending.active&&caller==baseAddress+0x3a2c8c){
+     if(accepting.load()&&pending.active&&caller==baseAddress+0x3a2e2c){
         captured=pending;pending={};
         try{
             const auto data=reinterpret_cast<uintptr_t>(input);
@@ -84,7 +84,7 @@ inline void verify(uintptr_t rva,const char* pattern,uintptr_t caller){
         throw std::runtime_error("input signature/caller changed: rva="+hex(rva)+" caller="+hex(caller)+" expected="+pattern);
 }
 inline void install(){
-    verify(predictRva,predictPattern,0x3a2ad8);verify(encodeRva,encodePattern,0x3a2c8c);
+    verify(predictRva,predictPattern,0x3a2c78);verify(encodeRva,encodePattern,0x3a2e2c);
     if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+predictRva),reinterpret_cast<void*>(&predict),reinterpret_cast<void**>(&originalPredict))!=MH_OK||
        MH_CreateHook(reinterpret_cast<void*>(baseAddress+encodeRva),reinterpret_cast<void*>(&encode),reinterpret_cast<void**>(&originalEncode))!=MH_OK)
         throw std::runtime_error("input pipeline observer creation failed");
@@ -102,7 +102,7 @@ inline void disable(){
     if(!had)return;
     const auto deadline=GetTickCount64()+500;
     while(callbacks.load()&&GetTickCount64()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    verify(predictRva,predictPattern,0x3a2ad8);verify(encodeRva,encodePattern,0x3a2c8c);
+    verify(predictRva,predictPattern,0x3a2c78);verify(encodeRva,encodePattern,0x3a2e2c);
     logFile->event("input_pipeline_removed","\"restored\":true,\"samples\":"+std::to_string(samples.load())+
         ",\"failures\":"+std::to_string(failures.load())+",\"remaining_callbacks\":"+std::to_string(callbacks.load()));
 }

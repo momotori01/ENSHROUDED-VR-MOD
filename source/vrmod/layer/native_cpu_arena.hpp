@@ -32,7 +32,7 @@ inline std::once_flag armOnce;
 inline void record(const char* event,const std::string& fields) noexcept {if(emit)emit(event,fields);}
 inline bool matches(uintptr_t caller,const Span* region,uint8_t,const Name* name) noexcept {
     // the call that makes Game_Render (0x838093 in 1.0: the one after Game_ClientPermanent and Game_ClientSwitch)
-    return caller==base+0x8386d8&&region&&region->data&&region->size==450ull*1024*1024&&
+    return caller==base+0x839908&&region&&region->data&&region->size==450ull*1024*1024&&
         name&&name->data&&name->size==11&&!std::memcmp(name->data,"Game_Render",11);
 }
 inline void* __fastcall initialize(void* object,const Span* region,uint8_t flags,const Name* name){
@@ -82,11 +82,11 @@ inline void arm(Emit logger) noexcept {
         if(nt->FileHeader.TimeDateStamp!=evr::gameBuild::timeDateStamp||nt->OptionalHeader.SizeOfImage!=evr::gameBuild::sizeOfImage)
             throw std::runtime_error("CPU arena unsupported loaded game build");
         const auto pattern=parsePattern("48 83 EC 38 0F 10 02 49 8B C1 48 8D 54 24 20 45");
-        auto* target=reinterpret_cast<void*>(base+0x8b2c20);
+        auto* target=reinterpret_cast<void*>(base+0x8b3e90);
         if(scan(static_cast<const uint8_t*>(target),pattern.size(),pattern)!=std::vector<size_t>{0})
             throw std::runtime_error("CPU arena constructor signature mismatch");
-        const auto* call=reinterpret_cast<const uint8_t*>(base+0x8386d3);int32_t delta=0;std::memcpy(&delta,call+1,4);
-        if(*call!=0xe8||reinterpret_cast<uintptr_t>(call+5)+delta!=base+0x8b2c20)
+        const auto* call=reinterpret_cast<const uint8_t*>(base+0x839903);int32_t delta=0;std::memcpy(&delta,call+1,4);
+        if(*call!=0xe8||reinterpret_cast<uintptr_t>(call+5)+delta!=base+0x8b3e90)
             throw std::runtime_error("CPU arena exact constructor callsite mismatch");
         HMODULE pinned=nullptr;
         if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,
@@ -103,7 +103,7 @@ inline void arm(Emit logger) noexcept {
 inline void retireHook() noexcept {
     if(!enabled||!consumed||callbacks.load()!=0)return;
     const ObserverLastError preserve;
-    const auto status=MH_DisableHook(reinterpret_cast<void*>(base+0x8b2c20));
+    const auto status=MH_DisableHook(reinterpret_cast<void*>(base+0x8b3e90));
     if(status==MH_OK)enabled=false;
     try{record("render_cpu_arena_hook_removed","\"status\":"+std::to_string(status)+",\"backing_retained_until_process_exit\":true");}catch(...){}
 }

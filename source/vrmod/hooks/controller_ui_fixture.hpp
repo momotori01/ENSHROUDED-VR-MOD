@@ -2034,7 +2034,7 @@ inline void stopGameplayReaders(){
 // serve only as identity checks; this routine is never called by a timer/worker.
 inline BackendExitToken beginBackendExit(uintptr_t nativeBackend,uintptr_t caller){
  if(!backendExitRequested||!requested||!installed.load()||done.load()||nativeBackend!=backend)return {};
- if(caller!=0xf97414||GetCurrentThreadId()!=ownerThread||!ownerSerial||!inputModulePinned||backendExitBegun.load())throw std::runtime_error("input owner destruction scope differs");
+ if(caller!=0xf99fd4||GetCurrentThreadId()!=ownerThread||!ownerSerial||!inputModulePinned||backendExitBegun.load())throw std::runtime_error("input owner destruction scope differs");
  if(read<uintptr_t>(nativeBackend)!=manager||read<uintptr_t>(manager+0x48)!=nativeBackend||read<HMODULE>(nativeBackend+8)!=module)throw std::runtime_error("input owner destruction identity differs");
  pendingBackendExit={ownerSerial,nativeBackend,manager,reinterpret_cast<uintptr_t>(module),ownerThread};
  backendExitBegun=true;stop=true;active=false;connected=false;

@@ -54,7 +54,7 @@ if($VulkanValidation -ne 'None'){
 }
 $isolated = Join-Path $PSScriptRoot 'test_env/steamvr'
 if ($PrepareVr -or $PrepareMock -or $PrepareRealVr -or $DirectPlay -or $RenderCpuArenaMiB -or $UiCapture) {
-    if ((Get-FileHash -LiteralPath (Join-Path $gameDir 'enshrouded.exe') -Algorithm SHA256).Hash -ne '82E5020A8736348CD0374F004B2F5E5EF456B5BD27AA5420DF34C7DD241CFEEB') { throw 'Unsupported game build; VR preparation refused.' }
+    if ((Get-FileHash -LiteralPath (Join-Path $gameDir 'enshrouded.exe') -Algorithm SHA256).Hash -ne 'D64966E23B1A458EE6F147BCBCEAC0B577FA7E39A212F371287D8CC119817882') { throw 'Unsupported game build; VR preparation refused.' }
 }
 if ($PrepareVr) {
     $sessionPath = Join-Path $isolated 'active-session.json'

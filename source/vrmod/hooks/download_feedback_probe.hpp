@@ -3,8 +3,8 @@ namespace downloadFeedbackDiagnostic {
 using Copy=void*(__fastcall*)(void*,void*,void*,void*,const void*);
 inline Copy original=nullptr;
 inline bool enabled=false;
-constexpr uintptr_t rva=0x1012760;
-constexpr std::array<uintptr_t,5> callers{0x2a49e,0x1fac42,0x7af32,0x7cad2,0x17eda1};
+constexpr uintptr_t rva=0x10153c0;
+constexpr std::array<uintptr_t,5> callers{0x2a49e,0x1fada2,0x7af30,0x7cad2,0x17eed1};
 struct Slot {uint64_t inFlight=0,completed=0;};
 struct Snapshot {
     bool valid=false;
@@ -66,7 +66,7 @@ inline void install(){
     if(MH_CreateHook(reinterpret_cast<void*>(target),reinterpret_cast<void*>(&copy),reinterpret_cast<void**>(&original))!=MH_OK||
         MH_EnableHook(reinterpret_cast<void*>(target))!=MH_OK)throw std::runtime_error("download feedback observer hook failed");
     enabled=true;
-    logFile->event("download_feedback_hook_enabled","\"rva\":\"0x1012760\",\"changes_native_results\":false,\"private_water_routing\":"+std::string(privateWaterFeedback?"true":"false"));
+    logFile->event("download_feedback_hook_enabled","\"rva\":\"0x10153c0\",\"changes_native_results\":false,\"private_water_routing\":"+std::string(privateWaterFeedback?"true":"false"));
 }
 inline void disable() noexcept {
     if(!enabled)return;

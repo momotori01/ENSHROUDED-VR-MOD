@@ -28,16 +28,16 @@ struct SharedHook {
     uintptr_t secondCaller=0;
 };
 std::array<SharedHook,8> sharedHooks{{
-    {0x14aa40,0x10446c,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 48 8B FA 66"},
-    {0x4fe60,0x1040c1,"48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 55 48 8B EC 48 83 EC 40 48 8B F2 48 8B F9 48"},
-    {0x1f9f30,0x1040df,"48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 4C 89 6C 24 20 55 41 56 41 57 48 8B EC 48 83 EC 50 33 C0 48 C7 45 E8 20 00 00 00 88 45 F4 4C 8D"},
-    {0x14b0c0,0x107c26,"40 53 48 83 EC 20 48 8B D9 48 8D 91 E0 00 00 00 48 8B 49 10 E8 ? ? ? ?"},
-    {0x52550,0x107d4e,"40 53 48 83 EC 20 48 8B D9 48 8D 51 48 48 8B 49"},
-    {0x1faf60,0x107d5f,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 BE 02 00"},
-    {0x17a490,0x104011,"40 55 56 57 41 54 41 56 41 57 48 8D AC 24 78",nullptr,false,0x104147},
+    {0x14ab40,0x10454c,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 40 48 8B FA 66"},
+    {0x4fe60,0x1041a1,"48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 55 48 8B EC 48 83 EC 40 48 8B F2 48 8B F9 48"},
+    {0x1fa090,0x1041bf,"48 89 5C 24 08 48 89 74 24 10 48 89 7C 24 18 4C 89 6C 24 20 55 41 56 41 57 48 8B EC 48 83 EC 50 33 C0 48 C7 45 E8 20 00 00 00 88 45 F4 4C 8D"},
+    {0x14b1c0,0x107d06,"40 53 48 83 EC 20 48 8B D9 48 8D 91 E0 00 00 00 48 8B 49 10 E8 ? ? ? ?"},
+    {0x52550,0x107e2e,"40 53 48 83 EC 20 48 8B D9 48 8D 51 48 48 8B 49 08 E8 2A F6"},
+    {0x1fb0c0,0x107e3f,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 BE 02 00"},
+    {0x17a5b0,0x1040f1,"40 55 56 57 41 54 41 56 41 57 48 8D AC 24 78",nullptr,false,0x104227},
     // 1.0: the SSR free (0x153fe0 in June) is 0x17b210, called for both slots (View+0xf18 at 0x107c87, +0xf20 at
     // 0x107ccb), as before.
-    {0x17b2b0,0x107d2c,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 79 10 48",nullptr,false,0x107d70}
+    {0x17b3d0,0x107e0c,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8B 79 10 48 8D 51 40 48",nullptr,false,0x107e50}
 }};
 bool skipShared(size_t index,void* object,uintptr_t caller) {
     if(!privateResolution)return false;

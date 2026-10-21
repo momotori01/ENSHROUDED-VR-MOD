@@ -129,7 +129,7 @@ inline void retire(const char* event,const std::string& detail){
     const auto clone=motionVisual::object(handle);
     if(read<uintptr_t>(clone+layout::modelResource)!=resource||read<uint32_t>(clone+layout::modelMask)||read<uint32_t>(clone+layout::modelSdf))throw std::runtime_error("arrow retirement invariant differs");
     const auto id=handle,refs=read<uint32_t>(resource+16);std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1};
-    reinterpret_cast<motionVisual::Remove>(baseAddress+0x10df20)(reinterpret_cast<void*>(scene),ids.data());handle=0;ready=false;
+    reinterpret_cast<motionVisual::Remove>(baseAddress+0x10e000)(reinterpret_cast<void*>(scene),ids.data());handle=0;ready=false;
     const bool invalid=read<uint8_t>(read<uintptr_t>(scene+0x1c8)+(id&0xffffff))!=uint8_t(id>>24);
     const bool released=refs==1||(refs>1&&read<uint32_t>(resource+16)==refs-1);
     logFile->event(event,"\"handle\":"+std::to_string(id)+",\"updates\":"+std::to_string(updates)+",\"generation_invalidated\":"+(invalid?"true":"false")+
@@ -268,17 +268,17 @@ inline void update(const game::StableAnchor& anchor,uint64_t currentSerial){
     if(!handle){
         motionVisual::validate();const auto refs=read<uint32_t>(sourceResource+16);if(!refs||refs==UINT32_MAX)throw std::runtime_error("arrow resource reference bound");
         const auto guid=read<std::array<uint32_t,4>>(sourceResource+0x18);resource=sourceResource;
-        handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfb450)(reinterpret_cast<void*>(scene),guid.data(),transform.data());
+        handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfb4e0)(reinterpret_cast<void*>(scene),guid.data(),transform.data());
         if(!handle||handle==source)throw std::runtime_error("arrow creation failed/aliased");
         auto clone=motionVisual::object(handle);
-        reinterpret_cast<motionVisual::Mask>(baseAddress+0xf7030)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
+        reinterpret_cast<motionVisual::Mask>(baseAddress+0xf70c0)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
         clone=motionVisual::object(handle);
         if(read<uintptr_t>(clone+layout::modelResource)!=resource||read<uint32_t>(resource+16)!=refs+1||read<uint32_t>(clone+layout::modelMask)||read<uint32_t>(clone+layout::modelAuxiliary)||read<uint32_t>(clone+layout::modelPose))throw std::runtime_error("arrow clone resource/pose differs");
         const auto sdfId=read<uint32_t>(clone+layout::modelSdf);
         if(sdfId){
             if(sdfId==read<uint32_t>(motionVisual::object(source)+layout::modelSdf))throw std::runtime_error("arrow SDF aliases source");
             const auto sdf=read<uintptr_t>(scene+layout::sceneSdf);const auto count=read<uint64_t>(sdf+0x78);if(!count)throw std::runtime_error("arrow SDF count");
-            using RemoveSdf=void(__fastcall*)(void*,uint32_t);reinterpret_cast<RemoveSdf>(baseAddress+0x15a540)(reinterpret_cast<void*>(sdf),sdfId);
+            using RemoveSdf=void(__fastcall*)(void*,uint32_t);reinterpret_cast<RemoveSdf>(baseAddress+0x15a640)(reinterpret_cast<void*>(sdf),sdfId);
             *reinterpret_cast<uint32_t*>(motionVisual::object(handle)+layout::modelSdf)=0;
             if(read<uint64_t>(sdf+0x78)!=count-1)throw std::runtime_error("arrow SDF removal failed");
         }

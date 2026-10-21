@@ -5,7 +5,7 @@ namespace motionTargets {
 using Prepare=uintptr_t(__fastcall*)(void*,void*,uint32_t);
 inline Prepare original=nullptr;inline bool enabled=false;
 inline std::atomic<bool> accepting{false};inline std::atomic<unsigned> callbacks{0},samples{0},failures{0};
-constexpr uintptr_t rva=0x9bab60,callerRva=0x3ed931;
+constexpr uintptr_t rva=0x9bc1a0,callerRva=0x3edcb1;
 constexpr const char* pattern="48 89 5c 24 10 55 56 57 41 54 41 55 41 56 41 57 48 83 ec 60";
 struct Candidate{double distance=0;std::string fields;};
 struct Scan{uintptr_t bitmap=0,keys=0,values=0;uint64_t capacity=0,cursor=0;unsigned health=0,current=0,found=0,skipped=0;nativeAttributes::Attribute healthAttribute;nativeImpactComponents::ComponentType healthType;uint64_t started=0;std::vector<Candidate> nearest;bool complete=false;};
@@ -29,7 +29,7 @@ inline void capture(void* context,void* query,uint32_t bytes){
   if(scan.healthType.qualifiedName!="keen::ecs::Health"||scan.healthType.bytes!=68||scan.healthAttribute.name!="Health")throw std::runtime_error("target Health runtime identity differs");
   scan.bitmap=bitmap;scan.keys=keys;scan.values=values;scan.capacity=capacity;scan.health=health;scan.current=unsigned(binding.current);scan.started=GetTickCount64();
   logFile->event("motion_target_health_schema","\"world\":"+hex(world)+",\"registry\":"+hex(slots[3])+",\"component_id\":"+std::to_string(health)+",\"component_bytes\":"+std::to_string(scan.healthType.bytes)+",\"component_name\":"+jsonString(scan.healthType.qualifiedName)+",\"component_type_bytes\":"+jsonString(nativeImpactComponents::asHex(scan.healthType.record))+",\"attribute_name\":"+jsonString(scan.healthAttribute.name)+",\"attribute_metadata\":"+jsonString(nativeImpactComponents::asHex(scan.healthAttribute.bytes))+",\"read_only\":true");
-  logFile->event("motion_target_registry","\"world\":"+hex(world)+",\"local_entity\":"+std::to_string(root.entity)+",\"health_type\":"+std::to_string(health)+",\"current_type\":"+std::to_string(binding.current)+",\"started_ms\":"+std::to_string(scan.started)+",\"capacity\":"+std::to_string(capacity)+",\"query_bytes\":"+jsonString(nativeImpactComponents::asHex(read<std::array<uint8_t,136>>(reinterpret_cast<uintptr_t>(query))))+",\"caller\":\"0x3ed931\",\"read_only\":true");
+  logFile->event("motion_target_registry","\"world\":"+hex(world)+",\"local_entity\":"+std::to_string(root.entity)+",\"health_type\":"+std::to_string(health)+",\"current_type\":"+std::to_string(binding.current)+",\"started_ms\":"+std::to_string(scan.started)+",\"capacity\":"+std::to_string(capacity)+",\"query_bytes\":"+jsonString(nativeImpactComponents::asHex(read<std::array<uint8_t,136>>(reinterpret_cast<uintptr_t>(query))))+",\"caller\":\"0x3edcb1\",\"read_only\":true");
  }
  if(scan.bitmap!=bitmap||scan.keys!=keys||scan.values!=values||scan.capacity!=capacity||scan.health!=health||scan.current!=unsigned(binding.current)){scan.complete=true;logFile->event("motion_target_scan_invalidated","\"world\":"+hex(world)+",\"reason\":\"map or learned types changed\"");return;}
  const auto end=std::min(capacity,scan.cursor+64);const auto occupied=read<uint64_t>(bitmap+(scan.cursor/64)*8);

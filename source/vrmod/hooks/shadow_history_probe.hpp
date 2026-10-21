@@ -16,7 +16,7 @@ namespace shadowHistoryProbe {
 using Pass=void*(__fastcall*)(void*,void*,void*,void*);
 using NoContent=bool(__fastcall*)(const void*);
 inline Pass original=nullptr;inline bool enabled=false;
-constexpr uintptr_t rva=0x164970,callerRva=0xf75fb,noContentRva=0x1014910;
+constexpr uintptr_t rva=0x164a70,callerRva=0xf75fb,noContentRva=0x1017570;
 constexpr const char* pattern="48 89 54 24 10 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC";
 constexpr const char* noContentPattern="48 89 5C 24 08 57 48 83 EC 50 8B 41 08 48 8B D9 48 8B 39 0F";
 struct Seen {unsigned calls=0,resets=0,lines=0;int last=-1;std::array<uint8_t,16> history{};unsigned historyChanges=0;};
