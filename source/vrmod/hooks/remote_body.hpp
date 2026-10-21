@@ -73,9 +73,15 @@ inline bool drive(uint32_t entity,const std::array<uint32_t,24>& handles,bool ow
         const auto transform=read<std::array<uint8_t,56>>(anchor+0x38);std::memcpy(&d.root,transform.data(),24);
         Quat modelQ;Vec3 modelScale;std::memcpy(&modelQ,transform.data()+24,16);std::memcpy(&modelScale,transform.data()+40,12);modelQ=normalized(modelQ);
         if(!finite(modelScale)||modelScale.x<.5f||modelScale.y<.5f||modelScale.z<.5f||modelScale.x>2||modelScale.y>2||modelScale.z>2)throw std::runtime_error("model scale unexpected");
-        // A leaning model (swimming, diving) is solved upright, as the own one.
-        const float leanRadians=bodyik::leanAngle(modelQ);const bool leaning=leanRadians>1e-3f;
-        const auto leanQ=bodyik::leanPart(modelQ),solveQ=leaning?bodyik::uprightPart(modelQ):modelQ;
+        // A leaning model (swimming, diving) is solved upright, as the own one. The lean is the owner's when it was sent
+        // (sync::Body lean, 2026-10-21: this copy of a swimming guest did not lean, the body stood out of the water);
+        // otherwise this copy's own. EVR_REMOTE_SENT_LEAN=0: always the copy's own.
+        static const bool sentLean=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_SENT_LEAN",v,sizeof v);return !(n==1&&v[0]=='0');}();
+        const bool useSent=sentLean&&body.leaning;
+        const auto ownLean=bodyik::leanPart(modelQ);
+        const auto leanQ=useSent?normalized(body.lean):ownLean;
+        const float leanRadians=bodyik::leanAngle(useSent?multiply(bodyik::uprightPart(modelQ),leanQ):modelQ);const bool leaning=leanRadians>1e-3f;
+        const auto solveQ=leaning||useSent?bodyik::uprightPart(modelQ):modelQ;
         const auto targets=sync::targets(sync::Model{solveQ,modelScale},body);
         if(leaning)bodyik::lean(animated,parents,leanQ);
         bodyik::Report report;

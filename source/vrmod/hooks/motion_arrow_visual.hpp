@@ -16,6 +16,87 @@ inline std::vector<Seen> candidates;
 // arrow on its bow) and the signed metres from the model origin to the rear end of that axis (from the model's own
 // extent; measured on the game's nocked arrow when the extent is not the long thin shape of an arrow).
 inline bool measured=false,extentKnown=false;inline float nockDistance=0;inline Vec3 axis{};inline unsigned failures=0;
+// The arrow on the string from the grab (2026-10-21; user after the online session: "nocking the bow responds badly" -
+// in the logs the game's arrow came 0.3 .. 0.4 s after the hand took the string, as a guest and alone alike: the game's
+// nocking movement; VHVR shows the arrow at the grab). Until the game's arrow shows, the clone of the last arrow stands
+// on the string with the turn it had against the game's bow the last time (relative) and the rest of its transform;
+// for earlyMs at the most (without arrows the game shows none, and the clone goes). EVR_ARROW_EARLY=0: as before.
+inline const bool earlyWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_EARLY",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline constexpr uint64_t earlyMs=700;
+inline bool haveRelative=false,wasHeld=false;inline Quat relative{0,0,0,1};inline std::array<uint8_t,56> lastTransform{};inline uint64_t heldSince=0,earlyUpdates=0,lastHeldMs=0;inline unsigned earlyLogs=0;
+// The guest's own arrow flies on its PC (2026-10-21, user 04:15: "what concerns the player's action is done on each PC;
+// never wait for the host's answer before the own action shows" - 04:25: "the host may not even see the arrow, it is
+// fast"; 04:30: "the host needs only the hit's damage"). A guest's arrows are made by the host's server and reached the
+// guest a round trip after the release. Now at the release the clone that stood on the string flies on, along the
+// shot's line with the game's arrow speed and gravity (Flight::speed from the bow, flightGravity: measured, see below), until it meets
+// a kept creature or thing (live_melee_targets.hpp segmentHit - there it stops and the hit goes to the host,
+// flightReport) or the ground ahead (aimReach's level ground) or 1.5 s pass; a new draw ends it. Only as a guest (a
+// host's and a single player's arrows are made at once by their own server). EVR_ARROW_FLIGHT=0: off; =2: also alone
+// (a test: the clone flies beside the game's own arrow).
+// The game's arrow, measured (headset session 2026-10-21 10:24, EVR_EFFECT_CENSUS=1, three shots of the bow 327157552):
+// 89.9 - 90.3 m/s as it leaves, its keen::ecs::Gravity (0,-1,0) x 25 on - the vertical speed fell 25 m/s each second -
+// and no drag (the level speed stayed the same). Before, a guess of 60 m/s and 9.81.
+// The speed is the bow's (2026-10-21, the game data: the bow's placedEntityLocalSpawnVelocity, 75 / 80 / 90 / 100 m/s over
+// the 62 bows; no skill, perk, buff or arrow changes the speed, the gravity or the drag - docs/analysis/
+// arrow_flight_skills_20261021): the shown ranged weapon's item in include/evr/bow_speed_catalog.hpp, 90 for one not
+// in it. EVR_ARROW_FLIGHT_SPEED=<m/s> sets one speed for every bow (a test).
+struct Flight {bool on=false,stuck=false,reported=false,strong=false;float speed=90,gravity=25;uint32_t item=0;uint64_t serial=0,start=0,stuckAt=0;std::array<uint8_t,56> transform{};Vec3 dir{};Quat rotation{0,0,0,1};float reach=1e9f;std::array<int64_t,3> last{};};
+inline Flight flight;inline uint64_t aimSeen=0;inline unsigned flightLogs=0;
+inline const int flightMode=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT",v,sizeof v);return n==1&&v[0]=='0'?0:n==1&&v[0]=='2'?2:1;}();
+inline const float flightSpeedSet=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT_SPEED",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):0.f;return std::isfinite(f)&&f>1?f:0.f;}();
+inline const float flightGravity=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT_GRAVITY",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):-1.f;return std::isfinite(f)&&f>=0?f:25.f;}();
+inline bool (*flightHit)(const std::array<int64_t,3>&,const std::array<int64_t,3>&,float&,std::array<int64_t,3>&,bool&,uint32_t&)=nullptr;
+inline void (*flightReport)(const std::array<int64_t,3>&,bool)=nullptr;
+inline float (*flightReach)(WorldPositionQ32,Vec3,uint64_t)=nullptr;
+inline WorldPositionQ32 moved(const WorldPositionQ32& p,const Vec3& m){return {p.x+int64_t(double(m.x)*4294967296.),p.y+int64_t(double(m.y)*4294967296.),p.z+int64_t(double(m.z)*4294967296.)};}
+// The flight's frame: true while the clone is shown flying (or stuck where it hit).
+inline bool flyFrame(uint64_t now,uint64_t currentSerial){
+    controllerUiFixture::BowAim b;{std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);b=controllerUiFixture::bowAim;}
+    if(b.serial!=aimSeen){aimSeen=b.serial;
+        const bool wanted=flightMode==2||(flightMode==1&&nativeImpactComponents::clientNow(now));
+        // the release of this bow's string (a throw sets the same aim: not an arrow)
+        if(wanted&&b.serial&&handle&&haveRelative&&lastHeldMs&&now>=lastHeldMs&&now-lastHeldMs<=300){
+            Quat q;std::memcpy(&q,b.aim.data()+24,16);q=normalized(q);
+            flight={};flight.on=true;flight.serial=b.serial;flight.start=now;flight.transform=lastTransform;flight.dir=rotate(q,{0,0,1});
+            {std::lock_guard<std::mutex> lock(controllerUiFixture::gestureMutex);flight.item=controllerUiFixture::gestureRangedItem;}
+            {const float bow=evr::motion::catalogBowSpeed(flight.item);flight.speed=flightSpeedSet>0?flightSpeedSet:bow>0?bow:90.f;}
+            // the strong shot's arrow does not drop (its template has no gravity component; the user: "it does not fall")
+            {const auto strong=controllerUiFixture::strongShotAt.load();flight.strong=strong&&now>=strong&&now-strong<=1500;flight.gravity=flight.strong?0.f:flightGravity;}
+            std::memcpy(&flight.rotation,lastTransform.data()+24,16);flight.rotation=normalized(flight.rotation);
+            WorldPositionQ32 p0;std::memcpy(&p0,lastTransform.data(),24);flight.last={p0.x,p0.y,p0.z};
+            if(flightReach){const float r=flightReach(p0,flight.dir,now);if(std::isfinite(r)&&r>0)flight.reach=r;}
+            if(flightLogs++<300)logFile->event("arrow_flight_start","\"frame\":"+std::to_string(liveFrame.frame)+",\"serial\":"+std::to_string(b.serial)+",\"item\":"+std::to_string(flight.item)+",\"speed\":"+std::to_string(flight.speed)+",\"strong\":"+(flight.strong?"true":"false")+
+                ",\"gravity\":"+std::to_string(flight.gravity)+",\"reach\":"+std::to_string(flight.reach)+",\"dir\":["+std::to_string(flight.dir.x)+","+std::to_string(flight.dir.y)+","+std::to_string(flight.dir.z)+"]");}}
+    if(!flight.on||!handle)return false;
+    const double t=double(now-flight.start)/1000.0;
+    if(t>1.5||(flight.stuck&&now-flight.stuckAt>1000)){flight.on=false;return false;}
+    WorldPositionQ32 p0;std::memcpy(&p0,flight.transform.data(),24);
+    auto transform=flight.transform;
+    if(!flight.stuck){
+        Vec3 disp=flight.dir*float(flight.speed*t);disp.y-=float(.5*flight.gravity*t*t);
+        Vec3 vel=flight.dir*flight.speed;vel.y-=float(flight.gravity*t);
+        auto p=moved(p0,disp);std::array<int64_t,3> now3{p.x,p.y,p.z};
+        float along=0;std::array<int64_t,3> at{};bool character=false;uint32_t entity=0;
+        const bool ground=length(disp)>=flight.reach;
+        if(flightHit&&flightHit(flight.last,now3,along,at,character,entity)){
+            const Vec3 seg{float(double(now3[0]-flight.last[0])/4294967296.),float(double(now3[1]-flight.last[1])/4294967296.),float(double(now3[2]-flight.last[2])/4294967296.)};
+            const WorldPositionQ32 l{flight.last[0],flight.last[1],flight.last[2]};p=moved(l,seg*along);flight.stuck=true;flight.stuckAt=now;
+            if(flightReport&&!flight.reported){flight.reported=true;flightReport(at,character);}
+            if(flightLogs++<300)logFile->event("arrow_flight_hit","\"frame\":"+std::to_string(liveFrame.frame)+",\"entity\":"+std::to_string(entity)+",\"character\":"+(character?"true":"false")+",\"seconds\":"+std::to_string(t));
+        }else if(ground){flight.stuck=true;flight.stuckAt=now;
+            if(flightLogs++<300)logFile->event("arrow_flight_ground","\"frame\":"+std::to_string(liveFrame.frame)+",\"seconds\":"+std::to_string(t)+",\"reach\":"+std::to_string(flight.reach));}
+        const float speed=length(vel);
+        const auto rotation=speed>1e-3f?normalized(multiply(motion::alignDirections(flight.dir,vel*(1/speed)),flight.rotation)):flight.rotation;
+        std::memcpy(transform.data(),&p,24);std::memcpy(transform.data()+24,&rotation,16);
+        flight.last={p.x,p.y,p.z};
+        if(flight.stuck)flight.transform=transform;   // it stays where it stopped
+    }
+    std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&handle),1},poses{reinterpret_cast<uintptr_t>(transform.data()),1};
+    motionVisual::change(reinterpret_cast<void*>(scene),ids.data(),poses.data());
+    const auto clone=motionVisual::object(handle);
+    if(read<uintptr_t>(clone+layout::modelResource)!=resource||read<uint32_t>(clone+layout::modelMask)||read<uint32_t>(clone+layout::modelSdf)||read<uint32_t>(clone+layout::modelPose))throw std::runtime_error("flying arrow clone invariant failed");
+    serial=currentSerial;frame=liveFrame.frame;ready=true;return true;
+}
 constexpr float findRange=.35f,keepRange=.6f,nockedRange=.15f;
 inline double metres(const WorldPositionQ32& a,const WorldPositionQ32& b){
     const double x=relativeQ32(a.x,b.x),y=relativeQ32(a.y,b.y),z=relativeQ32(a.z,b.z);return std::sqrt(x*x+y*y+z*z);
@@ -104,7 +185,34 @@ inline void update(const game::StableAnchor& anchor,uint64_t currentSerial){
             candidates.clear();candidatesAt=0;
         }else{candidates=std::move(found);candidatesAt=now;}
     }
-    if(!source)return;
+    if(string.held&&!wasHeld)heldSince=now;wasHeld=string.held;if(string.held)lastHeldMs=now;
+    if(string.held&&flight.on)flight.on=false;   // a new draw: the string's arrow again
+    if(!string.held&&flightMode&&scene&&flyFrame(now,currentSerial)){if(source){hiddenSerial=currentSerial;hiddenFrame=liveFrame.frame;}return;}   // the game's arrow at the bow stays out of sight
+    if(!source){
+        // (the strong shot's draw, by the right grip, has no game arrow at all: the clone stays for as long as it is drawn - 2026-10-21,
+        // the user: "with the strong shot the nocked arrow does not show")
+        if(earlyWanted&&string.held&&handle&&measured&&measuredResource==resource&&haveRelative&&heldSince&&(now-heldSince<=earlyMs||controllerUiFixture::bowStrongDrawing.load())&&anchor.worldUnitsPerMeter==1){
+            const auto facing=normalized(anchor.orientation);
+            const auto origin=cameraPosition(anchor.root,rotate(facing,anchor.cameraOffsetGameUnits),1);
+            auto world=[&](Vec3 tracking){return cameraPosition(origin,rotate(facing,game::trackingPose(compose(liveTrackingToAnchor,Pose{{0,0,0,1},tracking})).position),anchor.worldUnitsPerMeter);};
+            const auto& rest=motion::BowPhysicalTrial::restString;
+            const auto nock=world(string.hand),arrowRest=world(g.model.position+rotate(g.model.orientation,{0,rest.y*g.scale.y,0}));
+            auto shot=offset(arrowRest,nock);const float span=length(shot);
+            if(!std::isfinite(span)||span<.05f)return;
+            shot=shot*(1/span);
+            const auto transplanted=normalized(multiply(g.worldOrientation,relative));
+            const auto rotation=normalized(multiply(motion::alignDirections(rotate(transplanted,axis),shot),transplanted));
+            const auto position=cameraPosition(nock,shot*-nockDistance,1);
+            auto transform=lastTransform;std::memcpy(transform.data(),&position,24);std::memcpy(transform.data()+24,&rotation,16);
+            std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&handle),1},poses{reinterpret_cast<uintptr_t>(transform.data()),1};
+            motionVisual::change(reinterpret_cast<void*>(scene),ids.data(),poses.data());
+            const auto clone=motionVisual::object(handle);
+            if(read<uintptr_t>(clone+layout::modelResource)!=resource||read<uint32_t>(clone+layout::modelMask)||read<uint32_t>(clone+layout::modelSdf)||read<uint32_t>(clone+layout::modelPose))throw std::runtime_error("early arrow clone invariant failed");
+            serial=currentSerial;frame=liveFrame.frame;ready=true;++earlyUpdates;
+            if(earlyLogs<200&&now-heldSince<=20){++earlyLogs;logFile->event("motion_arrow_early","\"frame\":"+std::to_string(liveFrame.frame)+",\"handle\":"+std::to_string(handle)+",\"held_ms\":"+std::to_string(now-heldSince)+",\"early_updates\":"+std::to_string(earlyUpdates));}
+        }
+        return;
+    }
     hiddenSerial=currentSerial;hiddenFrame=liveFrame.frame;
     const auto object=motionVisual::object(source);
     const auto original=read<std::array<uint8_t,432>>(object);
@@ -155,6 +263,7 @@ inline void update(const game::StableAnchor& anchor,uint64_t currentSerial){
     const auto rotation=normalized(multiply(motion::alignDirections(rotate(transplanted,axis),shot),transplanted));
     const auto position=cameraPosition(nock,shot*-nockDistance,1);
     std::memcpy(transform.data(),&position,24);std::memcpy(transform.data()+24,&rotation,16);
+    relative=normalized(multiply(inverse(bowOrientation),arrowOrientation));haveRelative=true;lastTransform=transform;
     if(handle&&resource!=sourceResource){retire("motion_arrow_retired",",\"another_arrow\":true");++retired;}
     if(!handle){
         motionVisual::validate();const auto refs=read<uint32_t>(sourceResource+16);if(!refs||refs==UINT32_MAX)throw std::runtime_error("arrow resource reference bound");

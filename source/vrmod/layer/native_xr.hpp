@@ -59,19 +59,31 @@ struct LiveNativeXr
 std::unique_ptr<LiveNativeXr> liveNativeXr;
 // The depth the game hands DLSS for an eye-sized picture (hooks/dlss_eval_observer.hpp, EVR_EYE_WARP=1): the output
 // image names the eye's picture, the depth image is kept for the warp of the frames that leave the eye out.
-struct EyeDepthNote {VkImage output{},depth{};uint32_t width=0,height=0;VkFormat format=VK_FORMAT_UNDEFINED;uint64_t at=0;};
+// jitter: DLSS's jitter of that evaluation (its parameters +0x28 / +0x2c, the game's depth pixels; 2026-10-21).
+struct EyeDepthNote {VkImage output{},depth{};uint32_t width=0,height=0;VkFormat format=VK_FORMAT_UNDEFINED;uint64_t at=0;float jitterX=0,jitterY=0;};
 std::array<EyeDepthNote,8> eyeDepthNotes{};uint64_t eyeDepthNoteCount=0;std::mutex eyeDepthNoteLock;
-extern "C" __declspec(dllexport) int evrNoteEyeDepth(VkDevice device,VkImage output,VkImage depth,uint32_t width,uint32_t height,VkFormat format) noexcept {
+extern "C" __declspec(dllexport) int evrNoteEyeDepthJitter(VkDevice device,VkImage output,VkImage depth,uint32_t width,uint32_t height,VkFormat format,float jitterX,float jitterY) noexcept {
     try{
         if(!output||!depth||!width||!height)return 2;
+        if(!std::isfinite(jitterX)||!std::isfinite(jitterY)||std::abs(jitterX)>1||std::abs(jitterY)>1)jitterX=jitterY=0;
         {std::lock_guard<std::mutex> lock(mutex);uint64_t generation=0;auto d=trackedImages.find(key(device));
             if(d!=trackedImages.end()){auto found=d->second.find(depth);if(found!=d->second.end())generation=found->second;}
             registerNativeImageLocked(device,depth,generation,8,true);}
         std::lock_guard<std::mutex> lock(eyeDepthNoteLock);
-        auto& n=eyeDepthNotes[eyeDepthNoteCount%eyeDepthNotes.size()];n={output,depth,width,height,format,++eyeDepthNoteCount};
+        auto& n=eyeDepthNotes[eyeDepthNoteCount%eyeDepthNotes.size()];n={output,depth,width,height,format,++eyeDepthNoteCount,jitterX,jitterY};
         return 0;
     }catch(...){return 1;}
 }
+extern "C" __declspec(dllexport) int evrNoteEyeDepth(VkDevice device,VkImage output,VkImage depth,uint32_t width,uint32_t height,VkFormat format) noexcept {
+    return evrNoteEyeDepthJitter(device,output,depth,width,height,format,0,0);
+}
+// EVR_EYE_WARP_UNJITTER (2026-10-21; the user's headset run of the warp: "everything shook"): the kept depth is read
+// shifted by the jitter - 1 (+x,+y), 2 (-x,-y), 3 (+x,-y), 4 (-x,+y); 0 / unset as drawn. Which sign is right is
+// measured with EVR_EYE_WARP_CHECK (the eye made from the other against the eye drawn). EVR_EYE_WARP_UNJITTER=cycle: 0..4
+// in turn, 200 frames each (one Mock run compares them all; the check's record names the mode).
+inline int eyeWarpUnjitter(uint64_t frame){static const int mode=[]{const char* v=std::getenv("EVR_EYE_WARP_UNJITTER");if(v&&!std::strcmp(v,"cycle"))return -1;return v&&v[0]>='1'&&v[0]<='4'&&!v[1]?v[0]-'0':0;}();
+    return mode<0?int((frame/200)%5):mode;}
+inline int eyeWarpUnjitterUsed=0;
 // The note of this frame for the eye: the eye picture given to the layer is not the DLSS output (the game's later
 // passes write another image; Mock game-20261015-043919), so the notes are taken in order - the eyes are drawn left
 // then right, each with one eye-sized evaluation, so with both eyes drawn the left eye's note is the second newest
@@ -409,6 +421,8 @@ int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice de
                         if(evrGetNativeImageEvidence(st->device,note.depth,&e)||!e.ready){if(++st->warpKeepMisses<=3)st->log->event("eye_warp_keep_missed","\"eye\":"+std::to_string(eye)+",\"depth\":"+handleText(note.depth)+",\"reason\":\"depth layout unproven\"");return;}
                         if(!(e.usage&VK_IMAGE_USAGE_SAMPLED_BIT)){if(++st->warpKeepMisses<=3)st->log->event("eye_warp_keep_missed","\"eye\":"+std::to_string(eye)+",\"depth\":"+handleText(note.depth)+",\"usage\":"+std::to_string(e.usage)+",\"reason\":\"depth has no sampled usage\"");return;}
                         const auto& snapshot=st->xr->pendingFrame();
+                        {const int m=eyeWarpUnjitter(snapshot.frame);eyeWarpUnjitterUsed=m;const float sx=(m==1||m==3)?1.f:(m==2||m==4)?-1.f:0.f,sy=(m==1||m==4)?1.f:(m==2||m==3)?-1.f:0.f;
+                         st->warp->depthShift={sx*note.jitterX,sy*note.jitterY};}
                         st->warp->keep(cmd,uint32_t(eye),src,note.depth,e.layout,note.width,note.height,note.format,snapshot.views[eye],snapshot.frame);
                         const auto n=st->warp->keeps;
                         if(n<=2||n%1200==0)st->log->event("eye_warp_kept","\"frame\":"+std::to_string(snapshot.frame)+",\"eye\":"+std::to_string(eye)+",\"keeps\":"+std::to_string(n)+",\"depth\":"+handleText(note.depth)+
@@ -1088,7 +1102,8 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                     state.warp->writePpm(prefix+"-made.ppm",made);state.warp->writePpm(prefix+"-drawn.ppm",drawn);std::vector<uint8_t> diff(made.size());
                     for(size_t i=0;i+3<made.size();i+=4){if(made[i+3]==0){diff[i]=0;diff[i+1]=0;diff[i+2]=255;}else for(unsigned ch=0;ch<3;++ch){const int d=std::abs(int(made[i+ch])-int(drawn[i+ch]))*4;diff[i+ch]=uint8_t(d>255?255:d);}diff[i+3]=255;}
                     state.warp->writePpm(prefix+"-diff.ppm",diff);}
-                std::ostringstream o;o<<std::setprecision(5)<<"\"frame\":"<<frame<<",\"eye_made\":1,\"from_eye\":0,\"mean_abs_diff\":"<<c.meanDifference<<",\"holes\":"<<c.holes<<",\"compared\":"<<c.compared<<",\"checks\":"<<state.warpChecks<<",\"cells\":"<<state.warp->cells;
+                std::ostringstream o;o<<std::setprecision(5)<<"\"frame\":"<<frame<<",\"eye_made\":1,\"from_eye\":0,\"mean_abs_diff\":"<<c.meanDifference<<",\"holes\":"<<c.holes<<",\"compared\":"<<c.compared<<",\"checks\":"<<state.warpChecks<<",\"cells\":"<<state.warp->cells
+                    <<",\"unjitter\":"<<eyeWarpUnjitterUsed<<",\"depth_shift\":["<<state.warp->depthShift[0]<<','<<state.warp->depthShift[1]<<']';
                 state.log->event("eye_warp_check",o.str());}
             catch(const std::exception& e){state.warpCheck=false;state.log->event("eye_warp_check_failed","\"frame\":"+std::to_string(frame)+",\"reason\":"+jsonString(e.what()));}
         }

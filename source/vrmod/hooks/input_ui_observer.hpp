@@ -25,7 +25,11 @@ struct Snapshot {
     unsigned number=0;uint64_t milliseconds=0;uintptr_t data=0,world=0,senderContext=0;
     uint32_t entity=0;
     uint8_t screen=255,secondary=255,auxiliary=255,deviceMode=255,localMode=255,uiMode=255;bool readable=false,stable=false,nativeResult=true;
+    // The bytes around the three modes (2026-10-21: which of them makes the prompts the keyboard's - the device mode and the
+    // local one were back at the pad's 0.5 s before a picture that still showed the keyboard's, Mock game-20261021-142914).
+    std::array<uint8_t,16> deviceBytes{},localBytes{},uiBytes{};
 };
+inline std::string bytesHex(const std::array<uint8_t,16>& b){const char* d="0123456789abcdef";std::string t;for(auto v:b){t+=d[v>>4];t+=d[v&15];}return t;}
 inline std::mutex mutex;
 inline Snapshot latest;
 // Last time a stable read showed a non-HUD screen (full-screen UI or the quick wheel); see rootCamera::uiHold.
@@ -84,7 +88,9 @@ inline void gate(void* sub,uint8_t value,void* frontend,uintptr_t returnAddress)
                 if(s.senderContext)s.entity=read<uint32_t>(s.senderContext+entityOffset);
                 const auto values=read<std::array<uint8_t,3>>(controller+screenOffset);
                 const auto ui=read<uintptr_t>(owner+uiOffset),device=read<uintptr_t>(owner+deviceOffset),localDevice=read<uintptr_t>(controller+localDeviceOffset);
-                if(ui)s.uiMode=read<uint8_t>(ui+9);
+                if(ui){s.uiMode=read<uint8_t>(ui+9);s.uiBytes=read<std::array<uint8_t,16>>(ui);}
+                if(device)s.deviceBytes=read<std::array<uint8_t,16>>(device);
+                if(localDevice)s.localBytes=read<std::array<uint8_t,16>>(localDevice);
                 if(device)s.deviceMode=read<uint8_t>(device);
                 // A pull of the menu pointer: the game's mouse mode before its button (hooks/menu_pointer.hpp wantMouse) -
                 // the device mode and the local one, both 0 as the game's own first click leaves them.
@@ -118,10 +124,12 @@ inline void gate(void* sub,uint8_t value,void* frontend,uintptr_t returnAddress)
     const auto previous=snapshot();
     if(s.readable&&s.stable&&s.world&&(s.screen!=1||s.auxiliary!=0))lastNonHudMs=s.milliseconds;
     {std::lock_guard<std::mutex> lock(mutex);latest=s;}
-    if(s.number<=8||s.number%120==0||previous.screen!=s.screen||previous.auxiliary!=s.auxiliary||previous.secondary!=s.secondary||previous.deviceMode!=s.deviceMode||previous.localMode!=s.localMode||previous.uiMode!=s.uiMode)try{
+    if(s.number<=8||s.number%120==0||previous.screen!=s.screen||previous.auxiliary!=s.auxiliary||previous.secondary!=s.secondary||previous.deviceMode!=s.deviceMode||previous.localMode!=s.localMode||previous.uiMode!=s.uiMode||
+       previous.deviceBytes!=s.deviceBytes||previous.localBytes!=s.localBytes||previous.uiBytes!=s.uiBytes)try{
         logFile->event("input_ui_native_sample","\"number\":"+std::to_string(s.number)+",\"caller\":"+hex(caller)+
             ",\"hud_screen\":"+std::to_string(s.screen)+",\"screen_secondary\":"+std::to_string(s.secondary)+",\"auxiliary_state\":"+std::to_string(s.auxiliary)+
             ",\"frontend_input_mode\":"+std::to_string(s.deviceMode)+",\"local_input_mode\":"+std::to_string(s.localMode)+",\"ui_gamepad_mode\":"+std::to_string(s.uiMode)+
+            ",\"device_bytes\":\""+bytesHex(s.deviceBytes)+"\",\"local_bytes\":\""+bytesHex(s.localBytes)+"\",\"ui_bytes\":\""+bytesHex(s.uiBytes)+"\""+
             ",\"native_result\":"+(result?"true":"false")+",\"readable\":"+(s.readable?"true":"false")+
             ",\"stable_read\":"+(s.stable?"true":"false")+",\"world\":"+hex(s.world)+
             ",\"sender_context\":"+hex(s.senderContext)+",\"entity\":"+std::to_string(s.entity)+",\"return_unchanged\":true");

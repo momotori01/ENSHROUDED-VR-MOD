@@ -24,10 +24,11 @@ inline void noteDepth(uintptr_t p){
         const auto out=read<uintptr_t>(p+8),dep=read<uintptr_t>(p+0x18);if(!out||!dep)return;
         const auto w=read<uint32_t>(out+0x28),h=read<uint32_t>(out+0x2c);
         if(!((w==eyeWidth(0)&&h==eyeHeight(0))||(w==eyeWidth(1)&&h==eyeHeight(1))))return;
-        using Note=int(*)(VkDevice,VkImage,VkImage,uint32_t,uint32_t,VkFormat);
-        static const Note note=[]{const auto layer=GetModuleHandleW(L"evr_diagnostic.dll");return layer?reinterpret_cast<Note>(GetProcAddress(layer,"evrNoteEyeDepth")):nullptr;}();
+        // With DLSS's jitter of this evaluation (+0x28 / +0x2c), so that the warp can read the depth where the colour stands.
+        using Note=int(*)(VkDevice,VkImage,VkImage,uint32_t,uint32_t,VkFormat,float,float);
+        static const Note note=[]{const auto layer=GetModuleHandleW(L"evr_diagnostic.dll");return layer?reinterpret_cast<Note>(GetProcAddress(layer,"evrNoteEyeDepthJitter")):nullptr;}();
         if(!note){depthNoteFailures.fetch_add(1);return;}
-        const int r=note(diagDevice,reinterpret_cast<VkImage>(read<uintptr_t>(out+8)),reinterpret_cast<VkImage>(read<uintptr_t>(dep+8)),read<uint32_t>(dep+0x28),read<uint32_t>(dep+0x2c),VkFormat(read<uint32_t>(dep+0x24)));
+        const int r=note(diagDevice,reinterpret_cast<VkImage>(read<uintptr_t>(out+8)),reinterpret_cast<VkImage>(read<uintptr_t>(dep+8)),read<uint32_t>(dep+0x28),read<uint32_t>(dep+0x2c),VkFormat(read<uint32_t>(dep+0x24)),read<float>(p+0x28),read<float>(p+0x2c));
         const auto n=depthNoted.fetch_add(1)+1;
         if(n<=2||r)logFile->event("dlss_depth_noted","\"count\":"+std::to_string(n)+",\"result\":"+std::to_string(r)+",\"output\":"+hex(read<uintptr_t>(out+8))+",\"depth\":"+hex(read<uintptr_t>(dep+8))+",\"depth_size\":["+std::to_string(read<uint32_t>(dep+0x28))+","+std::to_string(read<uint32_t>(dep+0x2c))+"],\"depth_format\":"+std::to_string(read<uint32_t>(dep+0x24)));
     }catch(...){depthNoteFailures.fetch_add(1);}
@@ -80,7 +81,18 @@ __declspec(noinline) int __fastcall evaluate(void* command,void* handle,void* pa
     }
     if(from==caller)noteDepth(reinterpret_cast<uintptr_t>(eval));
     ++calls;
+    // EVR_AFW_MV_SCALE=<f> (2026-10-21, a test of the alternate-eye warp's "everything shook"): with one eye drawn a frame,
+    // an eye's last picture - DLSS's history - is two frames old while the game's motion vectors may span one. For the
+    // call only, an eye-sized evaluation's motion vector scale (+0x3c / +0x40) is multiplied by f; put back after it.
+    static const float mvScale=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_AFW_MV_SCALE",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):1.f;return std::isfinite(f)&&f>0&&f<8?f:1.f;}();
+    float savedScale[2]{};bool scaled=false;
+    if(mvScale!=1&&from==caller&&liveFrame.eyeMask!=3)try{
+        const auto p=reinterpret_cast<uintptr_t>(eval);const auto out=read<uintptr_t>(p+8);const auto w=out?read<uint32_t>(out+0x28):0,h=out?read<uint32_t>(out+0x2c):0;
+        if((w==eyeWidth(0)&&h==eyeHeight(0))||(w==eyeWidth(1)&&h==eyeHeight(1))){savedScale[0]=read<float>(p+0x3c);savedScale[1]=read<float>(p+0x40);
+            *reinterpret_cast<float*>(p+0x3c)=savedScale[0]*mvScale;*reinterpret_cast<float*>(p+0x40)=savedScale[1]*mvScale;scaled=true;}
+    }catch(...){scaled=false;}
     const int result=original(command,handle,parameters,eval);
+    if(scaled){const auto p=reinterpret_cast<uintptr_t>(eval);*reinterpret_cast<float*>(p+0x3c)=savedScale[0];*reinterpret_cast<float*>(p+0x40)=savedScale[1];}
     if(!fields.empty()){
         const ObserverLastError preserve;
         try{++logged;logFile->event("dlss_eval",fields+",\"result\":"+hex(uint32_t(result))+",\"read_only\":true");}catch(...){++failures;}

@@ -132,7 +132,7 @@ XR_FN(m_xrSuggestInteractionProfileBindings)(XrInstance i,const XrInteractionPro
         const bool stickTouch=a->type==XR_ACTION_TYPE_BOOLEAN_INPUT&&suffix==stick+"/touch"&&profile!=motionProfiles[3];
         bool valid=stickTouch||(a->type==XR_ACTION_TYPE_POSE_INPUT&&(suffix=="/input/grip/pose"||suffix=="/input/aim/pose"))||
             (a->type==XR_ACTION_TYPE_FLOAT_INPUT&&(suffix=="/input/trigger/value"||suffix==(click?"/input/squeeze/click":"/input/squeeze/value")||
-                (profile==motionProfiles[1]&&suffix=="/input/squeeze/force")))||
+                (profile==motionProfiles[1]&&(suffix=="/input/squeeze/force"||suffix=="/input/trackpad/force"))))||
             (a->type==XR_ACTION_TYPE_BOOLEAN_INPUT&&(suffix==(click?"/input/squeeze/click":"/input/squeeze/value")||suffix==stick+"/click"||face))||
             (a->type==XR_ACTION_TYPE_VECTOR2F_INPUT&&suffix==stick)||
             (a->type==XR_ACTION_TYPE_VIBRATION_OUTPUT&&suffix=="/output/haptic");if(!valid)return XR_ERROR_PATH_UNSUPPORTED;copy.push_back(b);
@@ -177,7 +177,8 @@ XR_FN(m_xrGetActionStateFloat)(XrSession s,const XrActionStateGetInfo* info,XrAc
     if(!out||out->type!=XR_TYPE_ACTION_STATE_FLOAT||out->next)return XR_ERROR_VALIDATION_FAILURE;
     // Grip float actions (value/click, Index force) report the CSV grip column as 0 or 1.
     const bool squeeze=a->name=="grab"||a->name=="grab_force";
-    auto value=[&](const MotionHand& v){return squeeze?(v.grab?1.f:0.f):v.trigger;};
+    // The Index trackpad's force (pad_force): the CSV has no column for it - never pressed.
+    auto value=[&](const MotionHand& v){return a->name=="pad_force"?0.f:squeeze?(v.grab?1.f:0.f):v.trigger;};
     out->isActive=motionActive(a,h);out->currentState=out->isActive?value(motionCurrent.hands[size_t(h)]):0;
     out->changedSinceLastSync=out->isActive&&value(motionCurrent.hands[size_t(h)])!=value(motionPrevious.hands[size_t(h)]);out->lastChangeTime=XrTime(frame)*11111111;return XR_SUCCESS;
 }

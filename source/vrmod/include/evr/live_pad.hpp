@@ -63,6 +63,13 @@ public:
 private:
  struct Latch {bool held=false,mustRelease=true;uint16_t target=0;};
  bool motionQuickSlot_=false,leftInteract_=false,menuLeftY_=true,leftWaits_=false,leftGame_=false;LiveScreen leftScreen_=LiveScreen::Unavailable;
+ // The menu's left trigger (2026-10-21, the user: "the inventory's sort does not work" - "sort with LT + LB"): the game
+ // sorts with LT + X, and the left B is the menu's X. A pull decides when it is clear: LB pressed while pulled - the game's
+ // LT with it (the sort); let go within menuTapNs alone - one Y of yPulseNs (quick move); still pulled after menuTapNs - Y
+ // held from then (take all, the game's long Y). The sort's X comes sortLeadNs after its LT: with both in one poll the game
+ // took the X alone and picked the item up (Mock game-20261021-155753).
+ enum class MenuPull:uint8_t {Idle,Pending,Sort,Hold};MenuPull menuPull_=MenuPull::Idle;XrTime menuPullAt_=0,yPulseUntil_=0,sortAt_=0;
+ static constexpr XrTime menuTapNs=400000000,yPulseNs=100000000,sortLeadNs=80000000;
  std::array<Latch,SourceCount> latch_{};
  uint64_t session_=0,origin_=0;XrPath leftProfile_=0,rightProfile_=0;
  static bool pressed(const HandFrame& h,unsigned s){
@@ -77,7 +84,7 @@ private:
   }
   return false;
  }
- void interrupt(){for(auto& l:latch_){l.held=false;l.target=0;l.mustRelease=true;}leftInteract_=false;leftWaits_=true;}
+ void interrupt(){for(auto& l:latch_){l.held=false;l.target=0;l.mustRelease=true;}leftInteract_=false;leftWaits_=true;menuPull_=MenuPull::Idle;yPulseUntil_=0;}
  static int16_t axis(float v){return int16_t(std::lround(std::clamp(v,-1.f,1.f)*32767));}
  static uint8_t trigger(float v){return uint8_t(std::lround(std::clamp(v,0.f,1.f)*255));}
 public:
@@ -112,8 +119,16 @@ public:
   if(leftY){const float t=mapped.pad.leftTrigger;const auto& lh=hands.hands[0];out.leftTrigger=0;
    if(screen!=leftScreen_){leftScreen_=screen;if(leftInteract_||t>=.5f)leftWaits_=true;leftInteract_=false;}
    if(leftWaits_){if(t<.5f)leftWaits_=false;}
-   else{leftInteract_=!(lh.grabActive&&lh.grab)&&(leftInteract_?t>=.5f:t>=.85f);if(leftInteract_)out.buttons|=Y;}}
-  else{leftInteract_=false;leftScreen_=screen;}
+   else{const bool was=leftInteract_;leftInteract_=!(lh.grabActive&&lh.grab)&&(leftInteract_?t>=.5f:t>=.85f);
+    if(screen!=LiveScreen::Ui){if(leftInteract_)out.buttons|=Y;}
+    else{const XrTime now=hands.predictedTime;
+     if(leftInteract_&&!was){menuPull_=MenuPull::Pending;menuPullAt_=now;}
+     if(leftInteract_&&menuPull_==MenuPull::Pending){
+      if(pressed(hands,LeftSecondary)){menuPull_=MenuPull::Sort;sortAt_=now;}else if(now-menuPullAt_>=menuTapNs)menuPull_=MenuPull::Hold;}
+     if(!leftInteract_&&was){if(menuPull_==MenuPull::Pending)yPulseUntil_=now+yPulseNs;menuPull_=MenuPull::Idle;}
+     if(menuPull_==MenuPull::Hold||(yPulseUntil_&&now<yPulseUntil_))out.buttons|=Y;
+     if(menuPull_==MenuPull::Sort)out.leftTrigger=255;}}}
+  else{leftInteract_=false;leftScreen_=screen;menuPull_=MenuPull::Idle;}
   for(unsigned s=0;s<SourceCount;s++){
    auto& l=latch_[s];const bool down=pressed(hands,s);
    if(!down){l.held=false;l.target=0;l.mustRelease=false;continue;}
@@ -124,6 +139,7 @@ public:
    if(!l.held){l.held=true;l.target=freed||(wieldGrip&&screen==LiveScreen::Gameplay&&s==RightGrip)?0:target(screen,s);}
    out.buttons|=l.target;
   }
+  if(menuPull_==MenuPull::Sort&&hands.predictedTime-sortAt_<sortLeadNs)out.buttons&=uint16_t(~X);   // LT first
   return out;
  }
  void motionQuickSlot(bool enabled){motionQuickSlot_=enabled;}

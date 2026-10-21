@@ -32,16 +32,23 @@ struct Body {
     bool bowDrawn=false,leftHanded=false,reverseGrip=false;uint8_t twoHand=0;   // VHVR's four flags (1.2, 5.1-5.7)
     bool item=false;Pose itemInHand=identityPose();            // the main hand's held item relative to that hand's socket (5.5)
     bool offhandItem=false;Pose offhandInHand=identityPose();  // the off hand's (shield, the pair's left dagger), the same way (2026-10-15)
+    // The lean of the owner's model (2026-10-21; the user as host: "the guest's IK body while swimming came above and in
+    // front, as if into the face"): the game leans a swimming or diving model on the owner's PC; the receiver's copy of
+    // that character did not lean (the host's log of 10-21: model_lean_deg 0 at every swimming pose), so the body
+    // stood upright out of the water. The lean part (body_ik.hpp leanPart) of the owner's model, sent while it leans.
+    bool leaning=false;Quat lean{0,0,0,1};
 };
 // The held item's pose in its hand and back: the hand socket and the item as they stand in one space (the owner's
 // world about its character, the receiver's about its copy); the relation is the same in every space.
 inline Pose inHand(const Pose& hand,const Pose& itemWorld){return compose(inverse(hand),itemWorld);}
 inline Pose fromHand(const Pose& hand,const Pose& inHand){return compose(hand,inHand);}
 using Place=std::array<int32_t,3>;             // the character's position in the world, millimetres
-inline constexpr uint8_t magic=0xe5,version=3;   // 2 (2026-10-15): the off-hand item's pose may follow the main hand's
+inline constexpr uint8_t magic=0xe5,version=4;   // 2 (2026-10-15): the off-hand item's pose may follow the main hand's
+// 4 (2026-10-21): flag 0x80 - the owner's model leans, its lean (a unit quaternion as a pose's orientation: the largest
+// part's index and the three others, 7 bytes) follows the held items, before the clock. Versions 3 and 2 are still read.
 // 3 (2026-10-20): a body datagram ends with the sender's clock (milliseconds, 16 bit) - the receiver places the poses
 // on the sender's time and shows them a little late, between two of them (Receiver). Version 2 is still read.
-inline constexpr uint8_t oldVersion=2;inline constexpr size_t stampBytes=2;
+inline constexpr uint8_t oldVersion=2,stampedVersion=3;inline constexpr size_t stampBytes=2,leanBytes=7;
 inline constexpr size_t headerBytes=6,placeBytes=12,poseBytes=13,bodyAt=headerBytes+placeBytes,helloBytes=headerBytes,
     pausedBytes=bodyAt+poseBytes,fullBytes=bodyAt+4*poseBytes+10,itemBytes=poseBytes;
 inline constexpr float positionUnit=1/2000.f;  // half a millimetre; +-16 m about the character
@@ -64,6 +71,8 @@ inline bool getPose(const uint8_t* p,Pose& out){
     if(sum>1.0001f)return false;
     parts[largest]=std::sqrt(std::max(0.f,1-sum));out.orientation=normalized(Quat{parts[0],parts[1],parts[2],parts[3]});return true;
 }
+inline void putTurn(std::vector<uint8_t>& out,const Quat& q){std::vector<uint8_t> p;putPose(p,Pose{q,{0,0,0}});out.insert(out.end(),p.begin()+6,p.end());}
+inline bool getTurn(const uint8_t* p,Quat& out){std::array<uint8_t,13> b{};std::memcpy(b.data()+6,p,7);Pose pose;if(!getPose(b.data(),pose))return false;out=pose.orientation;return true;}
 inline void header(std::vector<uint8_t>& out,uint16_t sequence,uint8_t flags,uint8_t twoHand){out.push_back(magic);out.push_back(version);put16(out,int(sequence));out.push_back(flags);out.push_back(twoHand);}
 }
 // Datagrams: magic, version, sequence (16 bit), flags, two-hand state - that alone, with the "hello" flag, says "a
@@ -75,7 +84,7 @@ inline std::vector<uint8_t> encode(const Body& b,uint16_t sequence,const Place& 
     if(!finite(b.head.position)||(b.ik&&(!finite(b.hand[0].position)||!finite(b.hand[1].position)||!finite(b.pelvis.position)||(b.item&&!finite(b.itemInHand.position))||(b.offhandItem&&!finite(b.offhandInHand.position)))))
         throw std::invalid_argument("player sync body");
     std::vector<uint8_t> out;out.reserve(fullBytes+2*itemBytes);
-    detail::header(out,sequence,uint8_t((b.ik?1:0)|(b.bowDrawn?2:0)|(b.leftHanded?4:0)|(b.reverseGrip?8:0)|(b.swim?16:0)|(b.ik&&b.item?32:0)),uint8_t((b.twoHand>2?0:b.twoHand)|(b.ik&&b.offhandItem?4:0)));
+    detail::header(out,sequence,uint8_t((b.ik?1:0)|(b.bowDrawn?2:0)|(b.leftHanded?4:0)|(b.reverseGrip?8:0)|(b.swim?16:0)|(b.ik&&b.item?32:0)|(b.ik&&b.leaning?0x80:0)),uint8_t((b.twoHand>2?0:b.twoHand)|(b.ik&&b.offhandItem?4:0)));
     for(const auto v:place)for(unsigned n=0;n<4;n++)out.push_back(uint8_t(uint32_t(v)>>(8*n)));
     detail::putPose(out,b.head);
     if(b.ik){
@@ -83,6 +92,7 @@ inline std::vector<uint8_t> encode(const Body& b,uint16_t sequence,const Place& 
         for(const auto& hand:b.fingers)for(float v:hand.amount)out.push_back(uint8_t(std::lround(std::clamp(std::isfinite(v)?v:0.f,0.f,1.f)*255)));
         if(b.item)detail::putPose(out,b.itemInHand);
         if(b.offhandItem)detail::putPose(out,b.offhandInHand);
+        if(b.leaning)detail::putTurn(out,b.lean);
     }
     detail::put16(out,int(int16_t(sentMs)));
     return out;
@@ -100,9 +110,9 @@ inline std::vector<uint8_t> encodeRoster(uint16_t sequence,const std::vector<uin
 }
 // Nothing for anything that is not exactly one datagram of this version: these bytes come from another machine.
 inline std::optional<Received> decode(const uint8_t* data,size_t size){
-    if(!data||size<helloBytes||data[0]!=magic||(data[1]!=version&&data[1]!=oldVersion))return std::nullopt;
-    const size_t stamp=data[1]==version?stampBytes:0;
-    const uint8_t flags=data[4];if(flags&0x80||(data[5]&3)==3||data[5]&~0xf)return std::nullopt;
+    if(!data||size<helloBytes||data[0]!=magic||(data[1]!=version&&data[1]!=stampedVersion&&data[1]!=oldVersion))return std::nullopt;
+    const size_t stamp=data[1]!=oldVersion?stampBytes:0;
+    const uint8_t flags=data[4];if((flags&0x80&&(data[1]!=version||!(flags&1)))||(data[5]&3)==3||data[5]&~0xf)return std::nullopt;
     Received r;r.sequence=uint16_t(data[2])|uint16_t(data[3])<<8;
     if(flags&0x40){
         if(flags!=0x40)return std::nullopt;r.hello=true;r.body.ik=false;
@@ -113,8 +123,8 @@ inline std::optional<Received> decode(const uint8_t* data,size_t size){
         return r;}
     if(data[5]&8)return std::nullopt;   // the roster bit belongs to a hello only
     auto& b=r.body;
-    b.ik=flags&1;b.bowDrawn=flags&2;b.leftHanded=flags&4;b.reverseGrip=flags&8;b.swim=flags&16;b.item=flags&32;b.twoHand=data[5]&3;b.offhandItem=data[5]&4;
-    if(size!=stamp+(b.ik?fullBytes+(b.item?itemBytes:0)+(b.offhandItem?itemBytes:0):pausedBytes)||(!b.ik&&(b.item||b.offhandItem)))return std::nullopt;
+    b.ik=flags&1;b.bowDrawn=flags&2;b.leftHanded=flags&4;b.reverseGrip=flags&8;b.swim=flags&16;b.item=flags&32;b.twoHand=data[5]&3;b.offhandItem=data[5]&4;b.leaning=flags&0x80;
+    if(size!=stamp+(b.ik?fullBytes+(b.item?itemBytes:0)+(b.offhandItem?itemBytes:0)+(b.leaning?leanBytes:0):pausedBytes)||(!b.ik&&(b.item||b.offhandItem)))return std::nullopt;
     if(stamp){r.timed=true;r.sentMs=uint16_t(data[size-2])|uint16_t(data[size-1])<<8;}
     for(unsigned n=0;n<3;n++){const auto* p=data+headerBytes+4*n;r.place[n]=int32_t(uint32_t(p[0])|uint32_t(p[1])<<8|uint32_t(p[2])<<16|uint32_t(p[3])<<24);}
     if(!detail::getPose(data+bodyAt,b.head))return std::nullopt;
@@ -123,7 +133,8 @@ inline std::optional<Received> decode(const uint8_t* data,size_t size){
     if(!detail::getPose(p,b.hand[0])||!detail::getPose(p+poseBytes,b.hand[1])||!detail::getPose(p+2*poseBytes,b.pelvis))return std::nullopt;
     p+=3*poseBytes;for(auto& hand:b.fingers)for(float& v:hand.amount)v=*p++/255.f;
     if(b.item){if(!detail::getPose(p,b.itemInHand))return std::nullopt;p+=poseBytes;}
-    if(b.offhandItem&&!detail::getPose(p,b.offhandInHand))return std::nullopt;
+    if(b.offhandItem){if(!detail::getPose(p,b.offhandInHand))return std::nullopt;p+=poseBytes;}
+    if(b.leaning&&!detail::getTurn(p,b.lean))return std::nullopt;
     return r;
 }
 inline std::optional<Received> decode(const std::vector<uint8_t>& bytes){return decode(bytes.data(),bytes.size());}
@@ -134,17 +145,52 @@ inline std::optional<Received> decode(const std::vector<uint8_t>& bytes){return 
 // takes it once), then the kind's bytes:
 //   kind 1, a fishing cast: the strength of the swing at the trigger's release, 0..1 in 16 bits (0: no swing - the
 //   shortest cast). The host gives the guest's cast that charge as its own casts get theirs (hooks/fishing_charge.hpp).
-inline constexpr uint8_t actionMagic=0xe6,actionVersion=1,castAction=1;
-inline constexpr size_t castActionBytes=7;
-struct Action {uint8_t kind=0;uint16_t id=0;float strength=0;};
+//   kind 2, a shot (2026-10-21): the aim a shot leaves along, decided on the player's PC at the release of the bow or
+//   at a throw - where it starts, the world position in Q32.32 (3 x int64), and its orientation (4 floats), as
+//   motion::BowWorldAim holds them. The host's server makes a guest's arrows, thrown items and wand shots; the host's
+//   mod gives that shot this aim (bow_spawn_observer.hpp). Without it the host's mod took a guest's arrow for an own
+//   shot whose aim was missing and dropped it (the online session of 10-21 00:25: 8 and 15 arrows of the guest never
+//   made, "no hit without lock-on"), and a guest's wand shot went where the guest's head looked.
+//   kind 3, a held aim: the same, each frame while a wand or staff is fired by the trigger held (one press fires
+//   several shots); the host takes the newest of each player.
+//   kind 4, a parry (2026-10-21; user 03:30: "the parry too - what the player's handling decides is taken as decided"):
+//   the player swung the shield hand while guarding as an enemy's blow came (its BlockOpportunity, as the solo relaxed
+//   parry), on the player's PC; where that enemy stood there (Q32.32, 3 x int64). The host's mod makes the game's parry
+//   of that player on the host's enemy nearest to it, and gives back the damage that player took in the moments before
+//   (parry_observer.hpp serverParryRemote, live_melee_targets.hpp undoDamage).
+//   kind 5, a hit (2026-10-21, user: "take the hit from the guest as decided and compute what follows - then it always
+//   hits and nothing drifts apart"): the blade of the player's stroke touched a thing on the player's PC; where that
+//   thing stood there (Q32.32, 3 x int64) and flags (1 byte: 1 a creature, 2 an arrow's hit - the guest's own arrow,
+//   flown on its PC, met the thing). The host's mod lays that player's attack collider on the thing nearest to it on
+//   the host (sequence_collider_observer.hpp remoteMelee) - for an arrow it puts the guest's arrow of the host's server
+//   just before that thing (live_melee_targets.hpp steerArrows) - so that the game's own hit - damage, reaction,
+//   effects - is made on it.
+inline constexpr uint8_t actionMagic=0xe6,actionVersion=1,castAction=1,shotAction=2,heldAimAction=3,parryAction=4,hitAction=5;
+inline constexpr size_t castActionBytes=7,shotActionBytes=5+40,parryActionBytes=5+24,hitActionBytes=5+24+1;
+struct Action {uint8_t kind=0;uint16_t id=0;float strength=0;std::array<uint8_t,40> aim{};std::array<int64_t,3> at{};bool character=false,shot=false;};
 inline std::vector<uint8_t> encodeCast(uint16_t id,float strength){
     std::vector<uint8_t> out{actionMagic,actionVersion,castAction};detail::put16(out,int(id));
     const auto s=uint16_t(std::lround(std::clamp(std::isfinite(strength)?strength:0.f,0.f,1.f)*65535));out.push_back(uint8_t(s&255));out.push_back(uint8_t(s>>8));return out;
 }
+inline std::vector<uint8_t> encodeShot(uint16_t id,const std::array<uint8_t,40>& aim,bool held=false){
+    std::vector<uint8_t> out{actionMagic,actionVersion,held?heldAimAction:shotAction};detail::put16(out,int(id));out.insert(out.end(),aim.begin(),aim.end());return out;
+}
+inline std::vector<uint8_t> encodeHit(uint16_t id,const std::array<int64_t,3>& at,bool character,bool shot=false){
+    std::vector<uint8_t> out{actionMagic,actionVersion,hitAction};detail::put16(out,int(id));
+    const auto* b=reinterpret_cast<const uint8_t*>(at.data());out.insert(out.end(),b,b+24);out.push_back(uint8_t((character?1:0)|(shot?2:0)));return out;
+}
+inline std::vector<uint8_t> encodeParry(uint16_t id,const std::array<int64_t,3>& at){std::vector<uint8_t> out{actionMagic,actionVersion,parryAction};detail::put16(out,int(id));
+    const auto* b=reinterpret_cast<const uint8_t*>(at.data());out.insert(out.end(),b,b+24);return out;}
 inline std::optional<Action> decodeAction(const uint8_t* data,size_t size){
     if(!data||size<3||data[0]!=actionMagic||data[1]!=actionVersion)return std::nullopt;
     Action a;a.kind=data[2];
     if(a.kind==castAction){if(size!=castActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;a.strength=float(uint16_t(data[5])|uint16_t(data[6])<<8)/65535.f;return a;}
+    if(a.kind==shotAction||a.kind==heldAimAction){if(size!=shotActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.aim.data(),data+5,40);
+        // Only a unit orientation is taken (another mod's or a broken datagram's bytes never reach the server's shot).
+        Quat q;std::memcpy(&q,a.aim.data()+24,16);const float n=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
+        if(!std::isfinite(n)||std::abs(n-1)>.01f)return std::nullopt;return a;}
+    if(a.kind==parryAction){if(size!=parryActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);return a;}
+    if(a.kind==hitAction){if(size!=hitActionBytes||data[29]>3)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);a.character=(data[29]&1)!=0;a.shot=(data[29]&2)!=0;return a;}
     return std::nullopt;
 }
 

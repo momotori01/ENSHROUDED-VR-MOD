@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <evr/math.hpp>
 #include <cstring>
 #include <string>
@@ -15,6 +16,8 @@ struct HandSample {
     // Finger curl inputs (2026-10-09, EDF6VR-style hands): the grip value used for the press (force where present) and
     // the thumb resting on the stick. ABI v3.
     float squeeze=0;bool thumbTouchActive=false,thumbTouch=false;
+    // The Index trackpad's press (ABI v5, 2026-10-21): its force 0..1 (the profile has no click); inactive on other controllers.
+    float padForce=0;bool padForceActive=false;
     bool tracked()const {return gripActive&&(gripFlags&15)==15;}
 };
 struct HandFrame {
@@ -28,7 +31,7 @@ struct HandFrame {
 class Actions {
     XrInstance instance=XR_NULL_HANDLE;XrSession session=XR_NULL_HANDLE;
     XrActionSet set=XR_NULL_HANDLE;
-    XrAction gripPose=XR_NULL_HANDLE,aimPose=XR_NULL_HANDLE,trigger=XR_NULL_HANDLE,grab=XR_NULL_HANDLE,grabForce=XR_NULL_HANDLE,stickTouch=XR_NULL_HANDLE,haptic=XR_NULL_HANDLE,stick=XR_NULL_HANDLE,stickClick=XR_NULL_HANDLE,primaryFace=XR_NULL_HANDLE,secondaryFace=XR_NULL_HANDLE;
+    XrAction gripPose=XR_NULL_HANDLE,aimPose=XR_NULL_HANDLE,trigger=XR_NULL_HANDLE,grab=XR_NULL_HANDLE,grabForce=XR_NULL_HANDLE,stickTouch=XR_NULL_HANDLE,haptic=XR_NULL_HANDLE,stick=XR_NULL_HANDLE,stickClick=XR_NULL_HANDLE,primaryFace=XR_NULL_HANDLE,secondaryFace=XR_NULL_HANDLE,padForce=XR_NULL_HANDLE;
     std::array<XrPath,2> hands{};
     std::array<XrSpace,2> gripSpaces{},aimSpaces{};
     uint64_t generation=0,lastFrame=0;XrTime lastTime=0;
@@ -106,6 +109,7 @@ public:
             stickClick=create("stick_click","Stick press",XR_ACTION_TYPE_BOOLEAN_INPUT);
             primaryFace=create("primary_face","Primary face button",XR_ACTION_TYPE_BOOLEAN_INPUT);
             secondaryFace=create("secondary_face","Secondary face button",XR_ACTION_TYPE_BOOLEAN_INPUT);
+            padForce=create("pad_force","Trackpad press",XR_ACTION_TYPE_FLOAT_INPUT);
             // Standard core profiles, independent of the HMD manufacturer.
             struct Profile{const char* name;const char* squeeze;const char* stick;};
             const Profile profiles[]{
@@ -127,8 +131,9 @@ public:
                 // never consume a runtime system/menu button as a substitute.
                 const bool touch=std::strcmp(profile.name,"/interaction_profiles/oculus/touch_controller")==0;
                 const bool index=std::strcmp(profile.name,"/interaction_profiles/valve/index_controller")==0;
-                if(index)for(const auto* hand:{"/user/hand/left","/user/hand/right"})
+                if(index)for(const auto* hand:{"/user/hand/left","/user/hand/right"}){
                     bindings.push_back({grabForce,path((std::string(hand)+"/input/squeeze/force").c_str())});
+                    bindings.push_back({padForce,path((std::string(hand)+"/input/trackpad/force").c_str())});}   // a button Touch does not have
                 // Thumb rest: stick touch on Touch/Index, trackpad touch on Vive; WMR has no stick touch.
                 if(std::strcmp(profile.name,"/interaction_profiles/microsoft/motion_controller")!=0)
                     for(const auto* hand:{"/user/hand/left","/user/hand/right"})
@@ -190,6 +195,8 @@ public:
             gi.action=secondaryFace;XrActionStateBoolean secondary{XR_TYPE_ACTION_STATE_BOOLEAN};
             check(xrGetActionStateBoolean(session,&gi,&secondary),"motion secondary face state");
             v.secondaryActive=secondary.isActive!=0;v.secondaryPressed=v.secondaryActive&&secondary.currentState;
+            gi.action=padForce;XrActionStateFloat pad{XR_TYPE_ACTION_STATE_FLOAT};check(xrGetActionStateFloat(session,&gi,&pad),"motion trackpad force state");
+            v.padForceActive=pad.isActive!=0;v.padForce=v.padForceActive&&std::isfinite(pad.currentState)?std::clamp(pad.currentState,0.f,1.f):0.f;
         }
         focused=true;for(unsigned h=0;h<2;h++){canHaptic[h]=out.hands[h].tracked();if(!canHaptic[h])stop(h);}return out;
     }

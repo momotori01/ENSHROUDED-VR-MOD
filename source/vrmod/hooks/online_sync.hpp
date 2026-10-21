@@ -81,7 +81,7 @@ inline std::vector<Character> characters(uint32_t local){
     return out;
 }
 // Actions of the other players' mods (include/evr/player_sync.hpp sync::Action): each id once per sender.
-inline std::map<uint64_t,std::array<uint16_t,8>> actionsSeen;inline uint64_t actionsHeard=0,actionsRefused=0,actionsSent=0;
+inline std::map<uint64_t,std::array<uint16_t,8>> actionsSeen;inline uint64_t actionsHeard=0,actionsRefused=0,actionsSent=0;inline unsigned shotLogs=0;
 inline void action(uint64_t from,const uint8_t* data,size_t size){
     const auto a=sync::decodeAction(data,size);if(!a){++actionsRefused;return;}
     auto& seen=actionsSeen[from];const uint16_t key=uint16_t(a->id^(uint16_t(a->kind)<<12));
@@ -89,6 +89,22 @@ inline void action(uint64_t from,const uint8_t* data,size_t size){
     std::rotate(seen.rbegin(),seen.rbegin()+1,seen.rend());seen[0]=key;++actionsHeard;
     if(a->kind==sync::castAction){fishingCharge::peerCast(from,a->strength);
         if(logs++<200)logFile->event("online_sync_cast_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"strength\":"+std::to_string(a->strength));}
+    if(a->kind==sync::hitAction&&a->shot){if(controllerUiFixture::shotHitArrived)controllerUiFixture::shotHitArrived(a->at,a->character,GetTickCount64());
+        if(logs++<200)logFile->event("online_sync_shot_hit_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"character\":"+(a->character?"true":"false"));return;}
+    if(a->kind==sync::hitAction){remoteMelee::publishHit(from,a->at,a->character,GetTickCount64());
+        if(logs++<200)logFile->event("online_sync_hit_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"character\":"+(a->character?"true":"false"));}
+    if(a->kind==sync::parryAction){std::array<int64_t,3> enemy{};uint32_t id=0;float away=-1;bool found=false;
+        if(remoteMelee::nearestTarget)found=remoteMelee::nearestTarget(a->at,true,3.f,enemy,id,away);
+        controllerUiFixture::remoteParryTarget=found?id:0;controllerUiFixture::remoteSwingParryAt=GetTickCount64();
+        const bool undone=found&&controllerUiFixture::undoDamage&&controllerUiFixture::undoDamage(a->at,400);
+        if(logs++<200)logFile->event("online_sync_parry_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"enemy\":"+std::to_string(id)+
+            ",\"guest_to_host_metres\":"+std::to_string(away)+",\"damage_given_back\":"+(undone?"true":"false"));}
+    if(a->kind==sync::shotAction||a->kind==sync::heldAimAction){const auto now=GetTickCount64();const bool held=a->kind==sync::heldAimAction;
+        {std::lock_guard<std::mutex> lock(controllerUiFixture::remoteShotMutex);controllerUiFixture::RemoteShot* slot=nullptr;
+         if(held)for(auto& s:controllerUiFixture::remoteShots)if(s.held&&s.from==from){slot=&s;break;}
+         if(!slot){slot=&controllerUiFixture::remoteShots[0];for(auto& s:controllerUiFixture::remoteShots)if(s.milliseconds<slot->milliseconds)slot=&s;}
+         *slot={from,now,a->id,false,held,a->aim};}
+        if(!held&&shotLogs++<400)logFile->event("online_sync_shot_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id));}
 }
 // This player's casts out to every listed player: the strength of the swing at the trigger's release (0 without a
 // swing), three frames in a row (a datagram may be lost; the receiver takes the id once).
@@ -101,6 +117,67 @@ inline void sendCasts(){
     if(!castRepeats)return;--castRepeats;
     const auto bytes=sync::encodeCast(castId,castStrength);
     for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,bytes))++actionsSent;
+}
+// This player's shots out to every listed player (sync::shotAction): the aim of a release of the bow or of a throw
+// (controllerUiFixture::BowAim) as soon as it is decided, three frames in a row; and while a wand or staff is shown and
+// its trigger held (and half a second after), its aim each frame (sync::heldAimAction) - the same pointer ray or
+// weapon axis the host's own wand shots take (bow_spawn_observer.hpp rangedAim). Only while this player's game is a
+// client: a host's and a single player's own shots are made on its own server, which aims them there.
+inline uint64_t shotSeen=0,heldUntil=0;inline uint16_t shotId=0,heldId=0;inline unsigned shotRepeats=0,heldSent=0;inline std::array<uint8_t,40> shotAim{};
+inline bool heldAim(uint64_t now,std::array<uint8_t,40>& out){
+    motion::HandFrame hands;motion::BowPhysicalGeometry g;uint32_t item=0;uint64_t received=0;bool both=false;
+    {std::lock_guard<std::mutex> lock(controllerUiFixture::gestureMutex);hands=controllerUiFixture::gestureHands;g=controllerUiFixture::gestureRangedGeometry;item=controllerUiFixture::gestureRangedItem;received=controllerUiFixture::gestureRangedMs;both=controllerUiFixture::gestureRangedTwoHanded;}
+    const auto* weapon=item?motion::rangedAimModel(item):nullptr;const auto& right=hands.hands[1];
+    if(!weapon||!g.binding||g.frame!=hands.frame||!received||now<received||now-received>200||!hands.focused||!right.tracked())return false;
+    if(right.triggerActive&&std::isfinite(right.trigger)&&right.trigger>=.25f)heldUntil=now+500;
+    if(now>heldUntil)return false;
+    if(both?!hands.hands[0].tracked():!right.aimActive||(right.aimFlags&15)!=15)return false;
+    try{const auto aim=both?motion::rangedAxisAim(*weapon,g.model,g.scale,g.worldPosition,g.worldOrientation):
+        motion::rangedPointerAim(*weapon,g.model,g.scale,g.worldPosition,g.worldOrientation,right.aim);
+        out=controllerUiFixture::aimBytes(aim);return true;}catch(const std::exception&){return false;}
+}
+// This player's hits (sync::hitAction): each new touch three frames in a row (controllerUiFixture::hitReports).
+inline uint64_t hitSent=0;struct HitOut {std::vector<uint8_t> bytes;unsigned repeats=0;};inline std::array<HitOut,8> hitsOut{};inline uint16_t hitId=0;
+inline void sendHits(){
+    {std::lock_guard<std::mutex> lock(controllerUiFixture::hitReportMutex);
+     for(const auto& r:controllerUiFixture::hitReports)if(r.serial>hitSent){
+        auto* slot=&hitsOut[0];for(auto& h:hitsOut)if(!h.repeats){slot=&h;break;}
+        *slot={sync::encodeHit(++hitId,r.at,r.character,r.shot),3u};hitSent=std::max(hitSent,r.serial);
+        if(logs++<200)logFile->event("online_sync_hit_sent","\"id\":"+std::to_string(hitId)+",\"character\":"+(r.character?"true":"false"));}}
+    for(auto& h:hitsOut){if(!h.repeats)continue;--h.repeats;for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,h.bytes))++actionsSent;}
+}
+// This player's parries (sync::parryAction), decided here as the solo relaxed parry decides (parry_observer.hpp): a
+// swing of the shield hand while guarding, with this player's BlockOpportunity (an enemy's blow coming) up at the swing
+// or within 0.2 s after it, and a creature within 3 m - then three frames in a row, while this player's game is a client.
+inline uint64_t parrySeen=0,parryPending=0;inline uint16_t parryId=0;inline unsigned parryRepeats=0;inline std::vector<uint8_t> parryBytes;
+inline void sendParries(){
+    const auto at=controllerUiFixture::swingParryAt.load();const auto now=GetTickCount64();
+    if(at&&at!=parrySeen){parrySeen=at;if(now>=at&&now-at<=200&&nativeImpactComponents::clientNow(now))parryPending=at;}
+    if(parryPending){
+        const auto opening=controllerUiFixture::blockOpportunityMs.load();std::array<int64_t,3> enemy{};uint32_t enemyId=0;
+        if(opening+80>=parryPending&&opening<=parryPending+200&&controllerUiFixture::creatureNear&&controllerUiFixture::creatureNear(3.f,enemy,enemyId)){
+            // This player's own game parries at once (user 04:15: "never wait for the host's answer before the own action shows").
+            if(controllerUiFixture::localParryDecided)controllerUiFixture::localParryDecided(enemyId,parryPending);
+            parryBytes=sync::encodeParry(++parryId,enemy);parryRepeats=3;
+            if(logs++<200)logFile->event("online_sync_parry_sent","\"id\":"+std::to_string(parryId)+",\"opening_from_swing_ms\":"+std::to_string(int64_t(opening)-int64_t(parryPending)));parryPending=0;}
+        else if(now>parryPending+200){
+            if(logs++<200)logFile->event("online_sync_parry_not_decided","\"opening_from_swing_ms\":"+std::to_string(opening?int64_t(opening)-int64_t(parryPending):INT64_MIN)+
+                ",\"creature_near\":"+(controllerUiFixture::creatureNear&&controllerUiFixture::creatureNear(3.f,enemy,enemyId)?"true":"false"));parryPending=0;}}
+    if(!parryRepeats)return;--parryRepeats;
+    for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,parryBytes))++actionsSent;
+}
+inline void sendShots(){
+    controllerUiFixture::BowAim b;{std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);b=controllerUiFixture::bowAim;}
+    const auto now=GetTickCount64();const bool client=nativeImpactComponents::clientNow(now);
+    if(b.serial&&b.serial!=shotSeen){shotSeen=b.serial;
+        if(b.until>now&&client){++shotId;shotRepeats=3;shotAim=b.aim;
+            if(shotLogs++<400)logFile->event("online_sync_shot_sent","\"id\":"+std::to_string(shotId)+",\"serial\":"+std::to_string(b.serial));}}
+    if(shotRepeats){--shotRepeats;const auto bytes=sync::encodeShot(shotId,shotAim);
+        for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,bytes))++actionsSent;}
+    std::array<uint8_t,40> held{};
+    if(client&&heldAim(now,held)){const auto bytes=sync::encodeShot(++heldId,held,true);
+        for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,bytes))++actionsSent;
+        if(!(heldSent++%90)&&shotLogs++<400)logFile->event("online_sync_held_aim_sent","\"id\":"+std::to_string(heldId));}
 }
 // How another player's poses are shown (2026-10-20, user: "the other player's arms move little and slowly"): a little late,
 // between two received poses (sync::Receiver buffered). EVR_SYNC_SMOOTHING=vhvr: VHVR's stepping, a fifth of the way per
@@ -123,7 +200,7 @@ inline void frame(uint64_t renderSerial) noexcept {
             const auto r=sync::decode(data,size);if(!r){++refused;return;}
             if(!peers.heard(from,*r,now,receiving()))++notCounted;
             else if(!r->roster.empty()){++rostersHeard;for(const auto id:r->roster)if(id!=steamLink::self){if(!learned.count(id)){++learnedTotal;if(logs++<200)logFile->event("online_sync_learned","\"player\":\""+steamLink::tail(id)+"\",\"from\":\""+steamLink::tail(from)+"\"");}learned[id]=now;}}});
-        sendCasts();
+        sendCasts();sendShots();sendParries();sendHits();
         // Out: the body of this frame; for a second after it stopped (the view left first person, the hands are gone)
         // "the IK is paused", so that the others let go of the body at once; a hello otherwise.
         const auto& mine=motionBodyIk::published;const bool have=mine.have&&mine.serial==renderSerial;

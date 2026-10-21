@@ -6,7 +6,7 @@
 #include <cstdint>
 namespace evr::diagnostic {
 inline constexpr uint32_t maximumNativeDiagnosticFrames=3000;
-inline constexpr uint64_t nativeXrFrameAbiVersion=4; // v2 face action states; v3 grip value and thumb touch (finger curl); v4 eyeMask.
+inline constexpr uint64_t nativeXrFrameAbiVersion=5; // v2 face action states; v3 grip value and thumb touch (finger curl); v4 eyeMask; v5 Index trackpad force.
 // A valid session can temporarily have no renderable pose. This result means
 // its empty XR frame has already ended; continue the ordinary game frame.
 inline constexpr int nativeXrFrameDeferred=3;

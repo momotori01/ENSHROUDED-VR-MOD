@@ -233,7 +233,9 @@ __declspec(noinline) bool __fastcall advance(void* context,void* query,uint32_t 
                     ",\"reason\":"+(forced?"\"forced (EVR_FORCE_CLIENT_TICKS=1)\"":"\"no World has the player's Actor (a client)\""));
                 nativeImpactComponents::clientTickMs.store(GetTickCount64());clientWorldTicks(local.world,entity);}
             actionSequenceObserver::capture(baseActor,entity,local.entity,tick,input,actor,actorWorld,slots);
-            localJump::sample(actorWorld,entity);
+            // A guest has no World with its Actor (the host's server moves it); its client World's Locomotion is read then
+            // (2026-10-21, user as a guest: "the spinning legs of the double jump show" - the legs never hung, no jump was read).
+            localJump::sample(actorWorld?actorWorld:local.world,entity);
             const auto position=read<WorldPositionQ32>(input+0x28);const auto q=read<Quat>(input+0x40);normalized(q);
             const auto desired=read<Vec3>(actor+0x18c),move=read<Vec3>(actor+0x198),look=read<Vec3>(actor+game::actorInputLook);
             if(!finite(desired)||!finite(move)||!finite(look))throw std::runtime_error("nonfinite final actor vectors");

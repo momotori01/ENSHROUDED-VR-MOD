@@ -144,6 +144,9 @@ class EyeWarp {
             for(unsigned i=0;i<2;++i){VkShaderModuleCreateInfo sm{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};sm.pCode=i?eyeWarpFragment:eyeWarpVertex;sm.codeSize=i?sizeof(eyeWarpFragment):sizeof(eyeWarpVertex);vkCheck(v.vkCreateShaderModule(v.device,&sm,nullptr,&modules[i]),"eye warp shader");}
             std::array<VkPipelineShaderStageCreateInfo,2> stages{};
             for(unsigned i=0;i<2;++i){stages[i].sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;stages[i].stage=i?VK_SHADER_STAGE_FRAGMENT_BIT:VK_SHADER_STAGE_VERTEX_BIT;stages[i].module=modules[i];stages[i].pName="main";}
+            // The colour read of eye_warp.frag (constant 0): Catmull-Rom, or bilinear with EVR_EYE_WARP_SHARP=0.
+            static const int32_t sharpRead=[]{const char* f=std::getenv("EVR_EYE_WARP_SHARP");return f&&!std::strcmp(f,"0")?0:1;}();
+            VkSpecializationMapEntry sharpEntry{0,0,sizeof(int32_t)};VkSpecializationInfo sharpInfo{1,&sharpEntry,sizeof(int32_t),&sharpRead};stages[1].pSpecializationInfo=&sharpInfo;
             VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
             VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=vp.scissorCount=1;
@@ -175,7 +178,8 @@ class EyeWarp {
             deps[1].srcSubpass=0;deps[1].dstSubpass=VK_SUBPASS_EXTERNAL;deps[1].srcStageMask=VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;deps[1].srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;deps[1].dstStageMask=VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;deps[1].dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
             VkRenderPassCreateInfo drp{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};drp.attachmentCount=1;drp.pAttachments=&da;drp.subpassCount=1;drp.pSubpasses=&dsub;drp.dependencyCount=2;drp.pDependencies=deps.data();
             vkCheck(v.vkCreateRenderPass(v.device,&drp,nullptr,&depthPass),"eye depth copy render pass");
-            VkPipelineLayoutCreateInfo dpl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};dpl.setLayoutCount=1;dpl.pSetLayouts=&depthSetLayout;
+            VkPushConstantRange shiftRange{VK_SHADER_STAGE_FRAGMENT_BIT,0,8};
+            VkPipelineLayoutCreateInfo dpl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};dpl.setLayoutCount=1;dpl.pSetLayouts=&depthSetLayout;dpl.pushConstantRangeCount=1;dpl.pPushConstantRanges=&shiftRange;
             vkCheck(v.vkCreatePipelineLayout(v.device,&dpl,nullptr,&depthCopyLayout),"eye depth copy pipeline layout");
             std::array<VkShaderModule,2> modules{};
             try{
@@ -231,6 +235,8 @@ class EyeWarp {
     // the copy before it waited for its earlier commands), the copy of this eye's colour and a pass that samples the
     // game's depth into the kept R32 image (depthLayout: the layout the game left the depth in; it is put back; the
     // depth needs SAMPLED usage). The view is the one the eye was drawn with in this frame.
+    // shift: where the depth is read, in the game's depth pixels from each pixel's own place (the jitter undone; 0 0 as drawn).
+    std::array<float,2> depthShift{0,0};
     void keep(VkCommandBuffer c,uint32_t eye,const TransferImage& colour,VkImage depth,VkImageLayout depthLayout,uint32_t depthWidth,uint32_t depthHeight,VkFormat depthFormat,const XrView& drawnView,uint64_t frame){
         if(eye>=2||!colour.image||!depth||!depthWidth||!depthHeight)throw std::invalid_argument("eye warp keep");
         if(colour.width!=width||colour.height!=height||!rgba8(colour.format))throw std::invalid_argument("eye warp colour source");   // the caller has it in TRANSFER_SRC_OPTIMAL
@@ -278,6 +284,7 @@ class EyeWarp {
         VkRenderPassBeginInfo r{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};r.renderPass=depthPass;r.framebuffer=k.depthFramebuffer;r.renderArea={{0,0},{depthWidth,depthHeight}};
         v.vkCmdBeginRenderPass(c,&r,VK_SUBPASS_CONTENTS_INLINE);v.vkCmdBindPipeline(c,VK_PIPELINE_BIND_POINT_GRAPHICS,depthPipeline);
         vkCmdBindDescriptorSets(c,VK_PIPELINE_BIND_POINT_GRAPHICS,depthCopyLayout,0,1,&k.gameDepthSet,0,nullptr);
+        v.vkCmdPushConstants(c,depthCopyLayout,VK_SHADER_STAGE_FRAGMENT_BIT,0,8,depthShift.data());
         VkViewport viewport{0,0,float(depthWidth),float(depthHeight),0,1};VkRect2D scissor{{0,0},{depthWidth,depthHeight}};
         v.vkCmdSetViewport(c,0,1,&viewport);v.vkCmdSetScissor(c,0,1,&scissor);v.vkCmdDraw(c,3,1,0,0);v.vkCmdEndRenderPass(c);
         if(depthLayout!=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)

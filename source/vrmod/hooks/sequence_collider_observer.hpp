@@ -12,7 +12,9 @@
 // the server, not the guest's VR weapon. A collider whose action sequence is the running sequence of another player's
 // Actor (the attacker - not a nearby enemy's swing) is swept with that player's weapon as their mod sends it (the held
 // item's pose in the hand, online_sync.hpp publishItems: the weapon this host draws in their hand), when one arrived in
-// the last quarter second and their character stands within 2.5 m of where that weapon was sent from. Everything after
+// the last half second and their character stands within 4 m of where that weapon was sent from (2026-10-21: a quarter
+// second and 2.5 m left 27 of 40 sweeps of the guest's strokes without the weapon in the session of 10-21 00:25; the
+// log now names the nearest weapon's age and distance when none is taken). Everything after
 // (damage, stamina, the reaction) stays the game's. Without a sent weapon (a player without the mod, a desktop player)
 // the game's own sweep stays. EVR_REMOTE_MELEE=0: off.
 namespace remoteMelee {
@@ -32,6 +34,20 @@ inline void publishWeapon(uint32_t character,const WorldPositionQ32& root,const 
  *slot={character,root,transform,now};weaponMs=now;
 }
 // live_melee_targets.hpp: the other players of the World the local player's Actor ticks in, after each pass of its map.
+// The hits the other players' mods decided (online_sync.hpp, sync::hitAction; user 2026-10-21 03:00: "take the hit from
+// the guest as decided and compute what follows - then it always hits"): where the touched thing stood on the guest's PC.
+// While that player's attack collider runs here, it is laid on the host's thing nearest to that place (a creature for a
+// creature, within 2.5 m; liveTargets::nearestTo), a few sweeps long, so that the game's own hit is made on it; the
+// sweep with the sent weapon (below) stays for what no hit came for. EVR_REMOTE_HITS=0: only the sweep.
+struct Hit {uint64_t from=0,ms=0;std::array<int64_t,3> at{};bool character=false;unsigned sweeps=0;bool used=true;};
+inline std::array<Hit,8> hits{};inline unsigned confirmedLogs=0;
+inline const bool hitsWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_HITS",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline bool (*nearestTarget)(const std::array<int64_t,3>&,bool,float,std::array<int64_t,3>&,uint32_t&,float&)=nullptr;
+inline constexpr uint64_t hitMs=800;inline constexpr unsigned hitSweeps=4;
+inline void publishHit(uint64_t from,const std::array<int64_t,3>& at,bool character,uint64_t now){
+ if(!enabled||!hitsWanted)return;std::lock_guard<std::mutex> lock(mutex);
+ Hit* slot=&hits[0];for(auto& h:hits)if(h.ms<slot->ms)slot=&h;*slot={from,now,at,character,0,false};
+}
 inline void publishPlayers(const std::vector<Player>& list){
  std::lock_guard<std::mutex> lock(mutex);players={};for(size_t i=0;i<list.size()&&i<players.size();++i)players[i]=list[i];
 }
@@ -57,9 +73,30 @@ inline void collider(uintptr_t state,uint32_t entity,void* query,uint32_t sequen
    uint32_t running=0;
    try{const auto e=nativeImpactComponents::entityAtWorld(world,p.entity);const auto a=nativeImpactComponents::component(e,unsigned(types.actor),types.actorBytes);if(!a)continue;running=read<uint32_t>(a);}catch(...){continue;}
    if(running!=sequence)continue;
-   ++checked;const Weapon* best=nullptr;double bestMetres=2.5;
-   for(const auto& w:sent){if(!w.ms||now<w.ms||now-w.ms>250)continue;const double m=metres(w.root,p.at);if(m<bestMetres){bestMetres=m;best=&w;}}
-   if(!best){if(noWeapon.fetch_add(1)<50)logFile->event("remote_melee_no_weapon","\"entity\":"+std::to_string(p.entity)+",\"collider\":"+std::to_string(entity)+",\"sequence\":"+std::to_string(sequence));return;}
+   // A hit that player's mod decided: the collider on the thing it touched (the oldest such hit first).
+   if(nearestTarget){Hit hit;bool have=false;
+    {std::lock_guard<std::mutex> lock(mutex);Hit* oldest=nullptr;
+     for(auto& h:hits){if(h.used)continue;if(now<h.ms||now-h.ms>hitMs){h.used=true;continue;}
+      if(metres(WorldPositionQ32{h.at[0],h.at[1],h.at[2]},p.at)>8)continue;if(!oldest||h.ms<oldest->ms)oldest=&h;}
+     if(oldest){if(++oldest->sweeps>=hitSweeps)oldest->used=true;hit=*oldest;have=true;}}
+    std::array<int64_t,3> target{};uint32_t thing=0;float away=-1;
+    if(have&&nearestTarget(hit.at,hit.character,2.5f,target,thing,away)){
+     // the collider's grip at the thing's middle (a creature about 0.9 m up, a thing 0.4 m), along the sent weapon
+     const int64_t up=int64_t((hit.character?.9:.4)*4294967296.);const WorldPositionQ32 q{target[0],target[1]+up,target[2]};
+     Quat o{0,0,0,1};for(const auto& w:sent)if(w.ms&&now>=w.ms&&now-w.ms<=1000&&metres(w.root,p.at)<4){std::memcpy(&o,w.transform.data()+24,16);o=normalized(o);break;}
+     motion::ColliderPose pose;pose.valid=true;pose.frame=1;pose.serial=++serial;pose.predictedTime=1;pose.milliseconds=now;
+     std::memcpy(pose.transform.data(),&q,24);std::memcpy(pose.transform.data()+24,&o,16);
+     motionColliderApply::begin(world,entity,query,sample,pose,false,true);
+     if(confirmedLogs++<300)logFile->event("remote_melee_confirmed","\"attacker\":"+std::to_string(p.entity)+",\"collider\":"+std::to_string(entity)+",\"sequence\":"+std::to_string(sequence)+
+      ",\"target\":"+std::to_string(thing)+",\"character\":"+(hit.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-hit.ms)+",\"guest_to_host_metres\":"+std::to_string(away)+",\"sweep\":"+std::to_string(hit.sweeps));
+     return;}
+    if(have&&confirmedLogs++<300)logFile->event("remote_melee_hit_unmatched","\"attacker\":"+std::to_string(p.entity)+",\"character\":"+(hit.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-hit.ms));}
+   ++checked;const Weapon* best=nullptr;double bestMetres=4;uint64_t nearestAge=UINT64_MAX;double nearestMetres=-1;
+   for(const auto& w:sent){if(!w.ms||now<w.ms)continue;const double m=metres(w.root,p.at);
+    if(nearestMetres<0||m<nearestMetres){nearestMetres=m;nearestAge=now-w.ms;}
+    if(now-w.ms>500)continue;if(m<bestMetres){bestMetres=m;best=&w;}}
+   if(!best){if(noWeapon.fetch_add(1)<200)logFile->event("remote_melee_no_weapon","\"entity\":"+std::to_string(p.entity)+",\"collider\":"+std::to_string(entity)+",\"sequence\":"+std::to_string(sequence)+
+    ",\"nearest_age_ms\":"+std::to_string(nearestAge)+",\"nearest_metres\":"+std::to_string(nearestMetres));return;}
    motion::ColliderPose pose;pose.valid=true;pose.frame=1;pose.serial=++serial;pose.predictedTime=1;pose.milliseconds=now;
    std::memcpy(pose.transform.data(),best->transform.data(),40);
    motionColliderApply::begin(world,entity,query,sample,pose,false,true);

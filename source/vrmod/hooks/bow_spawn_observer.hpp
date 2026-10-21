@@ -82,6 +82,26 @@ constexpr uintptr_t staffParentRva=0x224ac8;
 // 1.15 m, staff emitter 1.25 m, wand 0.72 m. An outstretched arm with a long staff, or standing
 // off-centre in the room, adds to that, so play uses 3 m; the one-shot diagnostic keeps 1.5 m.
 constexpr float aimFocusLimit=3.f;
+// Other players' shots (observe below). EVR_REMOTE_SHOTS=0: as before (a guest's arrow went the tracked branch).
+inline const bool remoteShotsWanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_SHOTS",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline constexpr uint64_t remoteShotMs=1000,remoteHeldMs=300;inline unsigned remoteLogs=0;
+// The nearest new aim another player's mod sent (controllerUiFixture::remoteShots) whose start lies within aimFocusLimit
+// of this input's camera focus; a shot is used up, a held aim stays. Returns why none was taken, or "applied".
+inline const char* remoteShot(const std::array<uint8_t,44>& camera,uint64_t now,motion::BowWorldAim& aim,float& nearest,uint64_t& from,uint64_t& age,uint16_t& id,unsigned& fresh,bool& held,bool heldOnly=false){
+ WorldPositionQ32 nativePosition;Quat nativeQ;float nativeDistance;
+ std::memcpy(&nativePosition,camera.data(),24);std::memcpy(&nativeQ,camera.data()+24,16);std::memcpy(&nativeDistance,camera.data()+40,4);
+ const auto focus=cameraPosition(nativePosition,rotate(normalized(nativeQ),{0,0,std::isfinite(nativeDistance)?nativeDistance:0.f}),1);
+ std::lock_guard<std::mutex> lock(controllerUiFixture::remoteShotMutex);controllerUiFixture::RemoteShot* best=nullptr;float limit=aimFocusLimit;
+ for(auto& s:controllerUiFixture::remoteShots){
+  if(s.used||now<s.milliseconds||now-s.milliseconds>(s.held?remoteHeldMs:remoteShotMs)||(heldOnly&&!s.held))continue;++fresh;
+  WorldPositionQ32 at;std::memcpy(&at,s.aim.data(),24);
+  const Vec3 offset{float(relativeQ32(at.x,focus.x)),float(relativeQ32(at.y,focus.y)),float(relativeQ32(at.z,focus.z))};
+  const float d=length(offset);if(finite(offset)&&d<=limit){limit=d;best=&s;}}
+ if(!best)return fresh?"origin_range":"none";
+ if(!best->held)best->used=true;
+ std::memcpy(&aim.origin,best->aim.data(),24);std::memcpy(&aim.orientation,best->aim.data()+24,16);aim.orientation=normalized(aim.orientation);aim.direction=rotate(aim.orientation,{0,0,1});
+ nearest=limit;from=best->from;age=now-best->milliseconds;id=best->id;held=best->held;return "applied";
+}
 // VHVR staff/wand: the newest same-frame weapon pose and pointer ray, accepted only for
 // the local player's own reviewed weapon while it is in its native firing state.
 // twoHanded: the staff was held with both hands on that frame and the shot follows the weapon axis.
@@ -135,12 +155,40 @@ __declspec(noinline) bool __fastcall observe(void* output,void* nativeContext,co
     // The reviewed bow; with the draw route every bow of the catalog (shared skeleton, weapon_mount.hpp).
     // The shot still needs this frame's published bow geometry, which exists only for a shown, bound bow.
     const bool bowItem=nativeItem==327157552u||(controllerUiFixture::bowDrawRequested&&motion::catalogBowItem(nativeItem));
+    // The game's shot state (3); an arrow the mod handed early (motion_event_selection_observer.hpp bowEarly) comes before it.
+    const bool early=now<=controllerUiFixture::bowEarlySpawnUntil.load();
     const bool freshIdentity=identity.world&&identity.entity&&identity.milliseconds&&now>=identity.milliseconds&&now-identity.milliseconds<=100&&
-      bowItem&&cachedItem==nativeItem&&nativeWeapon[0]==3&&identity.bytes[0]==3;
+      bowItem&&cachedItem==nativeItem&&((nativeWeapon[0]==3&&identity.bytes[0]==3)||(early&&nativeWeapon[0]==identity.bytes[0]));
     parent.identity=freshIdentity?identity:inputRanged::BowNativeIdentity{};
     parent.sample=samples.fetch_add(1)+1;
     effectiveCamera=camera;
-    if(controllerUiFixture::bowTrackedAimRequested&&bowItem&&evt[0x148]==1){
+    // Another player's shot (2026-10-21): an input of this server without the own player's record (input_ranged_observer:
+    // it is kept for the own character only) - a guest's arrow or thrown item. It is never dropped (before, the tracked
+    // branch below took it for an own shot whose aim was missing: 8 and 15 arrows of the guest were not made in the
+    // session of 10-21 00:25). The camera the guest's mod sent at its release (online_sync.hpp shotAction) is given to
+    // it when one came within the last second from near this input's camera (a wand's held aim within remoteHeldMs);
+    // otherwise the guest's game's own camera.
+    const bool otherInput=!identity.world&&evt[0x148]==1&&remoteShotsWanted;
+    if(otherInput){
+     motion::BowWorldAim remote;float nearest=-1;uint64_t from=0,age=0;uint16_t id=0;unsigned fresh=0;bool held=false;
+     const char* reason=remoteShot(camera,now,remote,nearest,from,age,id,fresh,held);
+     // live_melee_targets.hpp steerArrows looks for the new arrow - a bow's only, and only when that guest's mod sent the
+     // release's aim (a mod that flies its arrows itself and reports their hits; an older one does not, and its arrows
+     // fly here as they are): not a wand's shot or a thrown item (those the host's server makes and hits as they come).
+     if(from&&!held&&(nativeItem==327157552u||motion::catalogBowItem(nativeItem))){
+      controllerUiFixture::remoteSpawnOrigin[0]=remote.origin.x;controllerUiFixture::remoteSpawnOrigin[1]=remote.origin.y;controllerUiFixture::remoteSpawnOrigin[2]=remote.origin.z;
+      controllerUiFixture::remoteSpawnDirection[0]=remote.direction.x;controllerUiFixture::remoteSpawnDirection[1]=remote.direction.y;controllerUiFixture::remoteSpawnDirection[2]=remote.direction.z;
+      controllerUiFixture::remoteSpawnAt=now;}
+     if(from)try{effectiveCamera=motion::bowAimCamera(remote,evt);}catch(const std::exception&){from=0;reason="event";}
+     if(from){
+      sourceInput=read<decltype(sourceInput)>(input);privateInput=sourceInput;privateContext=ctx;
+      std::memcpy(privateInput.data()+0x28,effectiveCamera.data(),44);
+      const auto pointer=reinterpret_cast<uintptr_t>(privateInput.data());std::memcpy(privateContext.data()+0x88,&pointer,8);
+      callContext=privateContext.data();aimed=true;}
+     if(remoteLogs++<400)logFile->event("bow_remote_aim","\"sample\":"+std::to_string(parent.sample)+",\"item\":"+std::to_string(nativeItem)+",\"applied\":"+(aimed?"true":"false")+
+      ",\"reason\":\""+reason+"\",\"held\":"+(held?"true":"false")+",\"age_ms\":"+std::to_string(age)+",\"id\":"+std::to_string(id)+
+      ",\"distance\":"+std::to_string(nearest)+",\"fresh\":"+std::to_string(fresh));
+    }else if(controllerUiFixture::bowTrackedAimRequested&&bowItem&&evt[0x148]==1){
      motion::HandFrame hands;motion::BowPhysicalGeometry geometry;uint64_t received=0;
      {std::lock_guard<std::mutex> lock(controllerUiFixture::gestureMutex);hands=controllerUiFixture::gestureHands;geometry=controllerUiFixture::gestureBowGeometry;received=controllerUiFixture::gestureMs;}
      uint32_t ammo=0,cachedAmmo=0;uint16_t missing=0;std::memcpy(&ammo,nativeWeapon.data()+inputRanged::rangedAmmoInstance+8,4);std::memcpy(&cachedAmmo,identity.bytes.data()+inputRanged::rangedAmmoInstance+8,4);std::memcpy(&missing,nativeWeapon.data()+inputRanged::rangedUsageMask,2);   // 1.0: +0x70 / +0x7c (June +0x60 / +0x6c)
@@ -230,7 +278,18 @@ __declspec(noinline) bool __fastcall observe(void* output,void* nativeContext,co
     const auto weapon=read<uintptr_t>(c+0xb8);const auto identity=inputRanged::bowIdentity(input,weapon);
     const auto nativeWeapon=read<std::array<uint8_t,inputRanged::rangedWeaponBytes>>(weapon);uint32_t nativeItem=0;std::memcpy(&nativeItem,nativeWeapon.data()+inputRanged::rangedItem,4);
     effectiveCamera=camera;motion::BowWorldAim aim;uint64_t aimFrame=0;const char* reason="item";bool bothHands=false;
-    if(motion::rangedAimModel(nativeItem)&&rangedAim(nativeItem,identity,nativeWeapon[0],camera,aim,aimFrame,reason,bothHands)){
+    bool remote=false;
+    if(!identity.world&&remoteShotsWanted&&motion::rangedAimModel(nativeItem)){
+     float nearest=-1;uint64_t from=0,age=0;uint16_t id=0;unsigned fresh=0;bool held=false;
+     reason=remoteShot(camera,GetTickCount64(),aim,nearest,from,age,id,fresh,held,true);
+     if(from)try{effectiveCamera=motion::bowAimCamera(aim,evt,false);remote=true;}catch(const std::exception&){reason="event";}
+     if(remoteLogs++<400)logFile->event("staff_remote_aim","\"item\":"+std::to_string(nativeItem)+",\"applied\":"+(remote?"true":"false")+",\"reason\":\""+reason+"\",\"age_ms\":"+std::to_string(age)+",\"distance\":"+std::to_string(nearest));}
+    if(remote){
+     sourceInput=read<decltype(sourceInput)>(input);privateInput=sourceInput;privateContext=ctx;
+     std::memcpy(privateInput.data()+0x28,effectiveCamera.data(),44);
+     const auto pointer=reinterpret_cast<uintptr_t>(privateInput.data());std::memcpy(privateContext.data()+0x88,&pointer,8);
+     callContext=privateContext.data();aimed=true;
+    }else if(motion::rangedAimModel(nativeItem)&&rangedAim(nativeItem,identity,nativeWeapon[0],camera,aim,aimFrame,reason,bothHands)){
      effectiveCamera=motion::bowAimCamera(aim,evt,false);
      sourceInput=read<decltype(sourceInput)>(input);privateInput=sourceInput;privateContext=ctx;
      std::memcpy(privateInput.data()+0x28,effectiveCamera.data(),44);

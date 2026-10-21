@@ -285,7 +285,13 @@ inline void prepare(uintptr_t s,uintptr_t v,const game::StableAnchor& anchor,uin
         if(bowDrawHeld){
             trackedWeapon=motion::bowDrawnPose(trackedWeapon,right.grip.position,motion::BowPhysicalTrial::restString.y*scale.y);mountKind="native_left_bow_drawn";
             const auto local=rotate(inverse(trackedWeapon.orientation),right.grip.position-trackedWeapon.position);
-            const float brace=motion::BowPhysicalTrial::restString.z*scale.z,limit=brace+motion::bowPullLimit(bowDrawProgress,brace,motion::bowFullDrawLength);
+            // The first part of the draw is free (2026-10-21, user: "the start of the draw was slow; as a guest too"): the game
+            // starts drawing about 0.35 s after its LT (its nocking; Valheim, which VHVR's restriction was made for, has no
+            // such wait), and until then the hand stood held at the string. Up to freePull of the game's progress (0.25:
+            // half the travel) the hand goes as it is; beyond that it follows the game's draw. EVR_BOW_FREE_PULL=<0..1>.
+            static const float freePull=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_BOW_FREE_PULL",v,sizeof v);
+                if(!n||n>=sizeof v)return .25f;const float f=std::strtof(v,nullptr);return std::isfinite(f)?std::clamp(f,0.f,1.f):.25f;}();
+            const float brace=motion::BowPhysicalTrial::restString.z*scale.z,limit=brace+motion::bowPullLimit(std::max(bowDrawProgress,freePull),brace,motion::bowFullDrawLength);
             if(local.z>limit){bowDrawHand=trackedWeapon.position+rotate(trackedWeapon.orientation,{local.x,local.y,limit});bowDrawHandValid=true;}
         }
     }

@@ -92,6 +92,7 @@ std::string queueTraceBase(VkQueue queue)
 VKAPI_ATTR VkResult VKAPI_CALL evrQueueSubmit(VkQueue queue, uint32_t count, const VkSubmitInfo *submits, VkFence fence)
 {
     exitProgress::Scope exitTrace("submit",reinterpret_cast<uint64_t>(queue));
+    uiGlyph::beforeSubmit(queue);
     auto fn = deviceFn<PFN_vkQueueSubmit>(queue, "vkQueueSubmit");
     const bool record = traceQueueEnabled();
     std::string metadata;

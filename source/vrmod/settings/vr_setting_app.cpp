@@ -48,7 +48,7 @@ struct Choice {const wchar_t* label;const char* value;};
 const Choice kSizes[]{{L"Low 0.7  (faster)","0.7"},{L"Normal 0.8","0.8"},{L"High 1.0  (sharper, slower)","1.0"}};
 const Choice kDlss[]{{L"Quality","Quality"},{L"Balanced","Balanced"},{L"Performance","Performance"},{L"DLAA / FSR3 Native  (sharpest, slower)","Dlaa"}};
 const Choice kSharp[]{{L"Off","0"},{L"Soft 0.2","0.2"},{L"Strong 0.5","0.5"}};
-const Choice kEyes[]{{L"Both eyes every frame","0"},{L"One eye a frame  (last picture, test)","1"},{L"One eye a frame, the other made from it  (PureDark's way, test)","2"}};
+const Choice kEyes[]{{L"Both eyes every frame","0"},{L"AFW: one eye a frame, the other made from it (test)","2"}};   // 2026-10-21 user: only these two
 
 int S(int v){return MulDiv(v,g_dpi,96);}
 std::wstring wide(const std::string& s){if(s.empty())return {};const int n=MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),nullptr,0);std::wstring w(size_t(n),L'\0');MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),w.data(),n);return w;}
@@ -83,7 +83,18 @@ HWND part(const wchar_t* cls,const wchar_t* text,DWORD style,int x,int y,int w,i
     HWND hwnd=CreateWindowExW(0,cls,text,WS_CHILD|WS_VISIBLE|style,S(x),S(y),S(w),S(h),g_window,reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),g_instance,nullptr);
     SendMessageW(hwnd,WM_SETFONT,reinterpret_cast<WPARAM>(font?font:g_font),TRUE);return hwnd;
 }
-void row(const wchar_t* title,const wchar_t* note){part(L"STATIC",title,SS_LEFT,kLeft,g_y,296,20,0,g_bold);part(L"STATIC",note,SS_LEFT,kLeft,g_y+20,300,50);}
+// A row's title and note; the note as tall as its text wraps to (a note of three lines did not fit the 50 px it had -
+// 2026-10-21, the user: "Swing speed" was cut). g_rowBottom: where the note ends, for next().
+int g_rowBottom=0;
+void row(const wchar_t* title,const wchar_t* note){
+    part(L"STATIC",title,SS_LEFT,kLeft,g_y,296,20,0,g_bold);
+    int height=50;
+    if(const HDC dc=GetDC(g_window)){const auto old=SelectObject(dc,g_font);RECT r{0,0,S(300),0};DrawTextW(dc,note,-1,&r,DT_CALCRECT|DT_WORDBREAK|DT_NOPREFIX);
+        SelectObject(dc,old);ReleaseDC(g_window,dc);height=std::max(height,MulDiv(int(r.bottom),96,g_dpi)+4);}
+    part(L"STATIC",note,SS_LEFT,kLeft,g_y+20,300,height);g_rowBottom=g_y+20+height;
+}
+// To the next row: the usual step, or further when this row's note ran longer.
+void next(int step){g_y=std::max(g_y+step,g_rowBottom+8);}
 HWND control(HWND h){g_controls.push_back(h);return h;}
 HWND combo(int id,const Choice* choices,size_t count,int w=250){
     HWND h=control(part(WC_COMBOBOXW,L"",CBS_DROPDOWNLIST|WS_TABSTOP|WS_VSCROLL,kRight,g_y+8,w,200,id));
@@ -115,7 +126,7 @@ void show(){
     check(g_rbVr,v.vr);check(g_rbFlat,!v.vr);
     pick(g_coSize,kSizes,std::size(kSizes),text(v.renderScale),1);pick(g_coDlss,kDlss,std::size(kDlss),v.dlss,0);
     pick(g_coSharp,kSharp,std::size(kSharp),text(v.sharpness),1);
-    pick(g_coEyes,kEyes,std::size(kEyes),v.alternateEyes?(v.eyeWarp==2?"2":"1"):"0",0);
+    pick(g_coEyes,kEyes,std::size(kEyes),v.alternateEyes&&v.eyeWarp==2?"2":"0",0);
     SendMessageW(g_tbSwing,TBM_SETPOS,TRUE,v.swingSpeed/swingSpeedStep);SetWindowTextW(g_stSwing,(std::to_wstring(v.swingSpeed)+L" %").c_str());
     check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);
     for(HWND h:{g_coSize,g_coDlss,g_coSharp,g_coEyes,g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff})EnableWindow(h,!g_running&&v.vr);
@@ -672,43 +683,59 @@ void build(){
     row(L"Update",L"Gets the newest version of this mod.\nYour settings are kept.\n最新版に更新します（設定はそのまま）");
     g_btUpdate=part(L"BUTTON",L"Update now",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,120,30,ID_UPDATE);
     g_stUpdate=part(L"STATIC",L"",SS_LEFT|SS_NOPREFIX,kRight+134,g_y+4,kWidth-kRight-134-kLeft,64);
-    g_y+=kRowHeight+4;
+    next(kRowHeight+4);
     row(L"Play mode",L"VR: play with the headset.\nNormal: play on your monitor, without VR.\nOther VR players' movements show in both.");
     g_rbVr=control(part(L"BUTTON",L"VR",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,120,22,ID_VR));
     g_rbFlat=control(part(L"BUTTON",L"Normal (no VR)",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+130,g_y+8,170,22,ID_FLAT));
-    g_y+=kRowHeight;
-    row(L"Picture size (VR)",L"Bigger is sharper, but gives lower FPS.");g_coSize=combo(ID_SIZE,kSizes,std::size(kSizes));g_y+=kRowHeight-16;
-    row(L"DLSS / FSR3 (VR)",L"How the picture is made from a smaller one.\nCards without DLSS (AMD) use FSR 3 the same way.");g_coDlss=combo(ID_DLSS,kDlss,std::size(kDlss));g_y+=kRowHeight-16;
-    row(L"Sharpening (VR)",L"Makes edges crisper.");g_coSharp=combo(ID_SHARP,kSharp,std::size(kSharp));g_y+=kRowHeight-16;
-    row(L"Frame mode (VR)",L"One eye a frame: the other shows its last picture, or is made from the drawn one.\n片目ずつ交互に描く（試験中・速い）。PureDark 方式は描いた目からもう片方を作る");g_coEyes=combo(ID_EYES,kEyes,std::size(kEyes));g_y+=kRowHeight-8;
+    next(kRowHeight);
+    row(L"Picture size (VR)",L"Bigger is sharper, but gives lower FPS.");g_coSize=combo(ID_SIZE,kSizes,std::size(kSizes));next(kRowHeight-16);
+    row(L"DLSS / FSR3 (VR)",L"How the picture is made from a smaller one.\nCards without DLSS (AMD) use FSR 3 the same way.");g_coDlss=combo(ID_DLSS,kDlss,std::size(kDlss));next(kRowHeight-16);
+    row(L"Sharpening (VR)",L"Makes edges crisper.");g_coSharp=combo(ID_SHARP,kSharp,std::size(kSharp));next(kRowHeight-16);
+    row(L"Frame mode (VR)",L"In testing - do not use.\n試験中。使用しないで。");g_coEyes=combo(ID_EYES,kEyes,std::size(kEyes),330);next(kRowHeight-16);
     row(L"Swing speed to attack (VR)",L"How fast a swing must be to attack. Lower: a lighter swing attacks.\n攻撃に要る振りの速さ（低いほど軽い振りで攻撃）");
     g_tbSwing=control(part(TRACKBAR_CLASSW,L"",TBS_HORZ|TBS_AUTOTICKS|WS_TABSTOP|WS_GROUP,kRight,g_y+4,250,30,ID_SWING));
     SendMessageW(g_tbSwing,TBM_SETRANGE,TRUE,MAKELPARAM(swingSpeedLow/swingSpeedStep,swingSpeedHigh/swingSpeedStep));SendMessageW(g_tbSwing,TBM_SETTICFREQ,2,0);
     SendMessageW(g_tbSwing,TBM_SETLINESIZE,0,1);SendMessageW(g_tbSwing,TBM_SETPAGESIZE,0,2);
-    g_stSwing=part(L"STATIC",L"100 %",SS_LEFT,kRight+258,g_y+10,80,20);g_y+=kRowHeight-16;
+    g_stSwing=part(L"STATIC",L"100 %",SS_LEFT,kRight+258,g_y+10,80,20);next(kRowHeight-16);
     row(L"Swim with your arms (VR)",L"In water, stroke with open hands to swim, as in VHVR.\n水の中で手を開いて水をかくと泳ぐ");
     g_rbSwimOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_SWIM_ON));
     g_rbSwimOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_SWIM_OFF));
-    g_y+=kRowHeight-16;
+    next(kRowHeight-16);
     row(L"Hit stop (VR)",L"When a melee stroke hits, your hand and weapon pause a moment.\n近接攻撃が当たった瞬間に手と武器が一瞬止まる");
     g_rbHitStopOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_HITSTOP_ON));
     g_rbHitStopOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_HITSTOP_OFF));
-    g_y+=kRowHeight-16;
+    next(kRowHeight-16);
     row(L"Recommended graphics (VR)",L"The game's graphics set for VR on this PC.\n推奨グラフィック設定（この PC 向け）に変更");
     g_btRecommend=control(part(L"BUTTON",L"Set recommended",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,140,30,ID_RECOMMEND));
     g_stRecommend=part(L"STATIC",machineText().c_str(),SS_LEFT,kRight+154,g_y+4,kWidth-kRight-154-kLeft,56);
-    g_y+=kRowHeight-6;
+    next(kRowHeight-6);
     row(L"Problem report",L"The logs in one zip, next to this program.\nAlso finishes a VR bug report a crash cut.\n報告用zip。途切れたVRバグ報告も仕上げます");
     g_btZip=part(L"BUTTON",L"Make zip",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,120,30,ID_ZIP);
     g_stZip=part(L"STATIC",L"",SS_LEFT,kRight+134,g_y+4,kWidth-kRight-134-kLeft,56);
-    g_y+=kRowHeight+4;
+    next(kRowHeight+4);
     g_btDefaults=part(L"BUTTON",L"Put settings back",BS_PUSHBUTTON|WS_TABSTOP,kLeft,g_y,150,30,ID_DEFAULTS);
     g_y+=42;
     g_status=part(L"STATIC",L"",SS_LEFT,kLeft,g_y,kWidth-2*kLeft,52);g_y+=56;
     g_last=part(L"STATIC",L"",SS_LEFT|SS_NOPREFIX,kLeft,g_y,kWidth-2*kLeft,52);g_y+=58;
 }
+// The scroll bar (2026-10-21, the user: "add a scroll bar"): the whole page is g_content pixels tall; the controls move
+// with ScrollWindowEx. Off (and the page at its top) while the window shows all of it.
+int g_content=0,g_scroll=0;
+void setScroll(int to){
+    RECT client{};GetClientRect(g_window,&client);const int page=client.bottom-client.top;const int top=std::max(0,g_content-page);
+    to=std::clamp(to,0,top);
+    if(to!=g_scroll){ScrollWindowEx(g_window,0,g_scroll-to,nullptr,nullptr,nullptr,nullptr,SW_SCROLLCHILDREN|SW_INVALIDATE|SW_ERASE);g_scroll=to;}
+    SCROLLINFO info{};info.cbSize=sizeof info;info.fMask=SIF_RANGE|SIF_PAGE|SIF_POS|SIF_DISABLENOSCROLL;info.nMin=0;info.nMax=std::max(0,g_content-1);
+    info.nPage=UINT(std::max(0,page));info.nPos=g_scroll;SetScrollInfo(g_window,SB_VERT,&info,TRUE);
+}
 LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
     switch(message){
+    case WM_VSCROLL:{RECT client{};GetClientRect(hwnd,&client);const int page=client.bottom-client.top,line=S(40);int to=g_scroll;
+        switch(LOWORD(wParam)){case SB_LINEUP:to-=line;break;case SB_LINEDOWN:to+=line;break;case SB_PAGEUP:to-=page;break;case SB_PAGEDOWN:to+=page;break;
+            case SB_TOP:to=0;break;case SB_BOTTOM:to=g_content;break;
+            case SB_THUMBTRACK:case SB_THUMBPOSITION:{SCROLLINFO info{};info.cbSize=sizeof info;info.fMask=SIF_TRACKPOS;GetScrollInfo(hwnd,SB_VERT,&info);to=info.nTrackPos;break;}}
+        setScroll(to);return 0;}
+    case WM_MOUSEWHEEL:setScroll(g_scroll-MulDiv(GET_WHEEL_DELTA_WPARAM(wParam),S(60),WHEEL_DELTA));return 0;
     case WM_COMMAND:{const int id=LOWORD(wParam),code=HIWORD(wParam);
         if(code==BN_CLICKED)switch(id){
             case ID_VR:store("Mode","VR","1");break;case ID_FLAT:store("Mode","VR","0");break;
@@ -723,7 +750,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
             if(id==ID_SIZE&&at<std::size(kSizes))store("Picture","RenderScale",kSizes[at].value);
             if(id==ID_DLSS&&at<std::size(kDlss))store("Picture","Dlss",kDlss[at].value);
             if(id==ID_SHARP&&at<std::size(kSharp))store("Picture","Sharpness",kSharp[at].value);
-            if(id==ID_EYES&&at<std::size(kEyes)){store("Picture","AlternateEyes",at?"1":"0");store("Picture","EyeWarp",at==2?"2":"0");}}
+            if(id==ID_EYES&&at<std::size(kEyes)){store("Picture","AlternateEyes",at?"1":"0");store("Picture","EyeWarp",at?"2":"0");}}
         return 0;}
     case WM_HSCROLL:if(reinterpret_cast<HWND>(lParam)==g_tbSwing){
         const int percent=clampSwingSpeed(int(SendMessageW(g_tbSwing,TBM_GETPOS,0,0))*swingSpeedStep);
@@ -767,13 +794,19 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
     windowClass.hCursor=LoadCursorW(nullptr,IDC_ARROW);windowClass.hbrBackground=GetSysColorBrush(COLOR_WINDOW);
     windowClass.hIcon=LoadIconW(instance,MAKEINTRESOURCEW(1));windowClass.hIconSm=windowClass.hIcon;
     if(!RegisterClassExW(&windowClass))return 1;
-    const DWORD style=WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX;
+    const DWORD style=WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|WS_MINIMIZEBOX|WS_VSCROLL;
     g_window=CreateWindowExW(WS_EX_CONTROLPARENT,windowClass.lpszClassName,L"Enshrouded VR setting",style,CW_USEDEFAULT,CW_USEDEFAULT,S(kWidth),S(600),nullptr,nullptr,instance,nullptr);
     if(!g_window)return 1;
     g_machine=evr::recommend::detectMachine();   // for the recommended graphics (its row shows the card)
     build();
-    RECT wanted{0,0,S(kWidth),S(g_y)};AdjustWindowRectEx(&wanted,style,FALSE,WS_EX_CONTROLPARENT);
-    SetWindowPos(g_window,nullptr,0,0,wanted.right-wanted.left,wanted.bottom-wanted.top,SWP_NOMOVE|SWP_NOZORDER);
+    RECT wanted{0,0,S(kWidth)+GetSystemMetrics(SM_CXVSCROLL),S(g_y)};AdjustWindowRectEx(&wanted,style,FALSE,WS_EX_CONTROLPARENT);
+    // On the screen the window opens on, all of it inside the work area (2026-10-21: opened at y 234 and 1064 tall on a
+    // 1080 screen, the lower part was cut off): no taller than the area, moved up when its bottom would leave it.
+    {RECT at{};GetWindowRect(g_window,&at);MONITORINFO info{};info.cbSize=sizeof info;GetMonitorInfoW(MonitorFromWindow(g_window,MONITOR_DEFAULTTONEAREST),&info);
+     const RECT& work=info.rcWork;const int room=work.bottom-work.top-S(16);int height=wanted.bottom-wanted.top;if(height>room)height=room;
+     int top=at.top;if(top+height>work.bottom-S(8))top=std::max(int(work.top)+S(8),int(work.bottom)-S(8)-height);
+     SetWindowPos(g_window,nullptr,at.left,top,wanted.right-wanted.left,height,SWP_NOZORDER);}
+    g_content=S(g_y);setScroll(0);
     // Left behind by an update that replaced this program.
     DeleteFileW((selfPath()+L".old").c_str());
     if(load()){::show();refreshRunning(true);}else for(HWND h:g_controls)EnableWindow(h,FALSE);
@@ -781,6 +814,10 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,PWSTR,int show){
     SetTimer(g_window,1,1000,nullptr);
     ShowWindow(g_window,show);UpdateWindow(g_window);
     MSG msg;
-    while(GetMessageW(&msg,nullptr,0,0)>0){if(!IsDialogMessageW(g_window,&msg)){TranslateMessage(&msg);DispatchMessageW(&msg);}}
+    while(GetMessageW(&msg,nullptr,0,0)>0){
+        if(msg.message==WM_MOUSEWHEEL&&msg.hwnd!=g_window&&GetParent(msg.hwnd)==g_window){
+            wchar_t cls[32]{};GetClassNameW(msg.hwnd,cls,32);
+            if(_wcsicmp(cls,WC_COMBOBOXW)||!SendMessageW(msg.hwnd,CB_GETDROPPEDSTATE,0,0)){SendMessageW(g_window,WM_MOUSEWHEEL,msg.wParam,msg.lParam);continue;}}
+        if(!IsDialogMessageW(g_window,&msg)){TranslateMessage(&msg);DispatchMessageW(&msg);}}
     return 0;
 }

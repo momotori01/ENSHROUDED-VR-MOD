@@ -106,18 +106,19 @@ VKAPI_ATTR void VKAPI_CALL evrCmdPipelineBarrier(VkCommandBuffer cmd,VkPipelineS
     uint32_t mc,const VkMemoryBarrier* m,uint32_t bc,const VkBufferMemoryBarrier* b,uint32_t ic,const VkImageMemoryBarrier* images)
 {
     auto fn=deviceFn<PFN_vkCmdPipelineBarrier>(cmd,"vkCmdPipelineBarrier");
-    try{for(uint32_t n=0;n<ic;++n)recordNativeBarrier(cmd,images[n]);}catch(...){failNativeImageEvidence();}
+    try{for(uint32_t n=0;n<ic;++n){recordNativeBarrier(cmd,images[n]);uiGlyph::barrier(cmd,images[n].image,images[n].oldLayout,images[n].newLayout,images[n].srcQueueFamilyIndex,images[n].dstQueueFamilyIndex);}}catch(...){failNativeImageEvidence();}
     fn(cmd,src,dst,flags,mc,m,bc,b,ic,images);
     shadowShareBarrier(cmd,ic,images);atmosphereShareBarrier(cmd,ic,images);
 }
 void traceNativeBarrier2(VkCommandBuffer cmd,const VkDependencyInfo* info) noexcept
-{try{for(uint32_t n=0;n<info->imageMemoryBarrierCount;++n)recordNativeBarrier(cmd,info->pImageMemoryBarriers[n]);}catch(...){failNativeImageEvidence();}}
+{try{for(uint32_t n=0;n<info->imageMemoryBarrierCount;++n){recordNativeBarrier(cmd,info->pImageMemoryBarriers[n]);const auto& b=info->pImageMemoryBarriers[n];uiGlyph::barrier(cmd,b.image,b.oldLayout,b.newLayout,b.srcQueueFamilyIndex,b.dstQueueFamilyIndex);}}catch(...){failNativeImageEvidence();}}
 VKAPI_ATTR void VKAPI_CALL evrCmdPipelineBarrier2(VkCommandBuffer cmd,const VkDependencyInfo* info)
 {auto fn=deviceFn<PFN_vkCmdPipelineBarrier2>(cmd,"vkCmdPipelineBarrier2");traceNativeBarrier2(cmd,info);fn(cmd,info);shadowShareBarrier2(cmd,info);atmosphereShareBarrier2(cmd,info);}
 VKAPI_ATTR void VKAPI_CALL evrCmdPipelineBarrier2KHR(VkCommandBuffer cmd,const VkDependencyInfo* info)
 {auto fn=deviceFn<PFN_vkCmdPipelineBarrier2KHR>(cmd,"vkCmdPipelineBarrier2KHR");traceNativeBarrier2(cmd,info);fn(cmd,info);shadowShareBarrier2(cmd,info);atmosphereShareBarrier2(cmd,info);}
 void nativeCommandSubmitted(VkQueue queue,VkCommandBuffer cmd,VkResult result) noexcept
 {
+    if(result==VK_SUCCESS)uiGlyph::submitted(queue,cmd);
     uiDraw::submitted(queue,cmd,result);
     try {
         std::vector<std::string> notes;
@@ -149,6 +150,6 @@ void nativeSubmit2Images(VkQueue queue,uint32_t count,const VkSubmitInfo2* submi
 {for(uint32_t b=0;b<count;++b)for(uint32_t c=0;c<submits[b].commandBufferInfoCount;++c)
     nativeCommandSubmitted(queue,submits[b].pCommandBufferInfos[c].commandBuffer,result);}
 VKAPI_ATTR VkResult VKAPI_CALL evrQueueSubmit2(VkQueue queue,uint32_t count,const VkSubmitInfo2* submits,VkFence fence)
-{exitProgress::Scope exitTrace("QueueSubmit2",reinterpret_cast<uint64_t>(queue));auto result=deviceFn<PFN_vkQueueSubmit2>(queue,"vkQueueSubmit2")(queue,count,submits,fence);exitTrace.end(result);nativeSubmit2Images(queue,count,submits,result);return result;}
+{exitProgress::Scope exitTrace("QueueSubmit2",reinterpret_cast<uint64_t>(queue));uiGlyph::beforeSubmit(queue);auto result=deviceFn<PFN_vkQueueSubmit2>(queue,"vkQueueSubmit2")(queue,count,submits,fence);exitTrace.end(result);nativeSubmit2Images(queue,count,submits,result);return result;}
 VKAPI_ATTR VkResult VKAPI_CALL evrQueueSubmit2KHR(VkQueue queue,uint32_t count,const VkSubmitInfo2* submits,VkFence fence)
-{exitProgress::Scope exitTrace("QueueSubmit2KHR",reinterpret_cast<uint64_t>(queue));auto result=deviceFn<PFN_vkQueueSubmit2KHR>(queue,"vkQueueSubmit2KHR")(queue,count,submits,fence);exitTrace.end(result);nativeSubmit2Images(queue,count,submits,result);return result;}
+{exitProgress::Scope exitTrace("QueueSubmit2KHR",reinterpret_cast<uint64_t>(queue));uiGlyph::beforeSubmit(queue);auto result=deviceFn<PFN_vkQueueSubmit2KHR>(queue,"vkQueueSubmit2KHR")(queue,count,submits,fence);exitTrace.end(result);nativeSubmit2Images(queue,count,submits,result);return result;}

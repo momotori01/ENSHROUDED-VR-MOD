@@ -3,6 +3,8 @@
 #include "input_pipeline_observer.hpp"
 #include "input_ui_observer.hpp"
 #include "compass_head.hpp"
+#include "prompt_pad.hpp"
+#include "glyph_choice_observer.hpp"
 #include "native_impact_components.hpp"   // clientNow: the bow's sent camera on a client only
 #include "input_head_idle.hpp"
 #include "glide_launch_bridge.hpp"
@@ -172,6 +174,8 @@ inline void install(){
     optionalPart("fishing_charge",[&]{fishingCharge::install();});
     optionalPart("compass_head",[&]{compassHead::install();});
     optionalPart("menu_pointer",[&]{menuPointer::install();});
+    optionalPart("prompt_pad",[&]{promptPad::install();});
+    optionalPart("glyph_choice",[&]{glyphChoice::install();});
     optionalPart("aim_mark",[&]{aimMark::install(controllerUiFixture::bowDrawRequested||controllerUiFixture::rangedAimRequested);});
     optionalPart("key_script",[&]{keyScript::install();});
 }
@@ -197,6 +201,8 @@ inline void disable(bool handoffInput=false,bool retainAppearance=false){
     auto cleanup=[&](auto action){try{action();}catch(...){if(!cleanupError)cleanupError=std::current_exception();}};
     cleanup([]{glideLaunch::disable();});
     cleanup([]{menuPointer::disable();});
+    cleanup([]{promptPad::disable();});
+    cleanup([]{glyphChoice::disable();});
     cleanup([]{aimMark::disable();});
     cleanup([]{keyScript::disable();});
     cleanup([]{buildingCursorRay::disable();});

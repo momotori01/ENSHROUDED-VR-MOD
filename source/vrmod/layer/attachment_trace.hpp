@@ -46,6 +46,7 @@ extern "C" __declspec(dllexport) int evrTrackNativeEyeImage(VkDevice device,VkIm
 VKAPI_ATTR VkResult VKAPI_CALL evrSetDebugUtilsObjectNameEXT(VkDevice device,const VkDebugUtilsObjectNameInfoEXT* info)
 {
     const auto result=deviceFn<PFN_vkSetDebugUtilsObjectNameEXT>(device,"vkSetDebugUtilsObjectNameEXT")(device,info);
+    if(result==VK_SUCCESS)uiGlyph::named(info);
     if(result==VK_SUCCESS&&info&&info->objectType==VK_OBJECT_TYPE_IMAGE&&info->pObjectName&&
        std::strncmp(info->pObjectName,"EVR calibration eye ",20)==0)try{
         uint64_t generation=0;const VkImage image=(VkImage)info->objectHandle;
@@ -92,7 +93,7 @@ VKAPI_ATTR void VKAPI_CALL evrDestroyImageView(VkDevice device, VkImageView view
 VKAPI_ATTR void VKAPI_CALL evrDestroyImage(VkDevice device, VkImage image, const VkAllocationCallbacks *allocator)
 {
     auto fn = deviceFn<PFN_vkDestroyImage>(device, "vkDestroyImage");
-    giReprojectForget(device, image); shadowShareForget(image); atmosphereShareForget(image);
+    giReprojectForget(device, image); shadowShareForget(image); atmosphereShareForget(image); uiGlyph::destroyed(image);
     uint64_t generation = 0; VkDeviceMemory dealiased = VK_NULL_HANDLE;
     { std::lock_guard<std::mutex> lock(mutex);
       auto deviceEntry = trackedImages.find(key(device));

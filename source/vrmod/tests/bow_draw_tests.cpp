@@ -22,11 +22,17 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   p=step(0,0,320);ck(t.phase()==BowDraw::Idle&&!p.leftTrigger&&!p.rightTrigger);
  }
  // VHVR: a trigger pressed away from the string takes it once the hand arrives.
- reset();step(0,0);p=at(1,BowPhysicalTrial::restString+Vec3{.3f,0,0});ck(t.phase()==BowDraw::Idle&&!p.leftTrigger&&!t.metrics().withinRange);
+ reset();step(0,0);p=at(1,BowPhysicalTrial::restString+Vec3{.3f,0,0});ck(t.phase()==BowDraw::Idle&&p.leftTrigger==255&&!t.metrics().withinRange);   // LT early (preAimRange)
  p=at(1,BowPhysicalTrial::restString+Vec3{.21f,0,0});ck(t.phase()==BowDraw::Idle);
  p=at(1,BowPhysicalTrial::restString+Vec3{.19f,0,0});ck(t.phase()==BowDraw::Held&&p.leftTrigger==255);
  // Never near: nothing is taken and nothing is sent.
- reset();step(0,0);for(unsigned i=0;i<20;i++){p=at(1,BowPhysicalTrial::restString+Vec3{.4f,0,0});ck(t.phase()==BowDraw::Idle&&!p.leftTrigger&&!p.rightTrigger);}
+ reset();step(0,0);for(unsigned i=0;i<20;i++){p=at(1,BowPhysicalTrial::restString+Vec3{.5f,0,0});ck(t.phase()==BowDraw::Idle&&!p.leftTrigger&&!p.rightTrigger);}
+ // On the way to the string (within 0.45 m, the trigger held) LT already goes to the game - its nocking starts - but
+ // nothing is taken; let go there, LT goes and nothing is shot.
+ reset();step(0,0);p=at(1,BowPhysicalTrial::restString+Vec3{.4f,0,0});ck(t.phase()==BowDraw::Idle&&p.leftTrigger==255&&!p.rightTrigger);
+ p=at(1,BowPhysicalTrial::restString+Vec3{.1f,0,0});ck(t.phase()==BowDraw::Held&&p.leftTrigger==255);
+ reset();step(0,0);at(1,BowPhysicalTrial::restString+Vec3{.4f,0,0});p=at(0,BowPhysicalTrial::restString+Vec3{.4f,0,0});ck(t.phase()==BowDraw::Idle&&!p.leftTrigger&&!p.rightTrigger&&!t.shots());
+ reset();t.preAim(0);step(0,0);p=at(1,BowPhysicalTrial::restString+Vec3{.4f,0,0});ck(!p.leftTrigger);
  // Short pull or too quick a release cancels without a tap, then can be taken again.
  for(float pull:{0.f,.05f,.099f}){reset();step(0,0);step(1,0);step(1,pull,500);p=step(0,pull);ck(t.phase()==BowDraw::Cancelled&&!p.rightTrigger&&!p.leftTrigger&&!t.shots());
   step(0,0);ck(t.phase()==BowDraw::Idle);ck(shoot().rightTrigger==255);}
@@ -40,6 +46,18 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   p=step(1,0);ck(t.phase()==BowDraw::Blocked&&!p.leftTrigger&&!p.rightTrigger);
   p=step(1,0);ck(t.phase()==BowDraw::Blocked);step(0,0);ck(t.phase()==BowDraw::Idle);ck(shoot().rightTrigger==255);
  }
+ // The strong shot: the string taken with the right grip holds RT (no LT) while drawn and lets it go with the string; a
+ // grip closed during a trigger's draw turns it to the strong shot's; with strongByGrip off the grip takes nothing.
+ reset();step(0,0);f.hands[1].grabActive=f.hands[1].grab=true;p=step(0,0);
+ ck(t.phase()==BowDraw::Held&&t.strongDraw()&&p.rightTrigger==255&&!p.leftTrigger);
+ p=step(0,.35f,500);ck(t.phase()==BowDraw::Held&&p.rightTrigger==255&&!p.leftTrigger);
+ f.hands[1].grab=false;p=step(0,.35f);ck(t.phase()==BowDraw::Released&&t.strongRelease()&&!p.rightTrigger&&!p.leftTrigger&&t.shots()==1);
+ ck(!step(0,.35f,100).rightTrigger);p=step(0,.35f,420);ck(t.phase()==BowDraw::Idle&&!p.leftTrigger&&!p.rightTrigger);
+ reset();step(0,0);step(1,0);p=step(1,.2f,300);ck(p.leftTrigger==255&&!p.rightTrigger&&!t.strongDraw());
+ f.hands[1].grabActive=f.hands[1].grab=true;p=step(1,.35f,300);ck(t.strongDraw()&&p.rightTrigger==255&&!p.leftTrigger);
+ f.hands[1].grab=false;p=step(0,.35f);ck(t.phase()==BowDraw::Released&&t.strongRelease()&&!p.rightTrigger);
+ reset();step(0,0);step(1,0);step(1,.35f,500);p=step(0,.35f);ck(t.phase()==BowDraw::Released&&!t.strongRelease()&&p.rightTrigger==255&&p.leftTrigger==255);
+ {reset();BowDrawSettings off;off.strongByGrip=false;t=BowDraw{off};f.hands[1].grabActive=f.hands[1].grab=true;step(0,0);p=step(0,0);ck(t.phase()==BowDraw::Idle&&!p.rightTrigger&&!p.leftTrigger);}
  // Off the model axis the pull is still the handle-to-hand distance behind the string,
  // so a bow hand held at an angle neither shortens the draw nor cancels the release.
  {const Vec3 off{.3f,BowPhysicalTrial::restString.y,.5f};const float expected=std::sqrt(.34f)-BowPhysicalTrial::restString.z;

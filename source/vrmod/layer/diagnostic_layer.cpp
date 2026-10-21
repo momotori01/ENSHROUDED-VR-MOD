@@ -216,6 +216,7 @@ void gpuTimingBegin(VkCommandBuffer cmd) noexcept;void gpuTimingEnd(VkCommandBuf
 void giReprojectModule(VkShaderModule module,const VkShaderModuleCreateInfo* info) noexcept;void giReprojectPipeline(VkShaderModule module,VkPipeline pipeline) noexcept;void giReprojectWrites(uint32_t count,const VkWriteDescriptorSet* writes,uint32_t copies,const VkCopyDescriptorSet* copy) noexcept;void giReprojectReset(VkCommandBuffer c) noexcept;void giReprojectBind(VkCommandBuffer c,VkPipelineBindPoint point,VkPipeline pipeline) noexcept;void giReprojectSets(VkCommandBuffer c,VkPipelineBindPoint point,VkPipelineLayout layout,uint32_t first,uint32_t count,const VkDescriptorSet* sets,uint32_t dynamicCount,const uint32_t* offsets) noexcept;void giReprojectForget(VkDevice device,VkImage image) noexcept;void giReprojectDispatch(VkCommandBuffer c,uint32_t gx,uint32_t gy,uint32_t gz) noexcept;void giReprojectDestroy(VkDevice device) noexcept;
 bool atmosphereShareCreate(const VkImageCreateInfo& in,VkImageCreateInfo& out) noexcept;void atmosphereShareBarrier(VkCommandBuffer c,uint32_t count,const VkImageMemoryBarrier* images) noexcept;void atmosphereShareBarrier2(VkCommandBuffer c,const VkDependencyInfo* info) noexcept;void atmosphereShareForget(VkImage image) noexcept;bool shadowShareCreate(const VkImageCreateInfo& in,VkImageCreateInfo& out) noexcept;void shadowShareBarrier(VkCommandBuffer c,uint32_t count,const VkImageMemoryBarrier* images) noexcept;void shadowShareBarrier2(VkCommandBuffer c,const VkDependencyInfo* info) noexcept;void shadowShareForget(VkImage image) noexcept;
 #include "render_trace.hpp"
+#include "ui_glyph.hpp"
 #include "image_state.hpp"
 std::string imageAliasReportLocked(VkImage image);void forgetImageBindingLocked(VkImage image);VkDeviceMemory takeDealiasedMemoryLocked(VkImage image);void forgetSweepImageLocked(VkImage image);
 void sweepDepthRendering(VkCommandBuffer cmd,const VkRenderingInfo* info) noexcept;void sweepDepthEnd(VkCommandBuffer cmd) noexcept;void sweepDepthDraw(VkCommandBuffer cmd,uint32_t kind=0) noexcept;
@@ -616,6 +617,7 @@ VKAPI_ATTR void VKAPI_CALL evrDestroyDevice(VkDevice device, const VkAllocationC
     giReprojectDestroy(device);
     uiCapture::destroyDevice(device);
     desktopMirror::destroy(device);
+    uiGlyph::destroy(device);
     {
         std::lock_guard<std::mutex> l(mutex);
         devices.erase(key(device));
@@ -981,6 +983,7 @@ VKAPI_ATTR void VKAPI_CALL evrCmdCopyImage2(VkCommandBuffer c,const VkCopyImageI
     if(info)sweepDepthTransfer(c,info->dstImage,"copy_image2",nullptr);deviceFn<PFN_vkCmdCopyImage2>(c,"vkCmdCopyImage2")(c,info);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdCopyBufferToImage(VkCommandBuffer c,VkBuffer src,VkImage dst,VkImageLayout layout,uint32_t count,const VkBufferImageCopy* regions){
+    uiGlyph::copied(c,src,dst,layout,count,regions);
     sweepDepthTransfer(c,dst,"copy_buffer_to_image",nullptr);deviceFn<PFN_vkCmdCopyBufferToImage>(c,"vkCmdCopyBufferToImage")(c,src,dst,layout,count,regions);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdBlitImage(VkCommandBuffer c,VkImage src,VkImageLayout srcLayout,VkImage dst,VkImageLayout dstLayout,uint32_t count,const VkImageBlit* regions,VkFilter filter){
@@ -1016,6 +1019,7 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateImage(VkDevice d, const VkImageCreateInf
     VkImageCreateInfo atmosphere{};
     if (info && atmosphereShareCreate(*info, atmosphere)) info = &atmosphere;
     auto r = deviceFn<PFN_vkCreateImage>(d, "vkCreateImage")(d, info, a, p);
+    if (r == VK_SUCCESS && p) uiGlyph::created(info, *p);
     if (info->usage & (VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                        VK_IMAGE_USAGE_STORAGE_BIT))
     try {
@@ -1154,6 +1158,13 @@ VKAPI_ATTR VkResult VKAPI_CALL evrBindImageMemory2(VkDevice d,uint32_t count,con
 VKAPI_ATTR VkResult VKAPI_CALL evrBindImageMemory2KHR(VkDevice d,uint32_t count,const VkBindImageMemoryInfo* infos){
     return bindImages2(d,count,infos,deviceFn<PFN_vkBindImageMemory2KHR>(d,"vkBindImageMemory2KHR"));
 }
+VKAPI_ATTR VkResult VKAPI_CALL evrMapMemory(VkDevice d,VkDeviceMemory memory,VkDeviceSize offset,VkDeviceSize size,VkMemoryMapFlags flags,void** data){
+    const auto result=deviceFn<PFN_vkMapMemory>(d,"vkMapMemory")(d,memory,offset,size,flags,data);
+    if(result==VK_SUCCESS&&data)uiGlyph::memoryMapped(memory,offset,*data);return result;
+}
+VKAPI_ATTR void VKAPI_CALL evrUnmapMemory(VkDevice d,VkDeviceMemory memory){
+    uiGlyph::memoryUnmapped(memory);deviceFn<PFN_vkUnmapMemory>(d,"vkUnmapMemory")(d,memory);
+}
 VKAPI_ATTR VkResult VKAPI_CALL evrBindBufferMemory(VkDevice d,VkBuffer b,VkDeviceMemory memory,VkDeviceSize offset){
     const auto result=deviceFn<PFN_vkBindBufferMemory>(d,"vkBindBufferMemory")(d,b,memory,offset);
     if(result==VK_SUCCESS)recordBufferBinding(d,b,memory,offset);return result;
@@ -1249,6 +1260,8 @@ static PFN_vkVoidFunction intercept(const char *name)
     MAP(vkCreateImage, evrCreateImage)
     MAP(vkCreateBuffer, evrCreateBuffer)
     MAP(vkBindBufferMemory, evrBindBufferMemory)
+    MAP(vkMapMemory, evrMapMemory)
+    MAP(vkUnmapMemory, evrUnmapMemory)
     MAP(vkBindBufferMemory2, evrBindBufferMemory2)
     MAP(vkBindBufferMemory2KHR, evrBindBufferMemory2KHR)
     MAP(vkBindImageMemory, evrBindImageMemory)

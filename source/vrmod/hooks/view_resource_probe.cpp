@@ -34,6 +34,7 @@
 #include <evr/bow_tracked_shot.hpp>
 #include <evr/bow_draw.hpp>
 #include <evr/ranged_aim.hpp>
+#include <evr/button_glyph_labels.hpp>
 #include <evr/live_melee.hpp>
 #include <evr/live_throw.hpp>
 #include <evr/live_swing_cast.hpp>
@@ -44,6 +45,7 @@
 #include <evr/vfx_decal_rebase.hpp>
 #include <evr/live_secondary.hpp>
 #include <evr/throwable_catalog.hpp>
+#include <evr/bow_speed_catalog.hpp>
 #include <evr/live_guard.hpp>
 #include <evr/quick_slot.hpp>
 #include <evr/body_ik.hpp>
@@ -369,8 +371,13 @@ diagnostic::NativeGestureHaptic nativeGestureHaptic=nullptr;
 Pose liveTrackingToAnchor=identityPose();
 bool sceneryReplayRequested=false;
 game::StableAnchor sceneryReplayReference{};
+// EVR_SCENERY_REPLAY_FROM=<frame> (2026-10-21, a Mock of "entering a building": the shadows differ between the eyes for
+// a while after it): the camera stays the player's own until that frame, then jumps to the reference.
 game::StableAnchor sceneryAnchor(game::StableAnchor native){
-    return sceneryReplayRequested?game::replayAnchor(sceneryReplayReference,liveTrackingToAnchor):native;
+    static const uint64_t from=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_SCENERY_REPLAY_FROM",v,sizeof v);return n&&n<sizeof v?std::strtoull(v,nullptr,10):0ull;}();
+    // EVR_SCENERY_REPLAY_UNTIL=<frame>: the reference until that frame, the player's own camera after it (from outside in).
+    static const uint64_t until=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_SCENERY_REPLAY_UNTIL",v,sizeof v);return n&&n<sizeof v?std::strtoull(v,nullptr,10):~0ull;}();
+    return sceneryReplayRequested&&liveFrame.frame>=from&&liveFrame.frame<until?game::replayAnchor(sceneryReplayReference,liveTrackingToAnchor):native;
 }
 bool runtimeEyes(){return useRecordedXr||liveXr;}
 uint32_t eyeWidth(size_t eye){return liveXr?liveFrame.width[eye]:recordedXr.width[eye];}
@@ -591,6 +598,7 @@ bool finishEyeCpuTasks(uintptr_t scene,unsigned milliseconds=100);
 #include "native_attribute_registry.hpp"
 #include "motion_target_observer.hpp"
 #include "live_melee_targets.hpp"
+#include "effect_entity_census.hpp"
 #include "target_mark.hpp"
 #include "live_actionbar_pages.hpp"
 #include "live_equipment.hpp"
@@ -1461,6 +1469,23 @@ struct StreamingLend {uintptr_t view=0,own=0;bool lent=false;
             if(own&&l&&own!=l){*reinterpret_cast<uintptr_t*>(to+layout::viewStreaming)=l;view=to;lent=true;}}catch(...){}}
     StreamingLend(const StreamingLend&)=delete;StreamingLend& operator=(const StreamingLend&)=delete;
     ~StreamingLend(){if(lent)*reinterpret_cast<uintptr_t*>(view+layout::viewStreaming)=own;}};
+// The right eye draws with the left eye's many-lights shadow object (View+0xf28: made by 0xc8970 - "could not create
+// many lights shadows view" -, updated by 0xca330 at 0x1367f1). Experiment, EVR_SHARE_MANY_LIGHT_SHADOWS=1 (2026-10-21,
+// the user: "the shadows differ between the eyes when entering a building, and settle a little later"; RenderDoc
+// game-20261021-105907 frame 791 in the user's torch-lit ruin: the 3072x2048 point-light shadow atlas of the two eyes
+// differed in 4 of 384 tiles - a light's shadow in one eye's tile, the other's empty, or the same light in another tile -
+// and the lighting came out 4 % darker in the left eye at the same points of the world, while GI and the sun's shadow
+// were the same). Each eye keeps its own atlas and fills it on its own; with one object both eyes read one atlas.
+// Lent (game-20261021-111156, the same frame): one atlas for both eyes, the lighting's left/right ratio 0.961 -> 0.998
+// and after DLSS 0.974 -> 1.008 at the same points of the world. On by default; EVR_SHARE_MANY_LIGHT_SHADOWS=0: each its own.
+constexpr uintptr_t viewManyLightShadows=0xf28;
+inline const bool shareManyLightShadows=[]{char v[8]{};return !(GetEnvironmentVariableA("EVR_SHARE_MANY_LIGHT_SHADOWS",v,sizeof v)==1&&v[0]=='0');}();
+struct FieldLend {uintptr_t view=0,own=0,offset=0;bool lent=false;
+    FieldLend(uintptr_t to,uintptr_t left,uintptr_t at,bool want):offset(at){if(!want||!to||!left)return;
+        try{own=read<uintptr_t>(to+at);const auto l=read<uintptr_t>(left+at);
+            if(own&&l&&own!=l){*reinterpret_cast<uintptr_t*>(to+at)=l;view=to;lent=true;}}catch(...){}}
+    FieldLend(const FieldLend&)=delete;FieldLend& operator=(const FieldLend&)=delete;
+    ~FieldLend(){if(lent)*reinterpret_cast<uintptr_t*>(view+offset)=own;}};
 void recordPair(PairResources &pair,void* context,void* parameters,void* target){
     const cpuTiming::Span timed(cpuTiming::Record);
     if(pair.pairPending)throw std::runtime_error("previous native eye pair still pending");
@@ -1689,6 +1714,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         // Kept until the eye's CPU tasks finished (finishEyeCpuTasks below), not just until f7c50 returns.
         std::optional<giShare::Scope> giScope;
         std::optional<StreamingLend> streamingLend;   // until the eye's CPU work is done (finishEyeCpuTasks)
+        std::optional<FieldLend> shadowLend;          // the same: the many-lights shadow object (EVR_SHARE_MANY_LIGHT_SHADOWS=0: off)
         std::optional<giShare::BorrowScope> giBorrow;   // the right eye lit by the left eye's screen GI (borrow-screen form)
         std::optional<DofScope> dofScope; // also kept until the eye CPU tasks finished
         worldSharedStages::Context sharedStage;
@@ -1754,6 +1780,11 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
             // The right eye draws with the left eye's View streaming object (StreamingLend above).
             {const cpuTiming::Span eyeTimed(eye?cpuTiming::Eye1:cpuTiming::Eye0);
              streamingLend.emplace(eye==1?pair.created[1]:0,pair.created[0],shareStreaming&&eye==1&&(liveFrame.eyeMask&1));
+             shadowLend.emplace(eye==1?pair.created[1]:0,pair.created[0],viewManyLightShadows,shareManyLightShadows&&eye==1&&(liveFrame.eyeMask&1));
+             {static std::atomic<uint64_t> shadowLends{0};if(shadowLend->lent){const auto n=++shadowLends;if(n<=3||n%1800==0)logFile->event("eye_many_light_shadows_lent","\"serial\":"+std::to_string(pair.serial)+
+                 ",\"lends\":"+std::to_string(n)+",\"own\":"+hex(shadowLend->own)+",\"left\":"+hex(read<uintptr_t>(pair.created[1]+viewManyLightShadows)));}
+              else if(shareManyLightShadows&&eye==1){static std::atomic<unsigned> notLent{0};if(notLent.fetch_add(1)<3)logFile->event("eye_many_light_shadows_not_lent","\"serial\":"+std::to_string(pair.serial)+
+                 ",\"right\":"+hex(read<uintptr_t>(pair.created[1]+viewManyLightShadows))+",\"left\":"+hex(read<uintptr_t>(pair.created[0]+viewManyLightShadows)));}}
              {static std::atomic<uint64_t> lends{0};if(streamingLend->lent){const auto n=++lends;if(n<=3||n%1800==0)logFile->event("eye_streaming_lent","\"serial\":"+std::to_string(pair.serial)+
                  ",\"lends\":"+std::to_string(n)+",\"own\":"+hex(streamingLend->own)+",\"left\":"+hex(read<uintptr_t>(pair.created[1]+layout::viewStreaming)));}}
              original(pair.results[eye].data(),context,reinterpret_cast<void*>(pair.created[eye]),pair.parameters[eye].data(),pair.targetArguments[eye].data());}}
@@ -1825,7 +1856,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         // ending the series there left the headset without the world.
         {const cpuTiming::Span tasksTimed(eye?cpuTiming::Tasks1:cpuTiming::Tasks0);
          finishEyeCpuTasks(pair.scene);}
-        streamingLend.reset();giScope.reset();giBorrow.reset();dofScope.reset();
+        streamingLend.reset();shadowLend.reset();giScope.reset();giBorrow.reset();dofScope.reset();
         worldSharedStages::detailRadius::finishEye(int(eye),pair.serial);   // the right eye's terrain detail radius (2026-10-18)
         // Diagnostic (2026-10-19, EVR_DUMP_STREAMING_AT=<frame>[,<frame>...]): at those live frames, after the right eye, the
         // View streaming objects ([View+0x978], 128 KB each - the terrain detail radius sits at +0xc444) of both eyes and of the
@@ -2536,6 +2567,8 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
             motionVisual::verifyContextSource();
             heldVfxBridge::observe();
             vfxEmitterCensus::observe(motionVisual::scene,anchor);
+            {rootCamera::Sample cam;{std::lock_guard<std::mutex> lock(rootCamera::mutex);cam=rootCamera::latest;}
+             effectEntityCensus::observe(cam.world,liveTargets::types.world,anchor.root,liveTargets::guestWorld);}   // EVR_EFFECT_CENSUS=1, or lightly as a guest
             heldEffectScope.begin();
             const bool usesGesture=controllerUiFixture::gestureRequested||controllerUiFixture::combatGestureRequested||controllerUiFixture::liveRequested;
             motion::HeadGestureResult gesture;
@@ -3419,6 +3452,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             std::ifstream df(calibrationDirectory/"world-bow-draw.txt");std::string magic;df>>magic>>std::ws;
             if(!df||!df.eof()||magic!="EVR_BOW_DRAW_1"||!controllerUiFixture::bowTrackedAimRequested)throw std::runtime_error("bow draw requires the tracked aim route");
             controllerUiFixture::bowDrawRequested=true;
+            {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_BOW_PRE_AIM",v,sizeof v);if(m==1&&v[0]=='0')controllerUiFixture::bowDraw.preAim(0);}   // include/evr/bow_draw.hpp preAimRange
             // The nocked arrow is drawn on the string of the tracked bow (VHVR), from the game's own arrow instance.
             motionArrowVisual::requested=motionBowVisual::physicalPoseRequested;
             logFile->event("bow_draw_enabled","\"repeatable\":true,\"two_hand_orientation\":true,\"attach_range\":0.2,\"full_draw_length\":0.6,\"minimum_pull\":0.1,\"shot_window_ms\":"+std::to_string(controllerUiFixture::bowDrawShotMs)+",\"native_power_write\":false");
@@ -3447,6 +3481,25 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                     for(size_t k=0;k<n;++k)out[k]={nearby[k].entity,nearby[k].distance,nearby[k].body,nearby[k].reach,nearby[k].state,nearby[k].character};
                     return n;};
                 controllerUiFixture::hitWatchState=&liveTargets::stateNow;
+                if(liveTargets::predictWanted){controllerUiFixture::hitPredict=&liveTargets::predictHit;controllerUiFixture::hitSettle=&liveTargets::settlePredictions;}
+                // A client's touches go to the host as hits (online_sync.hpp sendHits); the host lays the collider on them.
+                controllerUiFixture::hitReport=[](uint32_t entity,bool character,uint64_t now){
+                    if(!onlineSync::requested||!nativeImpactComponents::clientNow(now))return;std::array<int64_t,3> at{};
+                    if(!liveTargets::entityPosition(entity,at,now))return;
+                    std::lock_guard<std::mutex> lock(controllerUiFixture::hitReportMutex);auto* slot=&controllerUiFixture::hitReports[0];
+                    for(auto& r:controllerUiFixture::hitReports)if(r.serial<slot->serial)slot=&r;
+                    *slot={++controllerUiFixture::hitReportSerial,now,at,character};};
+                remoteMelee::nearestTarget=&liveTargets::nearestTo;
+                controllerUiFixture::creatureNear=&liveTargets::creatureNear;controllerUiFixture::undoDamage=&liveTargets::undoDamage;
+                controllerUiFixture::localParryDecided=&parryObserver::localDecided;
+                motionArrowVisual::flightHit=&liveTargets::segmentHit;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
+                motionArrowVisual::flightReach=[](WorldPositionQ32 origin,Vec3 direction,uint64_t now){int by=0;const float r=liveTargets::aimReach(origin,direction,now,by);return by==1?r:1e9f;};
+                motionArrowVisual::flightReport=[](const std::array<int64_t,3>& at,bool character){
+                    // the hit of this guest's own arrow, to the host (online_sync.hpp sendHits, as a stroke's touch)
+                    if(!onlineSync::requested)return;
+                    std::lock_guard<std::mutex> lock(controllerUiFixture::hitReportMutex);auto* slot=&controllerUiFixture::hitReports[0];
+                    for(auto& r:controllerUiFixture::hitReports)if(r.serial<slot->serial)slot=&r;
+                    *slot={++controllerUiFixture::hitReportSerial,GetTickCount64(),at,character,true};};
                 controllerUiFixture::targetNear=[](const evr::motion::LiveMeleeWeapon& weapon,uint64_t now){const auto n=liveTargets::contact(weapon,now);return controllerUiFixture::TargetNear{n.reached,n.gated,n.entity,n.distance,n.cached,n.ahead,n.nearest};};
                 // The actor's Grounded bit (0) off within the last half second: a stroke in the air attacks without a target.
                 controllerUiFixture::actorAirborne=[](uint64_t now){std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;
@@ -4221,6 +4274,10 @@ void frame(uintptr_t view) noexcept {
             }
         }else motionBodyIk::published.have=false;
         onlineSync::frame(serial);
+        // EVR_EFFECT_CENSUS=1 without VR as well (2026-10-21: the user's bow and bomb test ran without VR and its census was
+        // never asked): the camera's World only - the client's, as a guest's copies of the host's arrows come.
+        {rootCamera::Sample cam;{std::lock_guard<std::mutex> lock(rootCamera::mutex);cam=rootCamera::latest;}
+         if(cam.number&&cam.world)effectEntityCensus::observe(cam.world,0,cam.stable.position,false);}
         if(frames.load()%600==1&&logs++<400)logFile->event("online_flat_frame","\"frames\":"+std::to_string(frames.load())+",\"skipped\":"+std::to_string(skipped.load())+",\"own_character_known\":"+(ownKnown?"true":"false")+
             ",\"rig\":"+(motionHandVisual::rig?"true":"false")+",\"fake_body\":"+(fakeBody?"true":"false")+",\"others_seen\":"+std::to_string([]{std::lock_guard<std::mutex> lock(equipmentObserver::otherMutex);return equipmentObserver::others.size();}()));
     }catch(const std::exception& e){if(failures.fetch_add(1)<20)try{logFile->event("online_flat_failure","\"reason\":"+jsonString(e.what()));}catch(...){}}

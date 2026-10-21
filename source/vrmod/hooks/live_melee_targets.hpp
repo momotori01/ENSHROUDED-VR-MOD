@@ -20,9 +20,9 @@ inline bool requested=false;
 // Both are taken where the server's components are missing; the host and a game of one keep the server's.
 // Players are the entities with keen::ecs::NetworkPlayerAttributes; one at no health is a fallen player a teammate revives
 // (its revivieData +0x28: NetworkReviveData state, duration, left; reviveDuration +0x44) - see downedNear below.
-struct Types {uintptr_t world=0,registry=0;int health=-1,current=-1,actor=-1,selected=-1,relevant=-1,networkHealth=-1,render=-1,networkActor=-1,player=-1,enemy=-1,destructible=-1;
+struct Types {uintptr_t world=0,registry=0;int health=-1,current=-1,actor=-1,selected=-1,relevant=-1,networkHealth=-1,render=-1,networkActor=-1,player=-1,enemy=-1,destructible=-1,clientCollider=-1,feedbackMaterial=-1,velocity=-1,gravity=-1;
  uint16_t healthBytes=68,selectedBytes=0,relevantBytes=0,renderBytes=0,playerBytes=0;bool usable=false;};
-struct Layout {bool health=false,current=false,actor=false,selected=false,relevant=false,networkHealth=false,render=false,player=false,enemy=false,destructible=false;std::array<uint64_t,10> bits{};
+struct Layout {bool health=false,current=false,actor=false,selected=false,relevant=false,networkHealth=false,render=false,player=false,enemy=false,destructible=false,clientThing=false;std::array<uint64_t,10> bits{};
  uint16_t healthOffset=0,currentOffset=0,selectedOffset=0,relevantOffset=0,networkHealthOffset=0,renderOffset=0,playerOffset=0;};
 // Fallen players near the local one (2026-10-20, both players: "I cannot revive the other" - the revive is the game's
 // interaction held for reviveDuration, and the right B of the mod only taps it, a longer hold opening the quick wheel).
@@ -37,6 +37,15 @@ struct Census {unsigned entities=0,health=0,networkHealth=0,current=0,render=0,p
 // NetworkHealth or Destructible: only models, colliders and the like). There no target can be known, and the gate is let
 // go - a stroke attacks as before the gate (2026-10-11) - instead of never attacking (the guest of 20261020-002320).
 inline bool blind=false;inline unsigned blindLogs=0;
+// A guest's World (2026-10-21, user after the online session of 10-21 00:25: "as a guest the sword does not hit trees and
+// pots"; the guest's log 20261021-002429 world-4: no entity with Destructible or Health, 13 with NetworkHealth - the
+// server's components stay on the host): the things with a collider of the guest's own and a collision feedback
+// material (keen::ecs::StaticClientCollider + CollisionFeedbackMaterialComponent - pots, trees, rocks, walls alike; the
+// guest cannot tell which break) are taken as things there, so that a stroke at them attacks on the guest at once and the
+// host decides what it does (user 01:55: "decide all of it on the guest; the host processes it later").
+// EVR_GUEST_THINGS=0: as before.
+inline bool guestWorld=false;inline unsigned guestLogs=0;
+inline const bool guestThingsWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_GUEST_THINGS",v,sizeof v);return !(n==1&&v[0]=='0');}();
 inline Census census;inline unsigned censusLogs=0;
 // Which components the entities of this World have (the first two passes of each World): the 40 most common, by name,
 // and those of the entities near the player - what a guest's World holds, to find its creatures by (2026-10-20).
@@ -96,6 +105,34 @@ inline std::mutex mutex;inline std::vector<Cached> cache;inline Types types;inli
 // The health of a kept creature now, read from its row as the pass reads it (-1: not kept, no Health, or not readable).
 // For the record of what a stroke did (controller_ui_fixture.hpp live_melee_outcome, 2026-10-20).
 inline bool block(uintptr_t address,void* out,size_t bytes);
+// (below, at undoDamage: the own player's place and the other players, kept by tick)
+inline std::array<int64_t,3> lastOrigin{};inline bool lastOriginKnown=false;inline std::vector<std::pair<uint32_t,std::array<int64_t,3>>> otherPlayers;
+inline void sampleOtherPlayers(uint64_t now);
+// A guest's arrows on this host (2026-10-21; user 04:30: "the host needs only the hit's damage"). The guest flies its
+// own arrow on its PC and decides where it hits (motion_arrow_visual.hpp); its hit comes here (online_sync.hpp,
+// sync::hitAction with the arrow's flag). This host's server made that guest's arrow from the guest's input as well
+// (bow_spawn_observer.hpp, remoteSpawnAt): in the 1.5 s after such a spawn the entities that come new into this World
+// with a Velocity and a Gravity are taken as those arrows; when the guest's hit comes, the newest of them still flying
+// is put a metre before the host's thing nearest to the hit (a creature 1.0 m up, a thing 0.4 m) and sent at it, so that
+// the game's own hit of that arrow - the damage - is made there. Under mutex. EVR_REMOTE_ARROW_STEER=0: off.
+// Parked (user 2026-10-21 04:00: "the host draws what it got; it returns only what comes after the hit - the flying
+// arrow is never returned; then the guest has nothing to hide"): the host's server sends every arrow it makes to
+// everyone, the shooter too, so a guest's arrow is put out of sight at once - 300 m above where it was made, standing
+// still, its gravity off - and only the guest's hit sends it on, to the thing it hit. Without a hit for 3 s it is let
+// fall from far below the world (gone, not lying at the guest's feet).
+// Only one thing a shot, and only one that flies along the guest's release - its velocity within about 25 degrees of
+// the aim, and no farther from where the aim started than it could have come since (4 m + its speed for the time since
+// the spawn and 50 ms; 6 m when it does not move yet) - when it is first seen (2026-10-21 05:40, review: every new
+// flying thing of the 0.6 s was parked and later dropped - an enemy's arrow, or anything thrown out at a kill, would
+// have been lost with it). A second arrow of the same shot flies as made.
+struct RemoteArrow {uint32_t entity=0;uint64_t ms=0;bool parked=false;};
+struct ShotHit {std::array<int64_t,3> at{};bool character=false,used=true;uint64_t ms=0;};
+inline std::array<RemoteArrow,8> remoteArrows{};inline std::array<ShotHit,4> shotHits{};
+inline std::unordered_map<uint32_t,uint8_t> arrowKnown;inline bool arrowPrimed=false;inline uint64_t arrowScanAt=0;inline unsigned arrowLogs=0;
+inline std::vector<uint32_t> arrowKeys;inline std::vector<uint64_t> arrowBits;inline uint64_t arrowParkedFor=0;
+inline const bool steerWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_ARROW_STEER",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline void publishShotHit(const std::array<int64_t,3>& at,bool character,uint64_t now);
+inline void steerArrows(uintptr_t world,uint64_t now);
 inline Layout layout(uintptr_t address);
 inline int32_t healthNow(uint32_t entity){
  std::lock_guard<std::mutex> lock(mutex);
@@ -157,6 +194,10 @@ inline void learn(uintptr_t world){
   else if(n=="keen::ecs::NetworkPlayerAttributes"&&size>=0x34&&size<=0x400){types.player=int(id);types.playerBytes=size;}
   else if(n=="keen::ecs::NetworkEnemy")types.enemy=int(id);
   else if(n=="keen::ecs::Destructible")types.destructible=int(id);
+  else if(n=="keen::ecs::StaticClientCollider")types.clientCollider=int(id);
+  else if(n=="keen::ecs::CollisionFeedbackMaterialComponent")types.feedbackMaterial=int(id);
+  else if(n=="keen::ecs::Velocity"&&size==12)types.velocity=int(id);
+  else if(n=="keen::ecs::Gravity"&&size==20)types.gravity=int(id);
  }
  if(types.health<0){   // which types of this build look like it (bounded; names up to 64 characters)
   std::string seen;unsigned shown=0;
@@ -186,6 +227,7 @@ inline Layout layout(uintptr_t address){
   l.render=has(types.render)&&place(types.render,types.renderBytes,l.renderOffset);
   l.player=types.player>=0&&has(types.player)&&place(types.player,types.playerBytes,l.playerOffset);
   l.enemy=has(types.enemy);l.destructible=has(types.destructible);l.bits=bits;
+  l.clientThing=has(types.clientCollider)&&has(types.feedbackMaterial);
   l.selected=types.selected>=0&&has(types.selected)&&place(types.selected,types.selectedBytes,l.selectedOffset);
   l.relevant=types.relevant>=0&&has(types.relevant)&&place(types.relevant,types.relevantBytes,l.relevantOffset);
  }
@@ -208,6 +250,7 @@ inline void tick(uintptr_t world,uint32_t local){
   struct Timed{std::chrono::steady_clock::time_point at;~Timed(){const double s=std::chrono::duration<double>(std::chrono::steady_clock::now()-at).count();tickSeconds+=s;tickSecondsMax=std::max(tickSecondsMax,s);}}timed{started};
   if(types.world!=world||types.registry!=read<uintptr_t>(world)){++relearns;layouts.clear();cache.clear();cursor=0;learn(world);censusLogs=0;census={};typeCounts={};typePasses=0;}
   if(!types.usable)return;
+  lastOrigin=origin;lastOriginKnown=true;sampleOtherPlayers(now);steerArrows(world,now);
   // The targets already known: where they are now, or forget them.
   for(auto i=cache.begin();i!=cache.end();){
    const auto r=record(i->record);game::RootTransform t{};
@@ -229,7 +272,12 @@ inline void tick(uintptr_t world,uint32_t local){
      ",\"map_current_transform\":"+std::to_string(census.allCurrent)+",\"map_render_transform\":"+std::to_string(census.allRender)+",\"map_players\":"+std::to_string(census.allPlayers));}
    {const bool now_blind=census.all>=64&&!census.allHealth&&!census.allNetworkHealth&&!census.allEnemies;
     if(now_blind!=blind&&blindLogs++<50)logFile->event("live_targets_blind","\"world\":"+hex(world)+",\"blind\":"+(now_blind?"true":"false")+",\"entities\":"+std::to_string(census.all)+",\"gate\":\""+(now_blind?"off_strokes_attack":"on")+"\"");
-    blind=now_blind;}
+    blind=now_blind;
+    const bool nowGuest=guestThingsWanted&&census.all>=64&&!census.allHealth&&census.allNetworkHealth>0;
+    if(nowGuest!=guestWorld&&guestLogs++<50)logFile->event("live_targets_guest_world","\"world\":"+hex(world)+",\"guest\":"+(nowGuest?"true":"false")+",\"network_health\":"+std::to_string(census.allNetworkHealth)+
+     ",\"client_colliders_are_things\":"+(nowGuest&&types.clientCollider>=0&&types.feedbackMaterial>=0?"true":"false"));
+    guestWorld=nowGuest;}
+   otherPlayers.clear();for(const auto& p:playersSeen)if(p.entity!=local)otherPlayers.push_back({p.entity,{p.at.x,p.at.y,p.at.z}});
    census={};remoteMelee::publishPlayers(playersSeen);playersSeen.clear();
    if(typePasses<2)tellTypes(world);typeCounts={};typeCountsNear={};}
   // Fallen players not seen again for a while are forgotten.
@@ -253,7 +301,7 @@ inline void tick(uintptr_t world,uint32_t local){
    const auto l=layout(r.layout);
    if(typePasses<2)for(unsigned b=0;b<640;++b)if((l.bits[b/64]>>(b%64))&1)++typeCounts[b];
    ++census.all;if(l.health)++census.allHealth;if(l.networkHealth)++census.allNetworkHealth;if(l.current)++census.allCurrent;if(l.render)++census.allRender;if(l.player)++census.allPlayers;if(l.enemy)++census.allEnemies;
-   const bool object=l.destructible&&!(l.health||l.networkHealth||l.enemy||l.actor);
+   const bool object=(l.destructible||(guestWorld&&l.clientThing))&&!(l.health||l.networkHealth||l.enemy||l.actor);
    if(object&&!(l.current||l.render))++census.objectsWithoutPose;
    if(!(l.health||l.networkHealth||l.enemy||object)||!(l.current||l.render)){
     if(typePasses<2&&(l.current||l.render)){game::RootTransform t{};const auto spot=l.current?r.data+l.currentOffset+uintptr_t(r.row)*56:r.data+l.renderOffset+uintptr_t(r.row)*types.renderBytes;
@@ -442,6 +490,47 @@ inline int32_t stateLocked(const Cached& c){
  else{if(!h[4]||h[4]>8)return -1;std::memcpy(&health,h.data()+8,4);}
  return std::max(health,0);
 }
+// The health a guest sees drops at the touch (2026-10-21, user: "the guest keeps it lowered; the host processes it later
+// - what matters most is that everyone plays with the feel of solo"). On a guest's World the enemy's health is the
+// replicated keen::ecs::NetworkHealth {health, healthMax}, which the host's server writes when its hit has been made
+// (the session of 10-21 00:25: about half a second after the press). At the blade's touch of a creature (the hit stop's
+// watch, controller_ui_fixture.hpp) the guest's copy is lowered by what a stroke of this weapon took the last time
+// (learned from the host's values: the drop that came after a touch), four fifths of it, never to 0 (the creature does
+// not look dead before the host says so). The host's value replaces it when it comes (a little more or less). The first
+// stroke of a weapon only learns. EVR_GUEST_PREDICT_HEALTH=0: off.
+struct Predicted {uint32_t entity=0,before=0,written=0;uint64_t ms=0,key=0;bool open=false;};
+inline std::array<Predicted,8> predicted{};inline std::map<uint64_t,float> learnedDamage;inline unsigned predictLogs=0;
+inline const bool predictWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_GUEST_PREDICT_HEALTH",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline uintptr_t networkHealthAt(uint32_t entity){   // under mutex
+ if(!types.world||types.networkHealth<0)return 0;
+ try{return nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(types.world,entity),unsigned(types.networkHealth),8);}catch(...){return 0;}
+}
+inline void predictHit(uint32_t entity,uint64_t key,uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);if(!predictWanted||!guestWorld||!entity)return;
+ const auto at=networkHealthAt(entity);uint32_t value[2]{};if(!at||!block(at,value,sizeof value)||!value[1]||!value[0]||value[0]>value[1])return;
+ for(auto& p:predicted)if(p.open&&p.entity==entity)p.open=false;   // a stroke before on it: that one learns no more
+ Predicted* slot=&predicted[0];for(auto& p:predicted)if(!p.open&&p.ms<=slot->ms)slot=&p;
+ const auto found=learnedDamage.find(key);const float damage=found==learnedDamage.end()?0.f:found->second*.8f;
+ uint32_t written=value[0];
+ if(damage>=1){written=uint32_t(std::max<int64_t>(1,int64_t(value[0])-int64_t(damage+.5f)));
+  SIZE_T n=0;if(written!=value[0]&&!WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(at),&written,4,&n))written=value[0];}
+ *slot={entity,value[0],written,now,key,true};
+ if(predictLogs++<300)logFile->event("guest_health_predicted","\"entity\":"+std::to_string(entity)+",\"before\":"+std::to_string(value[0])+",\"written\":"+std::to_string(written)+
+  ",\"max\":"+std::to_string(value[1])+",\"learned\":"+std::to_string(found==learnedDamage.end()?-1.f:found->second));
+}
+// Each frame: a predicted health the host's value has replaced teaches the weapon's damage; after two seconds without it,
+// nothing is learned (the host's stroke missed, or its damage was just the predicted one).
+inline void settlePredictions(uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);
+ for(auto& p:predicted){if(!p.open)continue;
+  const auto at=networkHealthAt(p.entity);uint32_t value[2]{};
+  if(!at||!block(at,value,sizeof value)){p.open=false;continue;}
+  if(value[0]!=p.written){p.open=false;
+   if(value[0]<p.before){const float d=float(p.before-value[0]);auto& l=learnedDamage[p.key];l=l>0?l*.5f+d*.5f:d;}
+   if(predictLogs++<300)logFile->event("guest_health_host","\"entity\":"+std::to_string(p.entity)+",\"before\":"+std::to_string(p.before)+",\"predicted\":"+std::to_string(p.written)+
+    ",\"host\":"+std::to_string(value[0])+",\"after_ms\":"+std::to_string(now-p.ms));}
+  else if(now-p.ms>2000){p.open=false;if(predictLogs++<300)logFile->event("guest_health_unconfirmed","\"entity\":"+std::to_string(p.entity)+",\"before\":"+std::to_string(p.before)+",\"predicted\":"+std::to_string(p.written));}}
+}
 inline int32_t stateNow(uint32_t entity){
  std::lock_guard<std::mutex> lock(mutex);
  const auto c=std::find_if(cache.begin(),cache.end(),[&](const Cached& x){return x.target.entity==entity;});
@@ -473,6 +562,126 @@ inline bool hudTarget(CombatTarget& out,bool& candidateOnly,uint64_t now){
 }
 // Any thread: where a creature among the kept ones stands now (its origin, Q32), if it is kept (2026-10-19: the health
 // bar follows its enemy for a while after the game's combat target is lost - target_mark.hpp).
+// The creature nearest to the own player within some metres (a guest's parry, online_sync.hpp sendParries).
+inline bool creatureNear(float within,std::array<int64_t,3>& out,uint32_t& entity){
+ std::lock_guard<std::mutex> lock(mutex);if(!lastOriginKnown)return false;double best=within;bool found=false;
+ for(const auto& c:cache){if(!c.target.character)continue;const double d=metres(c.target.position,lastOrigin);if(d<best){best=d;out=c.target.position;entity=c.target.entity;found=true;}}
+ return found;
+}
+// The other players' health on this host, each tick (a guest's parry gives back the damage of the moments before it:
+// the host is ahead of the guest by the way there and back, so the blow the guest parried may have landed here already).
+// EVR_PARRY_GIVE_BACK=0: not given back.
+struct PlayerHealth {uint32_t entity=0;std::array<int64_t,3> at{};std::array<std::pair<uint64_t,int32_t>,32> history{};size_t next=0;};
+inline std::array<PlayerHealth,8> playerHealth{};
+inline const bool giveBackWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_PARRY_GIVE_BACK",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline uintptr_t healthValueAt(uint32_t entity){   // under mutex: the address of the current health in Health, or 0
+ if(!types.world||types.health<0)return 0;const auto bytes=types.healthBytes;if(bytes!=68&&bytes!=40)return 0;
+ try{const auto h=nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(types.world,entity),unsigned(types.health),bytes);if(!h)return 0;
+  std::array<uint8_t,68> b{};if(!block(h,b.data(),bytes))return 0;
+  if(bytes==68){uint32_t offset=0;std::memcpy(&offset,b.data()+8,4);return (b[16]&1)&&offset==36?h+36:0;}
+  return b[4]&&b[4]<=8?h+8:0;}catch(...){return 0;}
+}
+inline void sampleOtherPlayers(uint64_t now){   // under mutex
+ if(!giveBackWanted)return;
+ for(const auto& [id,at]:otherPlayers){PlayerHealth* slot=nullptr;for(auto& p:playerHealth)if(p.entity==id){slot=&p;break;}
+  if(!slot)for(auto& p:playerHealth)if(!p.entity){slot=&p;*slot={};slot->entity=id;break;}
+  if(!slot)continue;slot->at=at;const auto v=healthValueAt(id);int32_t value=-1;if(!v||!block(v,&value,4))continue;
+  slot->history[slot->next++%slot->history.size()]={now,value};}
+}
+inline bool undoDamage(const std::array<int64_t,3>& enemy,uint64_t windowMs){
+ std::lock_guard<std::mutex> lock(mutex);if(!giveBackWanted)return false;const auto now=GetTickCount64();
+ PlayerHealth* who=nullptr;double best=8;
+ for(auto& p:playerHealth)if(p.entity){const double d=metres(p.at,enemy);if(d<best){best=d;who=&p;}}
+ if(!who)return false;const auto v=healthValueAt(who->entity);int32_t current=-1;if(!v||!block(v,&current,4)||current<=0)return false;
+ int32_t highest=current;for(const auto& [ms,value]:who->history)if(ms&&now>=ms&&now-ms<=windowMs)highest=std::max(highest,value);
+ const bool back=highest>current;if(back){SIZE_T n=0;WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(v),&highest,4,&n);}
+ if(predictLogs++<300)logFile->event("parry_damage_given_back","\"player\":"+std::to_string(who->entity)+",\"health\":"+std::to_string(current)+",\"to\":"+std::to_string(highest)+",\"window_ms\":"+std::to_string(windowMs));
+ return back;
+}
+// The first kept thing a flying shot's path meets (motion_arrow_visual.hpp, a guest's own arrow flown on its PC): the
+// segment from..to against each creature's and thing's upright body (creature 0.5 m, thing 0.4 m); where on the
+// segment (0..1), the thing's place and whether it is a creature.
+inline bool segmentHit(const std::array<int64_t,3>& from,const std::array<int64_t,3>& to,float& along,std::array<int64_t,3>& at,bool& character,uint32_t& entity){
+ std::lock_guard<std::mutex> lock(mutex);const evr::motion::LiveTargetReach reach;float best=2;
+ for(const auto& c:cache){const float r=c.target.character?.5f:c.target.object?.4f:.55f;
+  const float d=evr::motion::bladeDistance(from,to,c.target,reach);if(!std::isfinite(d)||d>r)continue;
+  // where along the path: the nearest approach to the thing's axis, from the path's start
+  const double q=1.0/4294967296.0;const Vec3 a{float(double(from[0]-c.target.position[0])*q),float(double(from[1]-c.target.position[1])*q),float(double(from[2]-c.target.position[2])*q)};
+  const Vec3 b{float(double(to[0]-c.target.position[0])*q),float(double(to[1]-c.target.position[1])*q),float(double(to[2]-c.target.position[2])*q)};
+  const Vec3 u=b-a;const float uu=dot(u,u);const float s=uu>1e-9f?std::clamp(-(a.x*u.x+a.z*u.z)/std::max(u.x*u.x+u.z*u.z,1e-9f),0.f,1.f):0.f;
+  if(s<best){best=s;at=c.target.position;character=c.target.character;entity=c.target.entity;}}
+ if(best>1)return false;along=best;return true;
+}
+inline void publishShotHit(const std::array<int64_t,3>& at,bool character,uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);if(!steerWanted)return;ShotHit* slot=&shotHits[0];for(auto& h:shotHits)if(h.ms<slot->ms)slot=&h;*slot={at,character,false,now};
+}
+inline void steerArrows(uintptr_t world,uint64_t now){   // under mutex, on the World's tick
+ if(!steerWanted||guestWorld||types.velocity<0||types.gravity<0||types.current<0)return;
+ const auto spawned=controllerUiFixture::remoteSpawnAt.load();const bool watching=spawned&&now>=spawned&&now-spawned<=1500;
+ // the new flying things after another player's projectile was made here
+ // the map's ids are kept known while other players are here (every 0.2 s), so that the arrow made after a guest's shot
+ // is the new one; in the 0.6 s after such a shot every tick (it goes out of sight before it is seen)
+ if((watching&&now-spawned<=600)||(!otherPlayers.empty()&&now-arrowScanAt>=200)){arrowScanAt=now;
+  const auto map=world+0x148;const auto bitmap=read<uintptr_t>(map+8),capacity=read<uint64_t>(map+0x10),keyArray=read<uintptr_t>(map+0x28),values=read<uintptr_t>(map+0x40);
+  if(bitmap&&keyArray&&values&&capacity&&capacity<=0x100000&&!(capacity&(capacity-1))){
+   arrowKeys.resize(size_t(capacity));arrowBits.resize(size_t((capacity+63)/64));
+   if(block(bitmap,arrowBits.data(),arrowBits.size()*8)&&block(keyArray,arrowKeys.data(),arrowKeys.size()*4)){
+    std::unordered_map<uint32_t,uint8_t> seen;seen.reserve(arrowKnown.size()+64);
+    for(uint64_t i=0;i<capacity;++i){if(!(arrowBits[size_t(i/64)]>>(i%64)&1))continue;const auto id=arrowKeys[size_t(i)];seen.emplace(id,uint8_t(1));
+     if(!arrowPrimed||arrowKnown.count(id))continue;
+     uintptr_t record=0;if(!block(values+i*8,&record,8)||!record)continue;uintptr_t lay=0;if(!block(record+0x18,&lay,8)||!lay)continue;
+     std::array<uint64_t,10> b{};if(!block(lay,b.data(),sizeof b))continue;
+     const auto bit=[&](int t){return t>=0&&(b[unsigned(t)/64]>>(unsigned(t)%64)&1);};
+     if(watching&&now-spawned<=600&&arrowParkedFor!=spawned&&bit(types.velocity)&&bit(types.gravity)&&!bit(types.actor)){
+      // out of sight at once - when it is that shot's arrow: near where the guest's release aimed from, the first one
+      bool parked=false,aligned=true;double fromRelease=-1,reach=6;float speedSeen=-1;try{const auto e=nativeImpactComponents::entityAtWorld(world,id);
+       const auto vc=nativeImpactComponents::component(e,unsigned(types.velocity),12),gc=nativeImpactComponents::component(e,unsigned(types.gravity),20),cc=nativeImpactComponents::component(e,unsigned(types.current),56);
+       if(cc){const auto at=read<WorldPositionQ32>(cc);fromRelease=metres({at.x,at.y,at.z},{controllerUiFixture::remoteSpawnOrigin[0].load(),controllerUiFixture::remoteSpawnOrigin[1].load(),controllerUiFixture::remoteSpawnOrigin[2].load()});}
+       if(vc){const Vec3 v=read<Vec3>(vc);speedSeen=length(v);   // the game's speed of the arrow as made (90 m/s for the bow measured on 10-21; the guest's own flight uses it)
+        if(speedSeen>1){const Vec3 aim{controllerUiFixture::remoteSpawnDirection[0].load(),controllerUiFixture::remoteSpawnDirection[1].load(),controllerUiFixture::remoteSpawnDirection[2].load()};
+         aligned=length(aim)<.5f||dot(v*(1/speedSeen),aim*(1/length(aim)))>=.9f;reach=std::min(40.,4+double(speedSeen)*double(now-spawned+50)/1000.);}}
+       if(vc&&gc&&cc&&aligned&&fromRelease>=0&&fromRelease<=reach){auto p=read<WorldPositionQ32>(cc);p.y+=int64_t(300.0*4294967296.);const Vec3 zero{};const uint8_t off=0;SIZE_T n=0;
+        parked=WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(cc),&p,24,&n)&&WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(vc),&zero,12,&n)&&
+         WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(gc+16),&off,1,&n);}}catch(...){}
+      if(parked){arrowParkedFor=spawned;RemoteArrow* slot=&remoteArrows[0];for(auto& a:remoteArrows)if(a.ms<slot->ms)slot=&a;*slot={id,now,true};}
+      if(arrowLogs++<300)logFile->event("remote_arrow_seen","\"entity\":"+std::to_string(id)+",\"since_spawn_ms\":"+std::to_string(now-spawned)+",\"from_release_m\":"+std::to_string(fromRelease)+",\"speed_seen\":"+std::to_string(speedSeen)+",\"reach_m\":"+std::to_string(reach)+",\"aligned\":"+(aligned?"true":"false")+",\"parked\":"+(parked?"true":"false"));}}
+    arrowKnown.swap(seen);arrowPrimed=true;}}}
+ else if(otherPlayers.empty()&&arrowPrimed){arrowKnown.clear();arrowPrimed=false;}
+ // parked arrows no hit came for: away below the world
+ for(auto& a:remoteArrows)if(a.entity&&a.parked&&now-a.ms>3000){
+  try{const auto e=nativeImpactComponents::entityAtWorld(world,a.entity);
+   const auto vc=nativeImpactComponents::component(e,unsigned(types.velocity),12),gc=nativeImpactComponents::component(e,unsigned(types.gravity),20),cc=nativeImpactComponents::component(e,unsigned(types.current),56);
+   if(vc&&gc&&cc){auto p=read<WorldPositionQ32>(cc);p.y-=int64_t(2000.0*4294967296.);const Vec3 down{0,-50,0};const uint8_t on=1;SIZE_T n=0;
+    WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(cc),&p,24,&n);WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(vc),&down,12,&n);WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(gc+16),&on,1,&n);}}catch(...){}
+  if(arrowLogs++<300)logFile->event("remote_arrow_dropped","\"entity\":"+std::to_string(a.entity));a.entity=0;a.parked=false;}
+ for(auto& h:shotHits){if(h.used)continue;if(now<h.ms||now-h.ms>1500){h.used=true;if(arrowLogs++<300)logFile->event("remote_arrow_unmatched","\"character\":"+std::string(h.character?"true":"false"));continue;}
+  RemoteArrow* arrow=nullptr;for(auto& a:remoteArrows)if(a.entity&&now-a.ms<=3000&&(!arrow||a.ms>arrow->ms))arrow=&a;if(!arrow)continue;
+  try{const auto e=nativeImpactComponents::entityAtWorld(world,arrow->entity);
+   const auto vc=nativeImpactComponents::component(e,unsigned(types.velocity),12),cc=nativeImpactComponents::component(e,unsigned(types.current),56);
+   if(!vc||!cc){arrow->entity=0;continue;}
+   // the host's thing nearest to the guest's hit
+   std::array<int64_t,3> target=h.at;double best=3;for(const auto& c:cache)if(c.target.character==h.character){const double m=metres(c.target.position,h.at);if(m<best){best=m;target=c.target.position;}}
+   target[1]+=int64_t((h.character?1.0:.4)*4294967296.);
+   const auto p=read<WorldPositionQ32>(cc);Vec3 dir{float(double(target[0]-p.x)/4294967296.),float(double(target[1]-p.y)/4294967296.),float(double(target[2]-p.z)/4294967296.)};
+   const float distance=length(dir);if(!(distance>1e-3f)){h.used=true;continue;}dir=dir*(1/distance);
+   const Vec3 v=read<Vec3>(vc);const float speed=std::max(length(v),30.f);
+   const WorldPositionQ32 place{target[0]-int64_t(double(dir.x)*4294967296.),target[1]-int64_t(double(dir.y)*4294967296.),target[2]-int64_t(double(dir.z)*4294967296.)};
+   const Vec3 nv=dir*speed;SIZE_T n=0;
+   const bool wrote=WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(cc),&place,24,&n)&&WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(vc),&nv,12,&n);
+   arrow->parked=false;
+   if(arrowLogs++<300)logFile->event("remote_arrow_steered","\"entity\":"+std::to_string(arrow->entity)+",\"character\":"+(h.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-h.ms)+
+    ",\"guest_to_host_m\":"+std::to_string(best<3?best:-1.)+",\"moved_m\":"+std::to_string(distance)+",\"speed\":"+std::to_string(speed)+",\"written\":"+(wrote?"true":"false"));
+   h.used=true;arrow->entity=0;
+  }catch(...){arrow->entity=0;}
+ }
+}
+// The host's thing nearest to where a guest's stroke touched one (remoteMelee): a creature for a creature's touch.
+inline bool nearestTo(const std::array<int64_t,3>& at,bool character,float within,std::array<int64_t,3>& out,uint32_t& entity,float& away){
+ std::lock_guard<std::mutex> lock(mutex);float best=within;bool found=false;
+ for(const auto& c:cache){if(c.target.character!=character)continue;const float d=float(metres(c.target.position,at));
+  if(d<best){best=d;out=c.target.position;entity=c.target.entity;found=true;}}
+ if(found)away=best;return found;
+}
 inline bool entityPosition(uint32_t entity,std::array<int64_t,3>& out,uint64_t now){
  std::lock_guard<std::mutex> lock(mutex);
  for(const auto& c:cache)if(entity&&c.target.entity==entity&&now>=c.seen&&now-c.seen<=4000){out=c.target.position;return true;}

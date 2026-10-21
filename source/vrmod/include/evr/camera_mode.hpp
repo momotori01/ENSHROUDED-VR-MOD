@@ -27,7 +27,10 @@ inline uint8_t legacyCameraId(uint8_t id){
 enum class CameraPresentation { FirstPerson, NativeEvent, NativeSpecial, Unknown };
 inline CameraPresentation cameraPresentation(uint8_t id){
     if(id>=45)return CameraPresentation::Unknown;
-    if(id<=3||id==18||(id>=30&&id<=33))return CameraPresentation::NativeEvent;
+    if(id<=3||(id>=30&&id<=33))return CameraPresentation::NativeEvent;
+    // 18 (PlayerCameraExecute) is the sneak attack from behind - the game's camera of the stab, about 2 m behind the
+    // player - kept the game's own until 2026-10-21 (user: "a backstab from a sneak attack switches to the third-person
+    // camera"). It is the player's own attack: first person, as VHVR attacks.
     // 38 is the camera the game uses while a pickaxe is in hand (Mock run game103654: 19 -> 38 on selecting
     // it, back to 4 on the sword). It is ordinary play, and the native third-person view in the headset was
     // reported on the first headset run (game100334), so it is first person like the other play cameras.

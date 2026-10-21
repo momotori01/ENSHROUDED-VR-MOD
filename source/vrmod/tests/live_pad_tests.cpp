@@ -36,7 +36,15 @@ int main(){unsigned n=0;try{
   check(o.leftX==32767&&o.leftY==-32767&&o.rightX==-32767&&o.rightY==0&&o.leftTrigger==0&&o.rightTrigger==128&&o.buttons==M::Y);   // LT released in play; pulled deep it interacts (2026-10-20)
   // Into a menu with the trigger still pulled: no Y there until it is let go (2026-10-20); then it is Y in the menu too.
   x.screen=LiveScreen::Ui;{auto u=x.step();check(u.leftTrigger==0&&!(u.buttons&M::Y));}x.l().trigger=0;check(!(x.step().buttons&M::Y));
-  x.l().trigger=1;check(x.step().buttons&M::Y);x.l().trigger=0;x.step();
+  // The menu's left trigger (2026-10-21): a short pull is one Y as it is let go (quick move), a pull held 0.4 s Y from then
+  // (take all), and the left B while pulled the sort - the game's LT with X (the menu's left B), not Y.
+  x.l().trigger=1;check(!(x.step().buttons&M::Y));x.l().trigger=0;check(x.step().buttons&M::Y);
+  for(int i=0;i<10;i++)x.step();check(!(x.step().buttons&M::Y));
+  x.l().trigger=1;for(int i=0;i<38;i++)check(!(x.step().buttons&M::Y));for(int i=0;i<4;i++)x.step();check(x.step().buttons&M::Y);
+  x.l().trigger=0;x.step();for(int i=0;i<3;i++)check(!(x.step().buttons&M::Y));
+  x.l().trigger=1;x.step();x.l().secondaryPressed=true;{auto u=x.step();check(u.leftTrigger==255&&!(u.buttons&(M::X|M::B|M::Y)));}   // LT first
+  for(int i=0;i<7;i++)x.step();{auto u=x.step();check(u.leftTrigger==255&&(u.buttons&M::X)&&!(u.buttons&M::B)&&!(u.buttons&M::Y));}   // X 80 ms after
+  x.release();x.step();{auto u=x.step();check(!(u.buttons&(M::Y|M::X|M::B))&&u.leftTrigger==0);}
   // A screen that aims at the world (building): the game's LT, the old table (right B = B, left A = X, left B = Y)
   x.screen=LiveScreen::WorldUi;x.l().trigger=1;{auto w=x.step();check(w.leftTrigger==255&&!(w.buttons&M::Y));}x.l().trigger=0;x.step();
   x.r().secondaryPressed=true;check(x.step().buttons==M::B);x.release();x.step();x.l().primaryPressed=true;check(x.step().buttons==M::X);x.release();x.step();

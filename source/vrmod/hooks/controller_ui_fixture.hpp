@@ -28,6 +28,8 @@
 #include <evr/bow_tracked_shot.hpp>
 #include <evr/bow_draw.hpp>
 #include <evr/ranged_aim.hpp>
+#include <evr/weapon_mount.hpp>
+#include <evr/button_glyph_labels.hpp>
 #include <evr/live_melee.hpp>
 #include <evr/live_throw.hpp>
 #include <evr/live_swing_cast.hpp>
@@ -98,7 +100,10 @@ inline bool bowPhysicalTrialRequested=false;inline evr::motion::BowPhysicalTrial
 inline bool bowPhysicalReleaseRequested=false;inline evr::motion::BowPhysicalRelease bowPhysicalRelease;
 inline bool bowTrackedAimRequested=false;inline std::mutex bowShotMutex;inline evr::motion::BowTrackedShot bowTrackedShot;
 // VHVR-style repeatable draw (bow_draw.hpp). Replaces the one-shot release trial on the same route.
-inline bool bowDrawRequested=false;inline evr::motion::BowDraw bowDraw;
+inline bool bowDrawRequested=false;
+// EVR_BOW_STRONG_GRIP=0: the right grip takes no string (no strong shot by the bow's draw).
+inline evr::motion::BowDraw bowDraw=[]{evr::motion::BowDrawSettings s;char v[8]{};const auto n=GetEnvironmentVariableA("EVR_BOW_STRONG_GRIP",v,sizeof v);
+    if(n==1&&v[0]=='0')s.strongByGrip=false;return evr::motion::BowDraw{s};}();
 constexpr uint64_t bowDrawShotMs=500,bowDrawShotFrames=30;
 // Mock survey only: left primary face button -> native X (MainhandAction) in gameplay, and the
 // Crosshair witness also logs event types other than the bow's spawn event.
@@ -150,6 +155,13 @@ inline uint64_t liveHeavyHoldMs=400;
 // game there. VHVR's judgement by the motion alone (strong thrust, hook ...) is still worked out and put on record,
 // but acts only with the policy word heavy_motion.
 inline bool liveHeavyByTrigger=true,liveHeavyByMotion=false;
+// An item's special ability by a swing (2026-10-21, the user: "swing with the grip and the trigger held: the melee
+// special"; 15:20 after the headset: "the one-handed sword's special comes out - the grip alone is enough, without the
+// trigger"): a stroke of a melee weapon made with the right grip held sends the game's RT (its SpecialAbility on PresetA;
+// a press is enough for a melee weapon - the sword's came out, headset run 20261021-150238) for liveSpecialRtMs instead of
+// the attack button. Not in the air. EVR_SPECIAL_BY_GRIP=0: off; EVR_SPECIAL_RT_MS=<ms>.
+inline const bool liveSpecialByGrip=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_SPECIAL_BY_GRIP",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline const uint64_t liveSpecialRtMs=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_SPECIAL_RT_MS",v,sizeof v);const long ms=n&&n<sizeof v?std::strtol(v,nullptr,10):0;return ms>=30&&ms<=2000?uint64_t(ms):uint64_t(120);}();
 // What the selected action bar slot holds (hooks/live_actionbar_pages.hpp), also for items that bring no model for the
 // hand (bombs, building pieces) and for the empty slot (item 0: bare hands).
 struct HandItem {bool valid=false;uint32_t item=0;unsigned count=0;uint8_t category=255,itemSlot=255,weaponType=255;bool typeKnown=false;};
@@ -245,6 +257,32 @@ inline int32_t (*targetHealth)(uint32_t)=nullptr;
 struct HitNear {uint32_t entity=0;float distance=0,body=0,reach=0;int32_t state=-1;bool character=false;};
 inline size_t (*hitWatchNear)(const evr::motion::LiveMeleeWeapon&,float,HitNear*,size_t,uint64_t)=nullptr;
 inline int32_t (*hitWatchState)(uint32_t)=nullptr;
+// A guest's health at the touch (live_melee_targets.hpp predictHit / settlePredictions); null when not used.
+inline void (*hitPredict)(uint32_t,uint64_t,uint64_t)=nullptr;inline void (*hitSettle)(uint64_t)=nullptr;
+// The touches of this player's strokes, for the host (online_sync.hpp sendHits, sync::hitAction): where the thing stood
+// on this PC. hitReport (view_resource_probe.cpp) fills them on a client only. Under hitReportMutex.
+struct HitReport {uint64_t serial=0,ms=0;std::array<int64_t,3> at{};bool character=false,shot=false;};   // shot: an arrow's hit (not a stroke's)
+inline std::array<HitReport,8> hitReports{};inline uint64_t hitReportSerial=0;inline std::mutex hitReportMutex;
+inline void (*hitReport)(uint32_t,bool,uint64_t)=nullptr;
+// The host side of a guest's arrow: when another player's projectile was made here last (bow_spawn_observer.hpp), and
+// where to send a guest's arrow hit (live_melee_targets.hpp publishShotHit).
+inline std::atomic<uint64_t> remoteSpawnAt{0};
+// When this player's own character began the bow's strong shot (motion_event_selection_observer.hpp; its arrow, the
+// template Projectile_Player_Arrow_SpecialAbility_Strong_Shot, has no gravity component - the guest's own flight of it
+// does not drop, motion_arrow_visual.hpp).
+inline std::atomic<uint64_t> strongShotAt{0};
+// When this player let go of a drawn string (the draw route's release with its RT tap): the arrow of the game's shoot
+// action is handed at once from then (motion_event_selection_observer.hpp bowEarly) instead of at the action's 400 ms.
+inline std::atomic<uint64_t> bowReleasedAt{0};
+// Until when an arrow the mod handed early may be made while the bow is not yet in the game's shot state (3): set by
+// motion_event_selection_observer.hpp as it hands the arrow, read by bow_spawn_observer.hpp.
+inline std::atomic<uint64_t> bowEarlySpawnUntil{0};
+// The string is held with the right grip (the strong shot's draw, BowDraw::strongDraw): the game does not aim then and
+// shows no arrow of its own, so motion_arrow_visual.hpp keeps its clone on the string for the whole draw.
+inline std::atomic<bool> bowStrongDrawing{false};
+// where that projectile was made (the camera the guest sent at its release); written before remoteSpawnAt
+inline std::array<std::atomic<int64_t>,3> remoteSpawnOrigin{};inline std::array<std::atomic<float>,3> remoteSpawnDirection{};
+inline void (*shotHitArrived)(const std::array<int64_t,3>&,bool,uint64_t)=nullptr;
 struct HitWatch {uint64_t from=0,until=0;unsigned hands=0;double seconds=0;bool left=false;uint64_t binding=0;
  struct Item {uint32_t entity=0;int32_t state=-1;float last=-1,closest=-1;bool touched=false;};std::array<Item,16> items{};size_t count=0;};
 inline HitWatch hitWatch;
@@ -362,6 +400,11 @@ inline std::atomic<uint64_t> liveLastPollMs{0};inline bool liveReleasedUnpolled=
 // Early Impact (live melee contact): the game starts the attack when the button comes up again, so the tap ends as
 // soon as the game has read it pressed (meleeTapPolls reads) instead of after the fixed 120 ms.
 inline bool liveMeleeQuickRelease=false;inline std::atomic<uint64_t> liveAttackPolls{0};inline unsigned meleeTapPolls=1;
+// The bow's RT tap ends once the game has read it this many times (2026-10-21, Mock game-20261021-134251: the game takes
+// a tap only when RT is let go - the weapon's state went 2 -> 3, the shot, 111 / 126 ms after the hand let go with the
+// fixed 80 ms tap; the arrow then came about 40 ms later). EVR_BOW_TAP_POLLS=<1..8>, 0: the fixed tap as before.
+inline std::atomic<uint64_t> liveRtPolls{0};
+inline const unsigned bowTapPolls=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_BOW_TAP_POLLS",v,sizeof v);return n==1&&v[0]>='0'&&v[0]<='8'?unsigned(v[0]-'0'):2u;}();
 inline bool liveNeutralPolled(){std::lock_guard<std::mutex> lock(liveMutex);return liveObserved.load()==liveState.dwPacketNumber;}
 inline bool verticalRequested=false;inline evr::motion::VerticalStickMapping verticalMapper;inline uint64_t lastVerticalFrame=0;
 inline evr::motion::HandFrame gestureHands;
@@ -386,7 +429,16 @@ inline FishingAim fishingAim;inline std::mutex fishingAimMutex;
 // The bow's shot as the sent camera (2026-10-19): from the release for sentMs the input this player's game sends carries
 // the camera the shot needs (bow_aim.hpp bowAimCameraKnownMuzzle) - the server that makes the arrow, this PC's or the
 // host's, takes the arrow's line from it. Under fishingAimMutex.
-struct BowAim {uint64_t until=0,serial=0;std::array<uint8_t,40> camera{};};inline BowAim bowAim;
+// aim: the shot's start and orientation (motion::BowWorldAim origin, orientation), sent to the host by the mod
+// (online_sync.hpp sendShots).
+struct BowAim {uint64_t until=0,serial=0;std::array<uint8_t,40> camera{},aim{};};inline BowAim bowAim;
+inline std::array<uint8_t,40> aimBytes(const evr::motion::BowWorldAim& a){std::array<uint8_t,40> out{};std::memcpy(out.data(),&a.origin,24);std::memcpy(out.data()+24,&a.orientation,16);return out;}
+// The shots of the other players' mods (online_sync.hpp, sync::shotAction / heldAimAction): the aim a guest's PC
+// decided, for the arrow, thrown item or wand shot the host's server makes from that guest's input
+// (bow_spawn_observer.hpp). A shot is taken by one spawn; a held aim (one per player, replaced) by every spawn while it
+// is new. Under remoteShotMutex.
+struct RemoteShot {uint64_t from=0,milliseconds=0;uint16_t id=0;bool used=true,held=false;std::array<uint8_t,40> aim{};};
+inline std::array<RemoteShot,8> remoteShots{};inline std::mutex remoteShotMutex;
 // The strength of that cast (the stroke's peak speed of the rod's tip / 5 m/s, VHVR FULL_THROW_SPEED) for the game's
 // charge, which decides how far the float flies (fishing_charge.hpp). Told for every cast by a swing, also when the
 // swing does not tell the direction. Under fishingAimMutex.
@@ -464,6 +516,17 @@ inline void skillBegan(uint64_t now){if(skillFacing&&airAttackStickMs&&airAttack
 // The local player's BaseActor (input_actor_observer.hpp) and the time of the last swing parry of the live guard
 // (live_guard.hpp swingParry), for the game's parry (parry_observer.hpp).
 inline std::atomic<uintptr_t> playerBaseActor{0};inline std::atomic<uint64_t> swingParryAt{0},guardRepressAt{0};
+// The newest swing parry of another player's mod (online_sync.hpp, sync::parryAction), when it came; for the host's
+// gameplay side of that player (parry_observer.hpp serverParry).
+inline std::atomic<uint64_t> remoteSwingParryAt{0};
+// The host's enemy that guest parried (the host's entity id), and the guest's own: the creature nearest within 3 m
+// (live_melee_targets.hpp), the damage taken just before given back (undoDamage). Set in view_resource_probe.cpp.
+inline std::atomic<uint32_t> remoteParryTarget{0};
+inline bool (*creatureNear)(float,std::array<int64_t,3>&,uint32_t&)=nullptr;
+// A parry this guest decided (online_sync.hpp sendParries): its own game parries that enemy at once, without the host
+// (parry_observer.hpp localDecided). The enemy's id in this PC's World, the swing's time.
+inline void (*localParryDecided)(uint32_t,uint64_t)=nullptr;
+inline bool (*undoDamage)(const std::array<int64_t,3>&,uint64_t)=nullptr;
 // wandNextShotMs: no swing of the wand shoots before it (motion_event_selection_observer.hpp sets it when a swing's action starts).
 inline std::atomic<uint64_t> wandNextShotMs{0};
 inline std::atomic<uint64_t> playerActorState{0},playerActorStateMs{0},blockOpportunityMs{0};   // blockOpportunityMs: the last tick the player's BlockOpportunity (5) was up (parry_observer.hpp relaxed parry)   // the block button is held by the live guard (input_actor_observer.hpp records the actor's look then)
@@ -601,6 +664,7 @@ inline DWORD WINAPI state(DWORD user,XINPUT_STATE* output){
         if(stop.load())publishLive({});
         {std::lock_guard<std::mutex> lock(liveMutex);*output=liveState;}
         if(output->Gamepad.wButtons&XINPUT_GAMEPAD_X)++liveAttackPolls;
+        if(output->Gamepad.bRightTrigger>=128)++liveRtPolls;
         liveObserved=output->dwPacketNumber;liveLastPollMs=clockNow();return ERROR_SUCCESS;
     }
     if(wheelRequested){
@@ -691,7 +755,11 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
         const auto input=frontendInput(frontend),current=input?read<uintptr_t>(input+0x48):0;
         if(!current||read<uintptr_t>(current)!=input)throw std::runtime_error("fixture input owner unavailable");
         if(!installed.load()){
-            if(stop.load()){done=true;return;}if(!armed.load()||!normalHud)return;
+            // Connected on the play screen: the plain HUD (auxiliary 0), or the HUD of a held tool or aim (3) - a world
+            // entered with the building hammer in the hand is in 3 from its start (headset session 2026-10-21 10:30, world 2:
+            // auxiliary_state 3 throughout, the pad never connected, the player could neither move nor press anything until
+            // another item was taken).
+            if(stop.load()){done=true;return;}if(!armed.load()||!(normalHud||(valid&&screen==1&&auxiliary==3&&!nativeBlocked)))return;
             if(guardRequested&&(!observeGuard||!observeGuard().valid))return;
             if(equipmentRequested&&(!observeEquipment||!observeEquipment().valid))return;
             if(motionRequested&&(!observeMotion||!observeMotion().valid))return;
@@ -844,12 +912,43 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 {bool blueprint=false;if(handItem&&screenKind==evr::motion::LiveScreen::Gameplay){const auto held=handItem(now);blueprint=held.valid&&held.item&&held.category==10;}
                  liveMapper.leftTriggerGame(blueprint);
                  static bool wasBlueprint=false;if(blueprint!=wasBlueprint){wasBlueprint=blueprint;logFile->event("left_trigger_game_lt","\"on\":"+std::string(blueprint?"true":"false")+",\"milliseconds\":"+std::to_string(now));}}
+                // The VR button pictures (2026-10-21, include/evr/button_glyph_labels.hpp): the scene, what the hands hold and the
+                // controllers' family go to the Vulkan layer, which draws over the game's pictures (layer/ui_glyph.hpp); on a change.
+                {static uint32_t sent=~0u;static int(*setGlyphs)(uint32_t)=nullptr;static bool looked=false;
+                 if(!looked){looked=true;if(const auto layer=GetModuleHandleW(L"evr_diagnostic.dll"))setGlyphs=reinterpret_cast<int(*)(uint32_t)>(GetProcAddress(layer,"evrSetButtonGlyphs"));}
+                 if(setGlyphs&&valid&&screenKind!=evr::motion::LiveScreen::Unavailable){
+                    using namespace evr::glyph;
+                    const Scene scene=screenKind==evr::motion::LiveScreen::Gameplay?Scene::Play:screenKind==evr::motion::LiveScreen::Overlay?Scene::Wheel:
+                        screenKind==evr::motion::LiveScreen::WorldUi?(screen==29?Scene::Building:Scene::WorldMenu):Scene::Menu;
+                    Held held=Held::Nothing;
+                    if(handItem){const auto h=handItem(now);if(h.valid&&h.item){
+                        if(evr::motion::catalogBowItem(h.item))held=Held::Bow;
+                        else if(const auto m=evr::motion::rangedAimModel(h.item))held=m->type==6?Held::Wand:Held::Staff;
+                        else if(h.category==2)held=h.weaponType==12?Held::Throwable:Held::Weapon;
+                        else if(h.category==5)held=Held::Fishing;else if(h.category==6)held=Held::BuildTool;else if(h.category==10)held=Held::Hammer;else held=Held::Tool;}}
+                    // the Index alone binds the trackpad's force (include/evr/motion_actions.hpp)
+                    const Family family=hands.hands[1].padForceActive||hands.hands[0].padForceActive?Family::Index:Family::Quest;
+                    const uint32_t packed=uint32_t(family)|uint32_t(scene)<<4|uint32_t(held)<<8;
+                    if(packed!=sent){sent=packed;const int r=setGlyphs(packed);static unsigned logs=0;
+                        if(logs++<400)logFile->event("button_glyph_state","\"family\":"+std::to_string(unsigned(family))+",\"scene\":"+std::to_string(unsigned(scene))+
+                            ",\"held\":"+std::to_string(unsigned(held))+",\"screen\":"+std::to_string(screen)+",\"result\":"+std::to_string(r)+",\"frame\":"+std::to_string(hands.frame));}}}
                 {static bool was=false;if(uiCover!=was){was=uiCover;logFile->event("live_ui_cover","\"on\":"+std::to_string(int(uiCover))+",\"flags\":"+std::to_string(menuPointer::playerFlags.load())+",\"milliseconds\":"+std::to_string(now));}}
                 const bool fresh=received&&now>=received&&now-received<=200;
                 liveScreenGameplay=screenKind==evr::motion::LiveScreen::Gameplay;liveScreenAt=now;
                 // The stick mapper checks age/identity itself and resets on stale or unavailable input.
                 const auto mapped=verticalMapper.update(now,received,ownerSerial,fresh?evr::motion::liveStickMode(screenKind):evr::motion::VerticalStickMode::Unavailable,hands,value);
                 auto pad=liveMapper.update(fresh?screenKind:evr::motion::LiveScreen::Unavailable,mapped,hands,wieldGrip&&!value.active);
+                // The Index trackpad pressed (2026-10-21, user: "the Index has buttons Quest does not - the right pad opens the
+                // inventory, the left the menu with the bug report button, as the temple gesture with a stick press"): the
+                // pad's Start (right) and Back (left) while it is pressed firmly (force 0.55 on, 0.35 off), on the play screen
+                // and in the game's menus (a second press closes them). Touch and the other controllers have no such input.
+                {static std::array<bool,2> padDown{};
+                 for(unsigned h=0;h<2;h++){const auto& s=hands.hands[h];const bool was=padDown[h];
+                  padDown[h]=fresh&&s.padForceActive&&(was?s.padForce>.35f:s.padForce>=.55f)&&
+                   (screenKind==evr::motion::LiveScreen::Gameplay||screenKind==evr::motion::LiveScreen::Ui);
+                  if(padDown[h])pad.buttons|=h?uint16_t(0x0010):uint16_t(0x0020);   // XInput Start / Back
+                  if(padDown[h]!=was){static unsigned lines=0;if(lines++<400)logFile->event("index_trackpad_press","\"hand\":"+std::to_string(h)+",\"down\":"+(padDown[h]?"true":"false")+
+                   ",\"force\":"+std::to_string(s.padForce)+",\"button\":"+(h?"\"start\"":"\"back\"")+",\"screen\":"+std::to_string(unsigned(screenKind)));}}}
                 // The left trigger's pull also sends AreaLoot for 150 ms (include/evr/holster.hpp): a killed enemy's loot is
                 // taken too. Off since 12:20 the same day (user: "gathering everything stays the default - the button held"): the
                 // left trigger is the game's Y, held as long as it is pulled, and the game's own long press gathers.
@@ -979,7 +1078,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         logFile->event("live_melee_tap_released","\"frame\":"+std::to_string(hands.frame)+",\"held_ms\":"+std::to_string(now-tapStarted)+",\"polls\":"+std::to_string(liveAttackPolls.load()-tapPolls));}
                     if(swing.press&&!(liveMeleeQuickRelease&&tapReleased))pad.buttons|=evr::motion::LivePadMapper::X;
                     // VHVR's secondary attack by motion, judged at the moment the stroke attacks. `weapon` is the one that struck.
-                    evr::motion::SecondaryResult second;auto secondStyle=evr::motion::SecondaryStyle::None;static uint64_t heavyUntil=0;
+                    evr::motion::SecondaryResult second;auto secondStyle=evr::motion::SecondaryStyle::None;static uint64_t heavyUntil=0,specialUntil=0;static bool specialStroke=false;
                     bool heavyByTrigger=false,heavyStroke=false,airborneStroke=false;unsigned airCleared=0;int airKind=0;
                     if(swing.fired){
                         const unsigned main=leftStruck?0u:1u,other=1u-main;const auto& otherWeapon=leftStruck?rightWeapon:leftWeapon;
@@ -996,6 +1095,12 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         // only on request - VHVR's judgement by the motion.
                         heavyByTrigger=liveHeavyByTrigger&&heavyTrigger&&!weapon.fist&&weapon.weaponType!=255;
                         heavyStroke=heavyByTrigger||(liveHeavyByMotion&&second.secondary);
+                        // The special ability: the trigger and the right grip held (liveSpecialByGrip).
+                        if(liveSpecialByGrip&&!weapon.fist&&weapon.weaponType!=255&&hands.hands[1].grabActive&&hands.hands[1].grab&&!airborneNow(now)){
+                            heavyStroke=false;specialUntil=now+liveSpecialRtMs;specialStroke=true;
+                            static unsigned specialLogged=0;if(specialLogged++<200)logFile->event("live_melee_special","\"frame\":"+std::to_string(hands.frame)+",\"weapon_type\":"+std::to_string(weapon.weaponType)+
+                                ",\"binding\":"+std::to_string(weapon.binding)+",\"rt_ms\":"+std::to_string(liveSpecialRtMs)+",\"left_hand\":"+(leftStruck?"true":"false"));
+                        }
                         // In the air (user 2026-10-15 afternoon: "swing up for the rising attack, down for the crash-down"): every
                         // stroke is a short press - the jump's Primary follow-ups (the jump attacks, with their skills) take it; a held
                         // button starts nothing in the air (no item has a Heavy row for the air). Before the press the follow-up slots
@@ -1020,11 +1125,16 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         else if(airborneStroke&&airKind<0&&airDownHeavy&&liveHeavyHoldMs)heavyUntil=now+liveHeavyHoldMs;
                     }
                     if(heavyUntil){if(play&&now<heavyUntil)pad.buttons|=evr::motion::LivePadMapper::X;else heavyUntil=0;}
+                    // A special stroke: RT instead of the attack button, the button kept off until the stroke's press ends.
+                    if(specialUntil){if(play&&now<specialUntil)pad.rightTrigger=255;else specialUntil=0;}
+                    if(specialStroke){if(specialUntil||swing.press)pad.buttons&=~evr::motion::LivePadMapper::X;else specialStroke=false;}
                     // The hit stop's watch (hitWatch above): the blade of the stroke against what is near it, every frame for 0.7 s.
-                    if(hitStopOn.load()&&hitWatch.until&&hitWatchState&&hitWatchNear){
+                    if(hitSettle)hitSettle(now);
+                    if((hitStopOn.load()||hitPredict)&&hitWatch.until&&hitWatchState&&hitWatchNear){
                         if(now>=hitWatch.until)hitWatch=HitWatch{};
                         else{
                             const auto stop=[&](const HitWatch::Item& it,const char* by,float distance,int32_t is){
+                                if(!hitStopOn.load())return;
                                 hitStopHands=hitWatch.hands;hitStopMs=uint32_t(hitWatch.seconds*1000+.5);hitStopSerial.fetch_add(1);
                                 static unsigned told=0;if(told++<400){std::ostringstream o;o<<std::setprecision(3)<<"\"entity\":"<<it.entity<<",\"by\":\""<<by<<"\",\"metres\":"<<distance
                                     <<",\"closest\":"<<it.closest<<",\"was\":"<<it.state<<",\"is\":"<<is<<",\"after_press_ms\":"<<(now-hitWatch.from)<<",\"hands\":"<<hitWatch.hands
@@ -1041,7 +1151,9 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                                         const bool inside=x.distance<=x.body;
                                         const bool turned=it->last>=0&&it->last<=x.reach&&x.distance>it->last+.01f&&it->closest>=0&&it->closest<=x.body+.25f;
                                         if(it->closest<0||x.distance<it->closest)it->closest=x.distance;
-                                        if(inside||turned){it->touched=true;stop(*it,inside?"touch":"closest",x.distance,x.state);}
+                                        if(inside||turned){it->touched=true;stop(*it,inside?"touch":"closest",x.distance,x.state);
+                                            if(hitPredict&&x.character)hitPredict(x.entity,hitWatch.binding,now);
+                                            if(hitReport)hitReport(x.entity,x.character,now);}
                                     }
                                     it->last=x.distance;}}
                             // the game's own hit on what the blade was not seen to touch
@@ -1063,7 +1175,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         strokeOutcome={};}
                     if(swing.fired){
                         strokeMs.store(now);
-                        if(hitStopOn.load()&&hitWatchNear){   // the hit stop's watch from this stroke on (it looks from the next frame)
+                        if((hitStopOn.load()||hitPredict)&&hitWatchNear){   // the hit stop's watch from this stroke on (it looks from the next frame)
                             hitWatch=HitWatch{};hitWatch.from=now;hitWatch.until=now+700;hitWatch.left=leftStruck;hitWatch.binding=weapon.binding;
                             hitWatch.hands=weapon.twoHanded?3u:(leftStruck?1u:2u);hitWatch.seconds=evr::motion::hitStopSeconds(weapon.weaponType==255||!weapon.needsTarget,weapon.twoHanded);}
                         {static unsigned serial=0;strokeOutcome.entity=target.entity;strokeOutcome.before=targetHealth&&target.entity?targetHealth(target.entity):-1;strokeOutcome.at=now;strokeOutcome.frame=hands.frame;
@@ -1463,7 +1575,20 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 }
                 if(bowPhysicalTrialRequested){
                     const auto before=bowDrawRequested?unsigned(bowDraw.phase()):bowPhysicalReleaseRequested?bowPhysicalRelease.phase():unsigned(bowPhysicalTrial.phase());
-                    const bool hud=fresh&&mapped.valid&&evr::motion::bowTrialHud(valid,normalHud,screen,auxiliary,nativeBlocked);
+                    const bool hudNow=fresh&&mapped.valid&&evr::motion::bowTrialHud(valid,normalHud,screen,auxiliary,nativeBlocked);
+                    // A draw is not let go for a moment's miss of the game's ordinary screen (2026-10-21, user: "as a guest the
+                    // draw cancelled often"; the guest's log 20261021-002429 world-4: 5 of 22 holds aborted 0.63 .. 0.78 s
+                    // into the draw with the screen and its aiming state (1, 3) unchanged around it): while the string is
+                    // held and the screen is still the ordinary one (1), a miss is borne for bowHudGraceMs; what missed is
+                    // put on record. A menu (another screen) lets go at once, as before. EVR_BOW_HUD_GRACE=0: as before.
+                    static const uint64_t bowHudGraceMs=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_BOW_HUD_GRACE",v,sizeof v);return n==1&&v[0]=='0'?0ull:250ull;}();
+                    static uint64_t hudLostAt=0;static unsigned hudLostLogs=0;
+                    const bool drawing=bowDrawRequested&&bowDraw.phase()==evr::motion::BowDraw::Held;
+                    if(hudNow)hudLostAt=0;else if(!hudLostAt)hudLostAt=now;
+                    if((!hudNow||value.active)&&drawing&&hudLostLogs<300){++hudLostLogs;logFile->event("bow_draw_hud_lost","\"frame\":"+std::to_string(hands.frame)+",\"fresh\":"+(fresh?"true":"false")+
+                        ",\"mapped\":"+(mapped.valid?"true":"false")+",\"valid\":"+(valid?"true":"false")+",\"normal\":"+(normalHud?"true":"false")+",\"screen\":"+std::to_string(screen)+
+                        ",\"auxiliary\":"+std::to_string(auxiliary)+",\"blocked\":"+(nativeBlocked?"true":"false")+",\"active\":"+(value.active?"true":"false")+",\"lost_ms\":"+std::to_string(hudLostAt?now-hudLostAt:0));}
+                    const bool hud=hudNow||(drawing&&screen==1&&hudLostAt&&now-hudLostAt<=bowHudGraceMs);
                     const bool allowed=hud&&!value.active;
                     // Menus and other native screens own their triggers: the draw lets go and the pad is left as mapped.
                     if(bowDrawRequested&&!hud)bowDraw.abort();
@@ -1488,14 +1613,25 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                              <<",\"aim_q\":["<<shot.aim.orientation.x<<','<<shot.aim.orientation.y<<','<<shot.aim.orientation.z<<','<<shot.aim.orientation.w<<']';
                             logFile->event("bow_tracked_shot_armed",s.str());
                             if(armed)try{const auto camera=evr::motion::bowAimCameraKnownMuzzle(shot.aim);std::lock_guard<std::mutex> aimLock(fishingAimMutex);
-                                bowAim.until=now+600;++bowAim.serial;std::memcpy(bowAim.camera.data(),camera.data(),40);}catch(...){}
+                                // the strong shot's arrow comes after the game's hold and its action's 400 ms: its aim lasts that long too
+                                bowAim.until=now+(bowDrawRequested&&bowDraw.strongRelease()?1300:600);++bowAim.serial;std::memcpy(bowAim.camera.data(),camera.data(),40);bowAim.aim=aimBytes(shot.aim);}catch(...){}
                         }
                         if(phase!=5||!allowed)bowTrackedShot.invalidate();
                     }
                     if(bowDrawRequested){
+                        bowStrongDrawing=bowDraw.strongDraw();
                         const bool released=phase==5&&before!=5,full=!released&&bowDraw.takeFullDraw(bowGeometry);
+                        if(released&&!bowDraw.strongRelease())bowReleasedAt=now;   // the strong shot's arrow is not the shoot action's
+                        // The tap let go as soon as the game has read it bowTapPolls times (not the strong shot's hold).
+                        {static uint64_t tapBase=0,tapAt=0;static bool tapCut=true;
+                         if(released&&!bowDraw.strongRelease()){tapBase=liveRtPolls.load();tapAt=now;tapCut=false;}
+                         if(phase!=5||bowDraw.strongRelease())tapCut=true;
+                         else if(!tapCut&&bowTapPolls&&liveRtPolls.load()-tapBase>=bowTapPolls){tapCut=true;static unsigned tapLogs=0;
+                            if(tapLogs++<400)logFile->event("bow_tap_released","\"frame\":"+std::to_string(hands.frame)+",\"held_ms\":"+std::to_string(now-tapAt)+",\"polls\":"+std::to_string(liveRtPolls.load()-tapBase));}
+                         if(phase==5&&!bowDraw.strongRelease()&&bowTapPolls&&tapCut&&!released)pad.rightTrigger=0;}
+                        if(released&&bowDraw.strongRelease())strongShotAt=now;     // a guest's own flight of it starts at the release (no drop)
                         if(released)requestBowHaptic({.3f,.9f},{200,100});else if(full)requestBowHaptic({.3f,0},{200,0});
-                        if(released||full)logFile->event("bow_draw_haptic","\"frame\":"+std::to_string(hands.frame)+",\"kind\":\""+(released?"release":"full_draw")+"\",\"shots\":"+std::to_string(bowDraw.shots()));
+                        if(released||full)logFile->event("bow_draw_haptic","\"frame\":"+std::to_string(hands.frame)+",\"kind\":\""+(released?"release":"full_draw")+"\",\"shots\":"+std::to_string(bowDraw.shots())+",\"strong\":"+(released&&bowDraw.strongRelease()?"true":"false"));
                     }
                     {std::lock_guard<std::mutex> lock(bowPhysicalMutex);bowPhysicalPublished={bowGeometry.binding,hands.frame,now,phase==2};}
                     const auto& m=bowDrawRequested?bowDraw.metrics():bowPhysicalReleaseRequested?bowPhysicalRelease.metrics():bowPhysicalTrial.metrics();static uint64_t lastPhysicalFrame=0;

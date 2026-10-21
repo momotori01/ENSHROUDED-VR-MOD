@@ -20,6 +20,7 @@ int main(){
  check(wrap,"long continuous turns remain bounded and finite");
  using P=game::CameraPresentation;
  check(game::cameraPresentation(25)==P::FirstPerson&&game::cameraPresentation(43)==P::FirstPerson&&game::cameraPresentation(44)==P::FirstPerson,"glider jump and falling remain first person");
+ check(game::cameraPresentation(18)==P::FirstPerson,"the sneak attack's execute camera is the player's own attack (2026-10-21)");
  check(game::cameraPresentation(0)==P::NativeEvent&&game::cameraPresentation(30)==P::NativeEvent&&game::cameraPresentation(31)==P::NativeEvent,"entity camera dialogue and altar preserve native event camera");
  check(game::cameraPresentation(34)==P::FirstPerson&&game::cameraPresentation(35)==P::FirstPerson,"placing a flame altar or an area prop is first-person play (2026-10-19: the headset jumped to the game's camera)");
  check(game::cameraPresentation(39)==P::FirstPerson&&game::cameraPresentation(40)==P::FirstPerson&&game::cameraPresentation(41)==P::FirstPerson&&

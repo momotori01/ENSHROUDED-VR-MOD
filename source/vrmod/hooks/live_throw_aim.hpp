@@ -23,7 +23,7 @@ inline void prepare(const game::StableAnchor& anchor){
         // The throwables' spawn camera is the throw's line itself: in 49 throws of three headset sessions (throw_aim_call)
         // the camera stood at the hand and looked along the throw, no muzzle offset.
         {std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);auto& b=controllerUiFixture::bowAim;
-         b.until=now+600;++b.serial;std::memcpy(b.camera.data(),&w.aim.origin,24);std::memcpy(b.camera.data()+24,&w.aim.orientation,16);}
+         b.until=now+600;++b.serial;std::memcpy(b.camera.data(),&w.aim.origin,24);std::memcpy(b.camera.data()+24,&w.aim.orientation,16);b.aim=controllerUiFixture::aimBytes(w.aim);}
         std::ostringstream s;s<<std::setprecision(10)<<"\"serial\":"<<r.serial<<",\"frame\":"<<liveFrame.frame<<",\"request_frame\":"<<r.frame<<",\"age_ms\":"<<now-r.milliseconds
             <<",\"origin_q32\":["<<position.x<<','<<position.y<<','<<position.z<<"],\"direction\":["<<direction.x<<','<<direction.y<<','<<direction.z<<"]";
         logFile->event("live_throw_world",s.str());

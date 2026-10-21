@@ -83,6 +83,7 @@ using Candidate=bool(__fastcall*)(void*,void*,void*,void*,void*,void*);
 using Entity=void*(__fastcall*)(void*,uint32_t);
 inline FlagTest originalFlagTest=nullptr;inline Candidate originalCandidate=nullptr;inline Entity entityOf=nullptr;
 inline thread_local bool relaxChoice=false,openingTaken=false,relaxGameplay=false;
+inline thread_local bool remoteGameplay=false;   // inside serverParryRemote: the parry's target is the enemy the guest parried
 inline std::atomic<uint64_t> relaxArm{0},relaxPressAt{0},relaxedAt{0},swingTargets{0},relaxedCandidates{0},relaxedTargets{0};
 inline std::atomic<uint32_t> relaxedId{0};
 inline bool __fastcall flagTest(void* actor,uint8_t flag){
@@ -135,6 +136,11 @@ void* __fastcall findTarget(void* parameters,void* position,float radius){
     if(ours)try{
         conditions.targetFound=r?1:0;conditions.radius=radius;
         const auto p=reinterpret_cast<uintptr_t>(position);for(size_t i=0;i<3;++i)conditions.player[i]=double(read<int64_t>(p+i*8))/4294967296.0;
+    }catch(...){}
+    // A guest's parry (serverParryRemote): the enemy that guest parried on its PC, whatever the search found.
+    if(remoteGameplay&&reinterpret_cast<uintptr_t>(_ReturnAddress())==baseAddress+findTargetCaller&&entityOf)try{
+        const auto id=controllerUiFixture::remoteParryTarget.load();const auto world=read<uintptr_t>(reinterpret_cast<uintptr_t>(parameters));
+        if(id&&plausible(world)){if(auto* e=entityOf(reinterpret_cast<void*>(world),id)){r=e;conditions.targetFound=3;}}
     }catch(...){}
     // The relaxed parry's gameplay side: no enemy closes in, so the enemy the client chose without its opening (relaxedId)
     // is the target - the entity of that id, looked up as the search itself does (0x9a5910 with the parameters' first word).
@@ -216,6 +222,54 @@ void __fastcall clientTask(void* task){
             ",\"written\":"+(written?"true":"false")+",\"choice_made\":"+(chosen?"true":"false")+",\"targets\":"+std::to_string(chosen?lastTargets.load():0));
     }catch(...){}
 }
+// Another player's swing parry on this host (2026-10-21; the online session of 10-21 00:25: the guest's 8 swings while
+// guarding made the client's press on the guest, but the host's game - which decides - saw that player in the block's
+// sequence and parried nothing). When a guest's mod tells of a swing (controllerUiFixture::remoteSwingParryAt), the
+// calls of the parry for the other players' actors see that actor out of the block's sequence and Block pressed and
+// not taken, as for the own swing above, until one asks for the parry or the window ends; whether an enemy can be
+// parried stays the game's (its own target search; the relaxed choice of the guest's client does not reach here).
+// With several guests, every guarding guest's call tries within the window: only one with an enemy to parry parries.
+// EVR_REMOTE_PARRY=0: off.
+inline const bool remoteParry=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_PARRY",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline std::atomic<uint64_t> remoteArm{0},remoteTried{0};inline std::atomic<unsigned> remoteTries{0},remoteLogged{0};
+inline bool serverParryRemote(void* out,void* row,void* a,void* b,uintptr_t actor,uintptr_t consumer,uint64_t at){
+    const auto r=reinterpret_cast<uintptr_t>(row);
+    uint32_t pending=0;try{const auto p=read<uintptr_t>(r+serverPendingAt);pending=plausible(p)?read<uint32_t>(p+0x44):1;}catch(...){pending=1;}
+    if(pending)return originalServer(out,row,a,b);
+    if(remoteTried.exchange(at)!=at)remoteTries=0;const auto attempt=++remoteTries;
+    uint16_t sequence=0;uint8_t flags=0;uint64_t taken=0,pressed=0;bool written=false,sequenceWritten=false;constexpr uint64_t bit=blockBit;
+    try{
+        sequence=read<uint16_t>(actor+0x18);flags=read<uint8_t>(actor+0x1b1);taken=read<uint64_t>(consumer);pressed=read<uint64_t>(consumer+8);
+        if((flags&1)&&sequence==8){*reinterpret_cast<uint16_t*>(actor+0x18)=0;sequenceWritten=true;}
+        *reinterpret_cast<uint64_t*>(consumer)=taken&~bit;*reinterpret_cast<uint64_t*>(consumer+8)=pressed|bit;written=true;
+    }catch(...){}
+    remoteGameplay=true;const bool result=originalServer(out,row,a,b);remoteGameplay=false;
+    const ObserverLastError preserve;
+    try{
+        if(sequenceWritten&&read<uint16_t>(actor+0x18)==0)*reinterpret_cast<uint16_t*>(actor+0x18)=sequence;
+        if(written){
+            if(!result&&(taken&bit))*reinterpret_cast<uint64_t*>(consumer)|=bit;
+            if(!(pressed&bit))*reinterpret_cast<uint64_t*>(consumer+8)&=~bit;
+        }
+        if(result)remoteArm=at;
+        if((attempt==1||result)&&remoteLogged.fetch_add(1)<300)logFile->event("swing_parry_remote","\"frame\":"+std::to_string(liveFrame.frame)+",\"swing_ms_ago\":"+std::to_string(GetTickCount64()-at)+
+            ",\"actor\":"+hex(actor)+",\"sequence\":"+std::to_string(sequence)+",\"in_sequence\":"+((flags&1)?"true":"false")+",\"written\":"+(written?"true":"false")+
+            ",\"parry_asked\":"+(result?"true":"false")+",\"attempt\":"+std::to_string(attempt)+",\"target_found\":"+std::to_string(conditions.targetFound));
+    }catch(...){}
+    return result;
+}
+// A guest's own parry, decided on its PC (online_sync.hpp sendParries; user 2026-10-21 04:15: "what concerns the player's
+// action is done on each PC; never wait for the host's answer before the own action shows"). The guest's game runs its
+// own character's parry as well (a prediction; the guest's log of 10-21: swing_parry_gameplay at each swing); given the
+// enemy the guest decided on, as the relaxed parry gives its chosen enemy (relaxedId), that prediction asks for the parry
+// at once - the parry's movement shows on the guest without the host. The host makes the same parry (serverParryRemote).
+inline std::atomic<unsigned> localDecisions{0};
+inline void localDecided(uint32_t enemy,uint64_t swingAt){
+    if(!relax||!swingParry||!enemy||!swingAt)return;
+    const auto now=GetTickCount64();relaxedId=enemy;relaxedAt=now;relaxArm=swingAt;relaxPressAt=now;
+    if(localDecisions.fetch_add(1)<200)try{logFile->event("parry_local_decided","\"frame\":"+std::to_string(liveFrame.frame)+",\"enemy\":"+std::to_string(enemy)+
+        ",\"swing_ms_ago\":"+std::to_string(now-swingAt)+",\"client_choice_for_this_swing\":"+(clientArm.load()==swingAt?"true":"false"));}catch(...){}
+}
 bool __fastcall serverParry(void* out,void* row,void* a,void* b){
     const Inside counted;
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());
@@ -224,6 +278,9 @@ bool __fastcall serverParry(void* out,void* row,void* a,void* b){
     uintptr_t actor=0,consumer=0;
     try{if(caller==baseAddress+serverCallerRva){actor=read<uintptr_t>(r+serverActorAt);consumer=read<uintptr_t>(r+serverConsumerAt);if(!plausible(actor)||!plausible(consumer))actor=consumer=0;}}catch(...){actor=0;}
     const bool local=actor&&actor==controllerUiFixture::playerBaseActor.load();
+    if(!local&&actor&&consumer&&remoteParry&&swingParry){const auto remoteAt=controllerUiFixture::remoteSwingParryAt.load();
+        if(remoteArm.load()!=remoteAt&&fresh(remoteAt,serverWindowMs)){struct Marked {Marked(){conditions=Conditions{};}~Marked(){conditions=Conditions{};}} marked;
+            return serverParryRemote(out,row,a,b,actor,consumer,remoteAt);}}
     struct Marked {explicit Marked(bool l){conditions=Conditions{};conditions.local=l;}~Marked(){conditions=Conditions{};}} marked(local);
     // The gameplay side's window runs from the relaxed press when the swing made one after its own (0.2 s at the most).
     const auto relaxedPress=relaxPressAt.load();const bool relaxedSwing=relax&&relaxArm.load()==at&&relaxedPress>=at;

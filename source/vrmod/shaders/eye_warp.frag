@@ -29,6 +29,23 @@ layout(location = 0) in vec2 uv;
 layout(location = 1) in float dist;
 layout(location = 2) flat in vec2 cellRange;
 layout(location = 0) out vec4 outColor;
+// The colour is read with a Catmull-Rom filter (2026-10-21; the alternate-eye warp's "everything shook": in a Mock turn
+// the eye made by the warp was a tenth less sharp than the eye drawn - mean gradient 20.2 .. 21.1 against 22.2 .. 23.2 -
+// so each eye went sharp, soft, sharp at half the frame rate; the bilinear read of the other eye's picture softens it).
+// Nine bilinear reads (the weights of the 4 x 4 texels folded), never below 0, blended 4:1 with the bilinear read. sharpRead = 0 (EVR_EYE_WARP_SHARP=0): the
+// bilinear read as before.
+layout(constant_id = 0) const int sharpRead = 1;
+vec3 colourAt(sampler2D tex, vec2 at) {
+    if (sharpRead == 0) return texture(tex, at).rgb;
+    vec2 size = vec2(textureSize(tex, 0)), p = at * size, t1 = floor(p - 0.5) + 0.5, f = p - t1;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f)), w1 = 1.0 + f * f * (-2.5 + 1.5 * f), w2 = f * (0.5 + f * (2.0 - 1.5 * f)), w3 = f * f * (-0.5 + 0.5 * f);
+    vec2 w12 = w1 + w2, t0 = (t1 - 1.0) / size, t3 = (t1 + 2.0) / size, t12 = (t1 + w2 / w12) / size;
+    vec3 c = textureLod(tex, vec2(t0.x, t0.y), 0.0).rgb * (w0.x * w0.y) + textureLod(tex, vec2(t12.x, t0.y), 0.0).rgb * (w12.x * w0.y) + textureLod(tex, vec2(t3.x, t0.y), 0.0).rgb * (w3.x * w0.y)
+           + textureLod(tex, vec2(t0.x, t12.y), 0.0).rgb * (w0.x * w12.y) + textureLod(tex, vec2(t12.x, t12.y), 0.0).rgb * (w12.x * w12.y) + textureLod(tex, vec2(t3.x, t12.y), 0.0).rgb * (w3.x * w12.y)
+           + textureLod(tex, vec2(t0.x, t3.y), 0.0).rgb * (w0.x * w3.y) + textureLod(tex, vec2(t12.x, t3.y), 0.0).rgb * (w12.x * w3.y) + textureLod(tex, vec2(t3.x, t3.y), 0.0).rgb * (w3.x * w3.y);
+    // four fifths of it: alone it came out 3 % sharper than the drawn eye (mean gradient 23.6 against 23.0; bilinear 20.7)
+    return mix(texture(tex, at).rgb, max(c, vec3(0.0)), 0.8);
+}
 float toDistance(float d) { return min(d > 1e-7 ? warp.params.y / d : warp.params.z, warp.params.z); }
 // The kept depth between its texels (bilinear; the reversed depth is linear over a plane), so that the walk along the
 // ray crosses a surface at one place and not at a texel's step: the crossing's place, and the colour taken there,
@@ -114,7 +131,7 @@ vec4 beyondTheOccluder(vec3 rn, vec4 fallback) {
         if (!inside(at)) continue;
         float there = toDistance(textureLod(otherDepth, at, 0.0).r);
         if (there < s * 0.98 - 0.003) { wasBehind = true; continue; }
-        if (wasBehind) return vec4(texture(otherColor, at).rgb, 1.0);
+        if (wasBehind) return vec4(colourAt(otherColor, at), 1.0);
     }
     return fallback;
 }
@@ -126,7 +143,7 @@ void main() {
     mat3 R = mat3(warp.oldToNew);
     vec3 a = rn * R, b = -(warp.oldToNew[3].xyz * R);   // R^T rn, -R^T T
     if (warp.params.w > 1.5) {
-        vec4 plain = vec4(texture(colorTex, f).rgb, 1.0);   // the picture as it is: the last resort
+        vec4 plain = vec4(colourAt(colorTex, f), 1.0);   // the picture as it is: the last resort
         if (a.z >= -1e-3) { outColor = plain; return; }
         float sNear = 0.12, sFar = warp.params.z;
         float gap = length((place(along(a, b, sFar)) - place(along(a, b, sNear))) * size);
@@ -135,7 +152,7 @@ void main() {
             float s = distanceAt(place(along(a, b, 1.0)));
             s = distanceAt(place(along(a, b, s)));
             vec3 p = along(a, b, s);
-            outColor = hiddenFromOther(p) ? vec4(texture(colorTex, place(p)).rgb, 1.0) : beyondTheOccluder(rn, plain);
+            outColor = hiddenFromOther(p) ? vec4(colourAt(colorTex, place(p)), 1.0) : beyondTheOccluder(rn, plain);
             return;
         }
         int steps = clamp(int(ceil(gap)), 2, 128);
@@ -147,7 +164,7 @@ void main() {
             float s = nextCrossing(a, b, iNear, iFar, steps, i, front, sPrev);
             if (s < 0.0) break;
             vec3 p = along(a, b, s);
-            if (hiddenFromOther(p)) { outColor = vec4(texture(colorTex, place(p)).rgb, 1.0); return; }
+            if (hiddenFromOther(p)) { outColor = vec4(colourAt(colorTex, place(p)), 1.0); return; }
         }
         outColor = beyondTheOccluder(rn, plain);
         return;
@@ -156,14 +173,14 @@ void main() {
     float sNear = cellRange.x * 0.98, sFar = min(cellRange.y * 1.02, warp.params.z);
     float gap = 0.0;
     if (stepped) gap = length((place(along(a, b, sFar)) - place(along(a, b, sNear))) * size);   // how far the ray's places in the kept picture lie apart
-    if (gap < 0.75) { outColor = vec4(texture(colorTex, uv).rgb, 1.0); return; }   // one surface: the stretched place is the right one
+    if (gap < 0.75) { outColor = vec4(colourAt(colorTex, uv), 1.0); return; }   // one surface: the stretched place is the right one
     int steps = clamp(int(ceil(gap)), 2, 128);
     float iNear = 1.0 / sNear, iFar = 1.0 / sFar;
     int i = 0;
     bool front = false;
     float sPrev = sNear;
     float s = nextCrossing(a, b, iNear, iFar, steps, i, front, sPrev);
-    if (s >= 0.0) { outColor = vec4(texture(colorTex, place(along(a, b, s))).rgb, 1.0); return; }
+    if (s >= 0.0) { outColor = vec4(colourAt(colorTex, place(along(a, b, s))), 1.0); return; }
     if (warp.params.w > 0.5) discard;
-    outColor = vec4(texture(colorTex, uv).rgb, 1.0);
+    outColor = vec4(colourAt(colorTex, uv), 1.0);
 }

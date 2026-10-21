@@ -306,6 +306,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
             logFile->event("player_sync_loopback",o.str());}
     }
     published.body=sync::fromSolve(sync::Model{solveQ,modelScale},targets,report.hips,motionHandVisual::lastCurls);
+    published.body.leaning=leaning;published.body.lean=leaning?leanQ:Quat{0,0,0,1};   // the receiver's copy may not lean (sync::Body lean)
     published.body.bowDrawn=motionVisual::bowDrawHandValid;
     // The held items relative to the hand sockets (online 2.1): the copies shown this frame or the last, about the
     // character's position like the sockets, so that the receiver puts them on its copy's hands the same way.

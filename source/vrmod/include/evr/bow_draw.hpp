@@ -17,6 +17,19 @@ struct BowDrawSettings {
  // 60 ms came out as 49 ms once (combined run game034329). 80 ms keeps the tap above 60 ms,
  // two input polls of the game even at the headset's 35 frames per second.
  uint64_t tapMs=80,aimMs=500,unboundMs=300;
+ // Not VHVR (Valheim has no such wait): the game's bow starts drawing about 0.35 s after its LT (its nocking; logs of
+ // 10-17..10-21: 0.31 .. 0.48 s alone, 0.35 .. 0.45 s as a guest - user 2026-10-21: "the start of the draw was slow").
+ // With the trigger held and the hand within preAimRange of the string, LT goes to the game already, so that its
+ // nocking runs while the hand reaches the string. Let go without taking the string: LT goes, nothing is shot. 0: off.
+ float preAimRange=.45f;
+ // The strong shot (2026-10-21, the user: "draw with the grip and the trigger held and let go: the strong shot"; 15:20
+ // after the headset: "it does not come out - the grip alone is enough"). The game takes RT held past its threshold and
+ // let go as the bow's special ability (SpecialAbility_Hold on the release: Mock game-20261021-134251, held 600 ms; 300
+ // ms was a tap), but not while the bow is aimed (LT): with LT held through it none of 17 strong releases of headset run
+ // 20261021-150238 began the strong shot (its action 1963645007 draws by itself and shoots at 400 ms; the gamepad's way
+ // is RT held without aiming - guess). So a string taken or held with the right grip is the strong shot's: RT is held
+ // (no LT) for as long as the string is, and let go with it. false: the grip takes no string.
+ bool strongByGrip=true;
 };
 // VHVR realLifePullPercentage: squared share of the travel behind the rest string.
 inline float bowPullPercentage(float pull,float brace,float fullDrawLength){
@@ -53,7 +66,7 @@ class BowDraw {
 public: enum Phase:unsigned {Idle=0,Blocked=1,Held=2,Cancelled=3,Aborted=4,Released=5};
 private:
  BowDrawSettings settings_{};Phase phase_=Blocked;BowPhysicalMetrics metrics_{};
- bool pressed_=false,bowMode_=false,fullDrawn_=false;float releasePull_=0;unsigned shots_=0;
+ bool pressed_=false,bowMode_=false,fullDrawn_=false,strong_=false,byGrip_=false;float releasePull_=0;unsigned shots_=0;
  uint64_t binding_=0,session_=0,origin_=0,heldMs_=0,releaseMs_=0,lastMs_=0,boundMs_=0;
  XrTime lastTime_=0;std::array<XrPath,2> profiles_{};
  static bool scope(const HandFrame& f,const BowPhysicalGeometry& g,bool allowed){
@@ -65,8 +78,13 @@ private:
  }
 public:
  BowDraw()=default;explicit BowDraw(BowDrawSettings s):settings_(s){}
+ void preAim(float range){settings_.preAimRange=range;}
  Phase phase()const{return phase_;}const BowPhysicalMetrics& metrics()const{return metrics_;}
  float releasePull()const{return releasePull_;}unsigned shots()const{return shots_;}
+ // The last release was the strong shot's (the string held with the right grip).
+ bool strongRelease()const{return strong_;}
+ // The string is held with the right grip now (the strong shot's draw: RT, not LT).
+ bool strongDraw()const{return phase_==Held&&byGrip_;}
  bool bowMode()const{return bowMode_;}
  // A refused shot or a screen that owns the triggers: let go, then require a new press.
  void abort(){if(phase_==Held||phase_==Released)phase_=Aborted;else if(phase_!=Aborted)phase_=Blocked;}
@@ -75,6 +93,7 @@ public:
   const auto& right=f.hands[1];
   const float t=right.triggerActive&&std::isfinite(right.trigger)?std::clamp(right.trigger,0.f,1.f):0;
   if(t>=.8f)pressed_=true;else if(t<=.2f)pressed_=false;
+  const bool grip=settings_.strongByGrip&&right.grabActive&&right.grab;
   if(phase_==Cancelled)phase_=Idle;else if(phase_==Aborted)phase_=Blocked; // reported for one update
   if(!g.binding){
    // No reviewed bow this frame. Keep the triggers until the draw input is
@@ -94,6 +113,7 @@ public:
    lastMs_=now;lastTime_=f.predictedTime;
    const auto age=now-releaseMs_;
    if(age>=settings_.aimMs){phase_=Idle;return pad;}
+   if(strong_)return pad;                                   // RT was let go with the string: the game takes its hold
    pad.leftTrigger=255;if(age<settings_.tapMs)pad.rightTrigger=255;return pad;
   }
   if(phase_==Held&&(!valid||changed||f.predictedTime<lastTime_)){phase_=Aborted;return pad;}
@@ -109,20 +129,23 @@ public:
   const float reach=length(right.grip.position-g.model.position);
   const float pull=std::sqrt(std::max(0.f,reach*reach-nock.y*nock.y))-nock.z;
   metrics_={true,length(delta)<=settings_.attachRange,length(delta),std::max(0.f,pull),0,g.model.position+rotate(g.model.orientation,nock)};
-  if(phase_==Blocked){if(!pressed_)phase_=Idle;}
+  if(phase_==Blocked){if(!pressed_&&!grip)phase_=Idle;}
   // VHVR checks the string every frame while the input is held, so a trigger
   // pressed on the way to the string still takes it.
-  else if(phase_==Idle){if(pressed_&&metrics_.withinRange){phase_=Held;heldMs_=now;fullDrawn_=false;}}
+  else if(phase_==Idle){if((pressed_||grip)&&metrics_.withinRange){phase_=Held;heldMs_=now;fullDrawn_=false;byGrip_=grip;}}
   else if(phase_==Held){
+   if(grip)byGrip_=true;                                    // the grip closed during a trigger's draw: the strong shot's from here
    if(metrics_.distance>1.5f){phase_=Aborted;return pad;}
-   if(!pressed_){
+   if(!pressed_&&!grip){
     if(now>=heldMs_&&now-heldMs_>=settings_.minimumHoldMs&&metrics_.pull>=settings_.minimumPull){
      phase_=Released;releaseMs_=lastMs_=now;releasePull_=metrics_.pull;++shots_;
-     pad.leftTrigger=pad.rightTrigger=255;
+     strong_=byGrip_;
+     if(!strong_)pad.leftTrigger=pad.rightTrigger=255;
     }else phase_=Cancelled;
    }
   }
-  if(phase_==Held)pad.leftTrigger=255;
+  if(phase_==Held){if(byGrip_)pad.rightTrigger=255;else pad.leftTrigger=255;}
+  else if(phase_==Idle&&pressed_&&settings_.preAimRange>0&&metrics_.distance<=settings_.preAimRange)pad.leftTrigger=255;
   return pad;
  }
  float pullPercentage(const BowPhysicalGeometry& g)const{

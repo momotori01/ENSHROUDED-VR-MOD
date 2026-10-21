@@ -200,6 +200,42 @@ inline bool skillOwned(const evr::motion::EventActionKey& key,uint64_t now){retu
 inline SkillAction wandAction;   // guarded by retimeMutex
 inline bool wandOwned(const evr::motion::EventActionKey& key,uint64_t now){return wandAction.until>=now&&wandAction.key==key;}
 inline std::atomic<unsigned> wandShotsEarly{0};
+// The bow's arrow at the hand's release (2026-10-21, the user: "bring it forward"). The game's shoot action
+// (Attack_Player_Ranged_Bow_Shoot, 800 ms; game data) loops 200..400 ms while the string is drawn and makes its arrow at
+// 400 ms (three SpawnEntityEvents, three more at 433.3 ms; one arrow came of them on each shot, headset log
+// 20261021-123610); the arrow came 151 .. 162 ms after the hand let go. The game takes the shot when RT is let go
+// (the own ranged weapon's state 2 -> 3, Mock game-20261021-134251: 111 / 126 ms after the hand with the fixed 80 ms tap;
+// handed at the hand's release, before that, the arrow was refused - bow_spawn_observer wants the state 3 - and none
+// came). Once this player has let go (controllerUiFixture::bowReleasedAt, not older than bowEarlyMs), the game has taken
+// the shot (bowFired) and the action is past its nocking (200 ms) but short of its arrow, the action's spawns (from the
+// first one up to 50 ms after it) and the sounds authored with the first are handed at once (the private look ahead, as
+// for a swing) and withheld when their authored time comes - for that release only. Nothing else of the action changes.
+// Not the ledger: the action's key may change when it leaves its loop (not checked). EVR_BOW_EARLY=0: as before.
+// Headset run 20261021-150238 (with the state-3 rule and a two-poll tap): the arrow came 100 .. 110 ms after the hand, and
+// the state 3 came with the 400 ms every time (49 looks, none handed). So (15:30) the arrow is handed at the release
+// itself - the bow's spawn is let through before the state 3 for it (controllerUiFixture::bowEarlySpawnUntil) - and the
+// strong shot's (Attack_Player_SpecialAbility_Strong_Shot_Bow, 1963645007: spawns from 400 ms) at that action's start.
+inline const bool bowEarly=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_BOW_EARLY",v,sizeof v);return !(n==1&&v[0]=='0');}();
+constexpr uint32_t bowShootSequence=2886385501u,strongShotSequence=1963645007u;constexpr int64_t bowNocked=200000000;constexpr uint64_t bowEarlyMs=400,strongEarlyMs=2000;
+// The game has taken this player's shot: the own ranged weapon's state is 3 (2 while drawn; input_ranged_observer, fresh).
+inline bool bowFired(uintptr_t world,uint64_t now){
+ std::lock_guard<std::mutex> lock(inputRanged::bowMutex);
+ for(const auto& v:inputRanged::bowIdentities)if(v.world==world&&v.milliseconds&&now>=v.milliseconds&&now-v.milliseconds<=100)return v.bytes[0]==3;
+ return false;
+}
+struct BowShot{uint64_t released=0,until=0;uint32_t sequence=0;std::array<uintptr_t,8> variants{};std::array<bool,8> gone{};size_t count=0;};
+inline BowShot bowShot;   // guarded by retimeMutex
+inline std::atomic<unsigned> bowShotsEarly{0},bowWithheld{0},bowLogged{0};
+// The action's events of one type with their authored times (the private native look ahead over the whole action).
+inline void bowLook(const std::array<uint8_t,3104>& before,void* registry,int64_t length,uint32_t hash,std::vector<std::pair<uintptr_t,int64_t>>& out){
+ auto copy=before;const int64_t zero=0;std::memcpy(copy.data()+0x1b8,&zero,8);std::memcpy(copy.data()+0x1c0,&length,8);copy[0xbf0]=0;const auto expected=copy;
+ std::array<uintptr_t,64> storage{};std::array<uintptr_t,4> result{reinterpret_cast<uintptr_t>(storage.data()),0,storage.size(),0};
+ std::array<uint8_t,8> filter{};std::memcpy(filter.data(),&hash,4);filter[4]=1;
+ const auto status=original(result.data(),copy.data(),registry,0,filter.data());
+ if(result[0]!=reinterpret_cast<uintptr_t>(storage.data())||result[1]>storage.size()||result[2]!=storage.size()||result[3]||!(status&255)||copy!=expected)throw std::runtime_error("bow look ahead failed bounds or allocation");
+ for(size_t i=0;i<result[1];++i){const auto p=sequenceAssetObserver::relative(storage[i]+4);
+  if(read<uint32_t>(storage[i])!=hash||!p)throw std::runtime_error("bow look ahead returned another event type");out.push_back({storage[i],read<int64_t>(p)});}
+}
 inline void movingNoted(uint32_t sequence,uint32_t item,int64_t trigger,uint32_t by,const char* where){
  if(movingSeen.fetch_add(1)<60)try{logFile->event("live_event_moving_action","\"sequence\":"+std::to_string(sequence)+",\"item\":"+std::to_string(item)+",\"trigger\":"+std::to_string(trigger)+",\"by\":"+hex(by)+",\"where\":\""+where+"\",\"left_to_the_game\":true");}catch(...){}
 }
@@ -365,7 +401,7 @@ inline void liveEvents(void* output,const void* actor,void* registry,const std::
  int64_t sourceStart=0,sourceEnd=0,length=0,authored=0;std::memcpy(&sourceStart,before.data()+0x1b8,8);std::memcpy(&sourceEnd,before.data()+0x1c0,8);std::memcpy(&length,before.data()+0x188,8);
  using Decision=evr::motion::LiveEventLedger<32>::Decision;evr::motion::LiveAttackPress press;unsigned impacts=0,stilled=0,moved=0,attacks=0;int64_t attackAt=0;
  std::array<evr::motion::EarlyEvent,evr::motion::maximumEarlyEvents> early{};size_t earlyCount=0;uint32_t earlyType=spawnImpactEvent;
- bool skill=false;
+ bool skill=false,bow=false;
  if(liveLedger.owns(key,now)){
   // A skill attack keeps its animation, turn, step, pushes, sounds and effects: only its authored weapon hits go.
   skill=skillOwned(key,now)||wandOwned(key,now);   // the wand's swing: nothing of its motion withheld either
@@ -375,12 +411,50 @@ inline void liveEvents(void* output,const void* actor,void* registry,const std::
    dst.push_back(p);}
   if(liveStill&&!skill&&h[0]&&movesNow(key,now,sourceStart,sourceEnd))moved=earlyMovementAbilities(dst,before,registry,length,sourceEnd,h[2]);
   if(liveStill&&!skill&&h[0]&&attacksNow(key,now,sourceStart,sourceEnd))attacks=earlyAbilities(dst,before,registry,length,sourceEnd,h[2],attackAbilities);
+ }else if(bowEarly&&((key.sequence==bowShootSequence&&sourceStart>0)||key.sequence==strongShotSequence)){
+  // The bow's arrow at the release, the strong shot's at its start (bowEarly above).
+  bow=true;const auto root=rootCamera::snapshot();uint32_t triggerEntity=0;std::memcpy(&triggerEntity,before.data()+16,4);
+  if(root.entity!=entity||triggerEntity!=entity||!h[0])return;
+  const bool strongAction=key.sequence==strongShotSequence;
+  const auto released=strongAction?controllerUiFixture::strongShotAt.load():controllerUiFixture::bowReleasedAt.load();
+  if(strongAction&&sourceStart==0){static std::atomic<unsigned> told{0};uint16_t actionTrigger=0;std::memcpy(&actionTrigger,before.data()+0x18,2);
+   if(told.fetch_add(1)<100)logFile->event("strong_shot_begun","\"frame\":"+std::to_string(liveFrame.frame)+",\"action_trigger\":"+std::to_string(actionTrigger)+
+    ",\"release_age_ms\":"+std::to_string(released&&now>=released?now-released:0));}
+  if(bowShot.count&&bowShot.released==released&&bowShot.sequence==key.sequence&&now<=bowShot.until){
+   dst.clear();for(auto p:src){bool handed=false;for(size_t i=0;i<bowShot.count&&!handed;++i)if(!bowShot.gone[i]&&bowShot.variants[i]==p){bowShot.gone[i]=true;handed=true;}
+    if(handed){++impacts;continue;}dst.push_back(p);}
+   bowWithheld+=impacts;
+  }else if(released&&released!=bowShot.released&&now>=released&&now-released<=(strongAction?strongEarlyMs:bowEarlyMs)&&sourceStart>=(strongAction?0:bowNocked)&&length>0&&length<=60000000000ll){
+   const bool fired=bowFired(world,now);
+   bowShot={};bowShot.released=released;bowShot.sequence=key.sequence;   // one look ahead per release
+   std::vector<std::pair<uintptr_t,int64_t>> spawns,sounds;bowLook(before,registry,length,spawnEntityEvent,spawns);bowLook(before,registry,length,sfxNotifierEvent,sounds);++liveLookAheads;
+   bool same=h==read<std::array<uintptr_t,4>>(address)&&before==read<std::array<uint8_t,3104>>(reinterpret_cast<uintptr_t>(actor));
+   for(size_t i=0;i<src.size();++i)same=same&&src[i]==read<uintptr_t>(h[0]+i*8);
+   if(!same)throw std::runtime_error("bow look ahead changed its sources");
+   int64_t first=-1;for(const auto& s:spawns)if(s.second>=(strongAction?0:bowNocked)&&(first<0||s.second<first))first=s.second;
+   std::array<uintptr_t,8> handed{};size_t n=0,arrows=0;bool fits=first>=0;
+   for(const auto& s:spawns)if(first>=0&&s.second>=first&&s.second-first<=50000000){if(n==handed.size()){fits=false;break;}handed[n++]=s.first;++arrows;}
+   for(const auto& s:sounds)if(fits&&first>=0&&(s.second>first?s.second-first:first-s.second)<=1000000){if(n==handed.size()){fits=false;break;}handed[n++]=s.first;}
+   bool present=false;for(size_t i=0;i<n;++i)present=present||std::find(src.begin(),src.end(),handed[i])!=src.end();
+   const char* why=!fits?"\"no_arrow_or_too_many\"":first<=sourceEnd||present?"\"already_due\"":nullptr;
+   if(bowLogged.fetch_add(1)<200)logFile->event("bow_arrow_look","\"sequence\":"+std::to_string(key.sequence)+",\"state3\":"+(fired?"true":"false")+",\"release_age_ms\":"+std::to_string(now-released)+",\"range\":["+std::to_string(sourceStart)+","+std::to_string(sourceEnd)+"],\"length\":"+std::to_string(length)+
+    ",\"loop_flag\":"+std::to_string(before[0xbf0])+",\"spawns\":"+std::to_string(spawns.size())+",\"sounds\":"+std::to_string(sounds.size())+",\"first\":"+std::to_string(first)+",\"arrows\":"+std::to_string(arrows)+
+    ",\"handed\":"+std::to_string(why?0:n)+",\"not_handed\":"+(why?why:"null"));
+   if(why)return;
+   bowShot.until=now+(strongAction?2000:1000);bowShot.count=n;bowShot.variants=handed;
+   controllerUiFixture::bowEarlySpawnUntil=now+100;   // the spawn comes within this tick; before the game's shot state
+   for(size_t i=0;i<n;++i)dst.push_back(handed[i]);
+   earlyCount=n;earlyType=spawnEntityEvent;authored=first;++bowShotsEarly;
+  }else return;
  }else if(sourceStart==0&&livePress){
   press=livePress();const auto root=rootCamera::snapshot();uint32_t triggerEntity=0;std::memcpy(&triggerEntity,before.data()+16,4);
   // An item's special ability (the twin blades' spin, the great sword's spin, the felling axe's whirl, ...) begins by
   // its button, not by a swing: the action's trigger (Actor+0x18) is SpecialAbility. It is a skill attack all the same,
   // and its weapon hits are the real weapon's as well when the catalog gives it one.
   uint16_t actionTrigger=0;std::memcpy(&actionTrigger,before.data()+0x18,2);
+  // The bow's strong shot begun by this player (Attack_Player_SpecialAbility_Strong_Shot_Bow, 1 s; the 1.0 attack table).
+  if(key.sequence==1963645007u&&root.entity==entity&&triggerEntity==entity){controllerUiFixture::strongShotAt=now;
+   static std::atomic<unsigned> told{0};if(told.fetch_add(1)<100)logFile->event("strong_shot_begun","\"frame\":"+std::to_string(liveFrame.frame)+",\"action_trigger\":"+std::to_string(actionTrigger));}
   const auto* listed=evr::attacks::find(key.sequence);const bool stroke=press.starts(key,now);
   const bool button=!stroke&&specialAbilityOwned&&actionTrigger==specialAbilityTrigger&&listed&&listed->skill&&listed->weaponHits;
   if(!(stroke||button)||root.entity!=entity||triggerEntity!=entity||!rootCamera::firstPerson(root)||length<=0||length>60000000000ll||!h[0])return;
@@ -436,12 +510,12 @@ inline void liveEvents(void* output,const void* actor,void* registry,const std::
  // As retime(): only the caller's stack-owned array and count change; Actor and the authored asset stay native.
  std::memcpy(reinterpret_cast<void*>(h[0]),dst.data(),dst.size()*8);const uint64_t count=dst.size();std::memcpy(reinterpret_cast<void*>(address+8),&count,8);
  const bool adding=earlyCount!=0;
- if(adding){std::array<evr::motion::EventIdentity,evr::motion::maximumEarlyEvents> ids{};for(size_t i=0;i<earlyCount;++i)ids[i]=identity(early[i].variant);
+ if(adding&&!bow){std::array<evr::motion::EventIdentity,evr::motion::maximumEarlyEvents> ids{};for(size_t i=0;i<earlyCount;++i)ids[i]=identity(early[i].variant);
   if(!liveLedger.commit(key,ids.data(),earlyCount,now,uint64_t(length/1000000)))throw std::runtime_error("live event duplicate commit");++liveAppended;}liveSuppressed+=impacts;liveStilled+=stilled;liveMovedEarly+=moved;liveAttacksEarly+=attacks;
  const auto after=read<std::array<uintptr_t,4>>(address);bool stable=before==read<std::array<uint8_t,3104>>(reinterpret_cast<uintptr_t>(actor))&&after[0]==h[0]&&after[2]==h[2]&&after[3]==h[3]&&after[1]==dst.size();
  for(size_t i=0;i<dst.size();++i)stable=stable&&read<uintptr_t>(h[0]+i*8)==dst[i];
  std::ostringstream o;o<<"\"operation\":"<<jsonString(adding?"append":impacts?"suppress":"still")<<",\"movement_events_withheld\":"<<stilled<<",\"movement_abilities_early\":"<<moved<<",\"attack_abilities_early\":"<<attacks<<",\"next_attack_at\":"<<attackAt<<",\"world\":"<<hex(world)<<",\"entity\":"<<entity<<",\"sequence\":"<<key.sequence<<",\"item\":"<<key.item<<",\"trigger\":"<<key.trigger
-  <<",\"range\":["<<sourceStart<<','<<sourceEnd<<"],\"length\":"<<length<<",\"authored\":"<<authored<<",\"move_at\":"<<(adding?stillAction.moveAt:0)<<",\"walk_breaks_off\":"<<(adding&&stillAction.walkAborts?"true":"false")<<",\"skill\":"<<(skill?"true":"false")<<",\"early_events\":"<<earlyCount<<",\"early_type\":"<<(earlyType==spawnEntityEvent?"\"spawn_entity\"":"\"impact\"")<<",\"press_serial\":"<<press.serial<<",\"press_age_ms\":"<<(press.pressed&&now>=press.pressed?now-press.pressed:0)
+  <<",\"range\":["<<sourceStart<<','<<sourceEnd<<"],\"length\":"<<length<<",\"authored\":"<<authored<<",\"move_at\":"<<(adding?stillAction.moveAt:0)<<",\"walk_breaks_off\":"<<(adding&&stillAction.walkAborts?"true":"false")<<",\"skill\":"<<(skill?"true":"false")<<",\"bow\":"<<(bow?"true":"false")<<",\"early_events\":"<<earlyCount<<",\"early_type\":"<<(earlyType==spawnEntityEvent?"\"spawn_entity\"":"\"impact\"")<<",\"press_serial\":"<<press.serial<<",\"press_age_ms\":"<<(press.pressed&&now>=press.pressed?now-press.pressed:0)
   <<",\"events_before\":"<<src.size()<<",\"events_after\":"<<dst.size()<<",\"ledger\":"<<liveLedger.size(now)<<",\"milliseconds\":"<<now<<",\"actor_and_storage_unchanged\":"<<(stable?"true":"false")<<",\"asset_written\":false";
  logFile->event("live_event_retime",o.str());
  if(!stable)throw std::runtime_error("live event retime postcondition");

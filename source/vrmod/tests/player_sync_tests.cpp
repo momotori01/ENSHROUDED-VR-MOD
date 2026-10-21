@@ -1,6 +1,7 @@
 #include <evr/player_sync.hpp>
 #include "player_skeleton_fixture.hpp"
 #include <iostream>
+#include <limits>
 #include <string>
 using namespace evr;using namespace evr::sync;
 int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if(!b)throw std::runtime_error(std::to_string(n)+" at line "+std::to_string(line));};
@@ -196,5 +197,27 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(!decodeAction(c.data(),c.size()-1));auto bad=c;bad[1]=2;ck(!decodeAction(bad.data(),bad.size()));bad=c;bad[2]=9;ck(!decodeAction(bad.data(),bad.size()));
   const auto low=decodeAction(encodeCast(1,-3.f).data(),castActionBytes);ck(low&&low->strength==0);
   const auto body=encodeHello(4);ck(!decodeAction(body.data(),body.size()));}
+ // version 4: a leaning owner's lean follows the items (7 bytes); without it the sizes stay; a lean on a paused body refused
+ {Body b;b.head={normalized(Quat{0,.3f,0,1}),{0,1.6f,0}};b.pelvis={identityPose().orientation,{0,1,0}};b.swim=true;b.leaning=true;b.lean=normalized(Quat{.6f,0,0,.8f});
+  const auto e=encode(b,77,Place{1,2,3},1234);ck(e.size()==fullBytes+leanBytes+stampBytes&&e[1]==version&&(e[4]&0x80));
+  const auto d=decode(e.data(),e.size());ck(d&&d->body.leaning&&d->body.swim&&std::abs(std::abs(d->body.lean.x*b.lean.x+d->body.lean.w*b.lean.w)-1)<1e-4f);
+  b.leaning=false;const auto f=encode(b,78,Place{},0);ck(f.size()==fullBytes+stampBytes&&!(f[4]&0x80));const auto g=decode(f.data(),f.size());ck(g&&!g->body.leaning);
+  auto bad=e;bad[1]=3;ck(!decode(bad.data(),bad.size()));   // version 3 never had the lean flag
+  auto three=f;three[1]=3;ck(decode(three.data(),three.size()).has_value());}   // version 3 still read
+ // a shot: the camera as it was sent, an orientation that is not a unit one refused
+ {std::array<uint8_t,40> camera{};const int64_t at[3]{int64_t(12)<<32,-(int64_t(3)<<31),int64_t(700)<<32};std::memcpy(camera.data(),at,24);
+  const Quat q=normalized(Quat{.1f,.7f,0,.7f});std::memcpy(camera.data()+24,&q,16);
+  const auto s=encodeShot(65535,camera);ck(s.size()==shotActionBytes&&s[2]==shotAction);const auto a=decodeAction(s.data(),s.size());
+  ck(a&&a->kind==shotAction&&a->id==65535&&a->aim==camera);
+  {const std::array<int64_t,3> at{int64_t(5)<<32,-(int64_t(77)<<32),int64_t(1)<<40};const auto e=encodeHit(9,at,true);const auto d=decodeAction(e.data(),e.size());
+   ck(e.size()==hitActionBytes&&d&&d->kind==hitAction&&d->id==9&&d->at==at&&d->character);auto bad=e;bad[29]=4;ck(!decodeAction(bad.data(),bad.size()));ck(!d->shot);
+   const auto sh=encodeHit(11,at,true,true);const auto sd=decodeAction(sh.data(),sh.size());ck(sd&&sd->shot&&sd->character);
+   const auto o=encodeHit(10,at,false);const auto od=decodeAction(o.data(),o.size());ck(od&&!od->character);}
+  const std::array<int64_t,3> enemy{int64_t(3)<<32,int64_t(4)<<32,-(int64_t(5)<<32)};
+  const auto p=encodeParry(300,enemy);const auto pa=decodeAction(p.data(),p.size());ck(p.size()==parryActionBytes&&pa&&pa->kind==parryAction&&pa->id==300&&pa->at==enemy);
+  auto longer=p;longer.push_back(0);ck(!decodeAction(longer.data(),longer.size()));
+  const auto h=encodeShot(7,camera,true);const auto ha=decodeAction(h.data(),h.size());ck(ha&&ha->kind==heldAimAction&&ha->id==7&&ha->aim==camera);ck(!decodeAction(s.data(),s.size()-1));ck(!decode(s.data(),s.size()));
+  auto bad=camera;const Quat zero{0,0,0,0};std::memcpy(bad.data()+24,&zero,16);const auto b=encodeShot(1,bad);ck(!decodeAction(b.data(),b.size()));
+  const float nan=std::numeric_limits<float>::quiet_NaN();std::memcpy(bad.data()+24,&nan,4);const auto c=encodeShot(1,bad);ck(!decodeAction(c.data(),c.size()));}
  std::cout<<"player_sync "<<n<<" PASS\n";return 0;}
  catch(const std::exception& e){std::cerr<<"player_sync FAIL "<<e.what()<<"\n";return 1;}}
