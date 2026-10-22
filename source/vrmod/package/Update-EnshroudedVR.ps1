@@ -21,7 +21,7 @@ function Get-InstalledEnshroudedVR {
     if (Test-Path -LiteralPath $manifest -PathType Leaf) {
         try {
             $m = Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ([string]$m.version -match '^\d+\.\d+\.\d+$') { $result.Version = [string]$m.version }
+            if ([string]$m.version -match '^\d+\.\d+\.\d+(\.\d+)?$') { $result.Version = [string]$m.version }
             if ([string]$m.repository -match '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') { $result.Repository = [string]$m.repository }
         } catch {}
     }
@@ -35,7 +35,8 @@ function Get-LatestEnshroudedVRRelease {
     $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository/releases/latest" `
         -Headers @{ 'User-Agent' = 'EnshroudedVR-Updater'; 'Accept' = 'application/vnd.github+json' }
     $tag = [string]$release.tag_name
-    if ($tag -notmatch '^EnshroudedVR-(\d+\.\d+\.\d+)$') { throw "Unexpected release name '$tag'." }
+    # x.y.z or, from 0.9.8 on, x.y.z.w (2026-10-22: a step of 0.0.0.1)
+    if ($tag -notmatch '^EnshroudedVR-(\d+\.\d+\.\d+(?:\.\d+)?)$') { throw "Unexpected release name '$tag'." }
     $version = $Matches[1]
     $asset = @($release.assets | Where-Object { $_.name -eq "EnshroudedVR-$version.zip" })[0]
     if (!$asset) { throw "The release $tag has no EnshroudedVR-$version.zip." }

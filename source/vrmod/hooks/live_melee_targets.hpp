@@ -137,6 +137,7 @@ inline void steerArrows(uintptr_t world,uint64_t now);
 inline void thingOutcomes(uint64_t now);
 inline void estimateProbe(uintptr_t world,uint32_t local,uint64_t now);
 inline void forgetWorldRecords(uintptr_t world);
+inline void weaponProbe(uintptr_t world,uint32_t local,const char* why);
 inline Layout layout(uintptr_t address);
 inline int32_t healthNow(uint32_t entity){
  std::lock_guard<std::mutex> lock(mutex);
@@ -293,6 +294,7 @@ inline void tick(uintptr_t world,uint32_t local){
     const bool nowGuest=guestThingsWanted&&census.all>=64&&!census.allHealth&&(census.allNetworkHealth>0||guestWorld);
     if(nowGuest!=guestWorld&&guestLogs++<50)logFile->event("live_targets_guest_world","\"world\":"+hex(world)+",\"guest\":"+(nowGuest?"true":"false")+",\"network_health\":"+std::to_string(census.allNetworkHealth)+
      ",\"client_colliders_are_things\":"+(nowGuest&&types.clientCollider>=0&&types.feedbackMaterial>=0?"true":"false"));
+    if(nowGuest&&!guestWorld)weaponProbe(world,local,"guest_world");
     guestWorld=nowGuest;}
    otherPlayers.clear();for(const auto& p:playersSeen)if(p.entity!=local)otherPlayers.push_back({p.entity,{p.at.x,p.at.y,p.at.z}});
    census={};remoteMelee::publishPlayers(playersSeen);playersSeen.clear();
@@ -566,6 +568,44 @@ inline std::string estimateJson(const Estimate& e){
   <<(e.enemyKnown?"":",\"enemy_unknown\":true")<<",\"ambiguity\":"<<unsigned(e.ambiguity);
  return o.str();
 }
+// The guest's weapon instance (2026-10-22, the friend's server, guest log 20261022-123336: every estimate stopped at
+// "weapon instance not found" - the slot's stack holds the sword but its instance is 0 in the guest's World). Three times
+// at most (the guest World seen, an estimate without the instance): the SlotSelection, each slot row's Inventory (96 bytes)
+// and every ItemState of this World with its entity (weapon_probe), to find where the guest has the weapon's own values.
+inline unsigned weaponProbes=0;
+inline void weaponProbe(uintptr_t world,uint32_t local,const char* why){
+ if(weaponProbes>=3||!world||!local)return;++weaponProbes;
+ try{
+  const auto& t=estimateTypesOf(world);
+  std::ostringstream o;o<<"\"why\":"<<jsonString(why)<<",\"world\":"<<hex(world)<<",\"local\":"<<local<<",\"types\":["<<t.selection<<','<<t.inventory<<','<<t.itemState<<']';
+  if(t.selection>=0&&t.inventory>=0){
+   const auto player=nativeImpactComponents::entityAtWorld(world,local);
+   const auto sel=nativeImpactComponents::component(player,unsigned(t.selection),216);
+   if(sel){const auto raw=read<std::array<uint8_t,216>>(sel);o<<",\"selection\":"<<jsonString(nativeImpactComponents::asHex(raw));
+    std::vector<uint32_t> rows;for(unsigned slot=0;slot<24;++slot){uint32_t row=0;std::memcpy(&row,raw.data()+8*slot,4);if(row)rows.push_back(row);}
+    std::sort(rows.begin(),rows.end());rows.erase(std::unique(rows.begin(),rows.end()),rows.end());
+    o<<",\"rows\":[";bool first=true;
+    for(const auto r:rows){o<<(first?"":",")<<"{\"row\":"<<r;first=false;
+     try{const auto e=nativeImpactComponents::entityAtWorld(world,r);const auto inv=nativeImpactComponents::component(e,unsigned(t.inventory),96);
+      if(inv)o<<",\"inventory\":"<<jsonString(nativeImpactComponents::asHex(read<std::array<uint8_t,96>>(inv)));}catch(...){o<<",\"unreadable\":true";}
+     o<<'}';}
+    o<<']';}}
+  if(t.itemState>=0){
+   const auto map=world+0x148;const auto bitmap=read<uintptr_t>(map+8),capacity=read<uint64_t>(map+0x10),keyArray=read<uintptr_t>(map+0x28),values=read<uintptr_t>(map+0x40);
+   unsigned found=0;o<<",\"item_states\":[";
+   if(bitmap&&keyArray&&values&&capacity&&capacity<=0x100000&&!(capacity&(capacity-1))){
+    std::vector<uint64_t> bits(static_cast<size_t>((capacity+63)/64));std::vector<uint32_t> keys(static_cast<size_t>(capacity));SIZE_T got=0;
+    if(ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(bitmap),bits.data(),bits.size()*8,&got)&&got==bits.size()*8&&
+       ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(keyArray),keys.data(),keys.size()*4,&got)&&got==keys.size()*4)
+     for(uint64_t i=0;i<capacity;++i){if(!(bits[size_t(i/64)]>>(i%64)&1))continue;
+      try{nativeImpactComponents::Entity e;e.world=world;e.record=read<uintptr_t>(values+i*8);if(!e.record)continue;e.layout=read<uintptr_t>(e.record+0x18);e.data=read<uintptr_t>(e.record+0x20);e.row=read<uint32_t>(e.record+0x30);
+       if(!e.layout||!e.data)continue;const auto b=read<std::array<uint64_t,10>>(e.layout);const auto id=unsigned(t.itemState);if(!(b[id/64]>>(id%64)&1))continue;
+       const auto c=nativeImpactComponents::component(e,id,20);if(!c)continue;
+       if(found<60)o<<(found?",":"")<<"{\"entity\":"<<keys[size_t(i)]<<",\"bytes\":"<<jsonString(nativeImpactComponents::asHex(read<std::array<uint8_t,20>>(c)))<<'}';++found;}catch(...){}}}
+   o<<"],\"item_states_found\":"<<found;}
+  logFile->event("weapon_probe",o.str());
+ }catch(const std::exception& e){logFile->event("weapon_probe_failed","\"reason\":"+jsonString(e.what()));}
+}
 inline uint32_t (*runningSequence)()=nullptr;   // the local player's running action (actionSequenceObserver), set by view_resource_probe.cpp
 // Under mutex. `world`: the World of the local player (the server's in a game of one); `client`: the World with the render models.
 inline Estimate estimateStroke(uintptr_t world,uintptr_t client,uint32_t local,uint32_t entity,uint64_t binding){
@@ -589,8 +629,15 @@ inline Estimate estimateStroke(uintptr_t world,uintptr_t client,uint32_t local,u
    if(!row||index>=8)return false;try{const auto r=nativeImpactComponents::entityAtWorld(world,row);const auto inv=nativeImpactComponents::component(r,unsigned(t.inventory),96);if(!inv)return false;
     const auto s=read<std::array<uint32_t,3>>(inv+12*index);item=s[0];instance=s[2];return true;}catch(...){return false;}};
   {uint32_t item=0,instance=0;const unsigned selected=raw[0xc0];if(selected<20&&stackOf(selected,item,instance)&&item==e.item)e.instance=instance;
-   for(unsigned slot=0;slot<20&&!e.instance;++slot)if(stackOf(slot,item,instance)&&item==e.item&&instance)e.instance=instance;}
-  if(!e.instance){e.why="weapon instance not found";return e;}
+   for(unsigned slot=0;slot<20&&!e.instance;++slot)if(stackOf(slot,item,instance)&&item==e.item&&instance)e.instance=instance;
+   // A guest (2026-10-22, weapon_probe in game-20261022-130133 on the local dedicated server): no slot points at the sword's
+   // stack - it lies in the action bar's row (5673, the third of its 8 stacks, instance 5661, ItemState {row, index, item,
+   // baseDamage 37}). Every stack of every row the slots name is looked through for the item.
+   if(!e.instance){std::vector<uint32_t> rows;for(unsigned slot=0;slot<24;++slot){uint32_t row=0;std::memcpy(&row,raw.data()+8*slot,4);if(row)rows.push_back(row);}
+    std::sort(rows.begin(),rows.end());rows.erase(std::unique(rows.begin(),rows.end()),rows.end());
+    for(const auto r:rows){if(e.instance)break;try{const auto re=nativeImpactComponents::entityAtWorld(world,r);const auto inv=nativeImpactComponents::component(re,unsigned(t.inventory),96);if(!inv)continue;
+      const auto stacks=read<std::array<uint32_t,24>>(inv);for(unsigned k=0;k<8;++k)if(stacks[3*k]==e.item&&stacks[3*k+2]){e.instance=stacks[3*k+2];break;}}catch(...){}}}}
+  if(!e.instance){weaponProbe(world,local,"estimate");e.why="weapon instance not found";return e;}
   const auto inst=nativeImpactComponents::entityAtWorld(world,e.instance);
   const auto state=nativeImpactComponents::component(inst,unsigned(t.itemState),20);if(!state){e.why="no item state";return e;}
   const auto baseDamage=read<uint16_t>(state+0xc);if(!baseDamage){e.why="no base damage";return e;}

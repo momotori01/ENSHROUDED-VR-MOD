@@ -165,11 +165,20 @@ inline std::optional<Received> decode(const std::vector<uint8_t>& bytes){return 
 //   the host (sequence_collider_observer.hpp remoteMelee) - for an arrow it puts the guest's arrow of the host's server
 //   just before that thing (live_melee_targets.hpp steerArrows) - so that the game's own hit - damage, reaction,
 //   effects - is made on it.
-inline constexpr uint8_t actionMagic=0xe6,actionVersion=1,castAction=1,shotAction=2,heldAimAction=3,parryAction=4,hitAction=5;
+//   kind 6, the clocks (2026-10-22, to measure where a guest's action loses its time): each second the sender's clock now
+//   (steady_clock microseconds - the same clock as the logs' "us"), the last clock it heard from the receiver, and how long
+//   it held that (microseconds): with them the receiver has the round trip and the two clocks' difference as NTP does
+//   (online_sync.hpp clockHeard). 0.9.7 and older do not know the kind and drop it.
+//   kind 7, a guard (2026-10-22, user: "decide the guard on the guest and send only whether it held"): an enemy's blow
+//   reached the player while the player guarded, decided on the player's PC when the blow's HitEvent came
+//   (hit_event_intake.hpp); where the player stood (Q32.32, 3 x int64) and flags (1 = blocked). The host's mod gives the
+//   player the health the blow took back (live_melee_targets.hpp undoDamage), as for a parry. Older mods drop the kind.
+inline constexpr uint8_t actionMagic=0xe6,actionVersion=1,castAction=1,shotAction=2,heldAimAction=3,parryAction=4,hitAction=5,clockAction=6,guardAction=7;
 inline constexpr size_t castActionBytes=7,shotActionBytes=5+40,parryActionBytes=5+24,hitActionBytes=5+24+1;
 // A hit with the entity touched (2026-10-22): the id of a creature is the same in the host's World and the guest's.
-inline constexpr size_t hitEntityActionBytes=hitActionBytes+4;
-struct Action {uint8_t kind=0;uint16_t id=0;float strength=0;std::array<uint8_t,40> aim{};std::array<int64_t,3> at{};bool character=false,shot=false;uint32_t entity=0;};
+inline constexpr size_t hitEntityActionBytes=hitActionBytes+4,clockActionBytes=5+8+8+4,guardActionBytes=5+24+1;
+struct Action {uint8_t kind=0;uint16_t id=0;float strength=0;std::array<uint8_t,40> aim{};std::array<int64_t,3> at{};bool character=false,shot=false;uint32_t entity=0;
+    int64_t clockSent=0,clockEcho=0;uint32_t clockHold=0;};
 inline std::vector<uint8_t> encodeCast(uint16_t id,float strength){
     std::vector<uint8_t> out{actionMagic,actionVersion,castAction};detail::put16(out,int(id));
     const auto s=uint16_t(std::lround(std::clamp(std::isfinite(strength)?strength:0.f,0.f,1.f)*65535));out.push_back(uint8_t(s&255));out.push_back(uint8_t(s>>8));return out;
@@ -185,6 +194,13 @@ inline std::vector<uint8_t> encodeHit(uint16_t id,const std::array<int64_t,3>& a
 }
 inline std::vector<uint8_t> encodeParry(uint16_t id,const std::array<int64_t,3>& at){std::vector<uint8_t> out{actionMagic,actionVersion,parryAction};detail::put16(out,int(id));
     const auto* b=reinterpret_cast<const uint8_t*>(at.data());out.insert(out.end(),b,b+24);return out;}
+inline std::vector<uint8_t> encodeClock(uint16_t id,int64_t sentUs,int64_t echoUs,uint32_t holdUs){
+    std::vector<uint8_t> out{actionMagic,actionVersion,clockAction};detail::put16(out,int(id));
+    for(int k=0;k<8;++k)out.push_back(uint8_t(uint64_t(sentUs)>>(8*k)));for(int k=0;k<8;++k)out.push_back(uint8_t(uint64_t(echoUs)>>(8*k)));
+    for(int k=0;k<4;++k)out.push_back(uint8_t(holdUs>>(8*k)));return out;
+}
+inline std::vector<uint8_t> encodeGuard(uint16_t id,const std::array<int64_t,3>& at,uint8_t flags){std::vector<uint8_t> out{actionMagic,actionVersion,guardAction};detail::put16(out,int(id));
+    const auto* b=reinterpret_cast<const uint8_t*>(at.data());out.insert(out.end(),b,b+24);out.push_back(flags);return out;}
 inline std::optional<Action> decodeAction(const uint8_t* data,size_t size){
     if(!data||size<3||data[0]!=actionMagic||data[1]!=actionVersion)return std::nullopt;
     Action a;a.kind=data[2];
@@ -196,6 +212,10 @@ inline std::optional<Action> decodeAction(const uint8_t* data,size_t size){
     if(a.kind==parryAction){if(size!=parryActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);return a;}
     if(a.kind==hitAction){if((size!=hitActionBytes&&size!=hitEntityActionBytes)||data[29]>3)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);a.character=(data[29]&1)!=0;a.shot=(data[29]&2)!=0;
         if(size==hitEntityActionBytes)a.entity=uint32_t(data[30])|uint32_t(data[31])<<8|uint32_t(data[32])<<16|uint32_t(data[33])<<24;return a;}
+    if(a.kind==guardAction){if(size!=guardActionBytes||data[29]>1)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);a.character=data[29]==1;return a;}
+    if(a.kind==clockAction){if(size!=clockActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;
+        uint64_t s=0,e=0;uint32_t h=0;for(int k=0;k<8;++k){s|=uint64_t(data[5+k])<<(8*k);e|=uint64_t(data[13+k])<<(8*k);}for(int k=0;k<4;++k)h|=uint32_t(data[21+k])<<(8*k);
+        a.clockSent=int64_t(s);a.clockEcho=int64_t(e);a.clockHold=h;if(a.clockSent<=0||a.clockEcho<0)return std::nullopt;return a;}
     return std::nullopt;
 }
 

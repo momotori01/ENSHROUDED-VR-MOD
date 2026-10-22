@@ -516,6 +516,9 @@ inline evr::motion::HeadGestureResult publishGesture(const evr::motion::HandFram
 }
 inline bool requested=false,menuRequested=false,tabsRequested=false,altarRequested=false,motionRequested=false,doubleJumpRequested=false,glideRequested=false;
 inline std::atomic<bool> liveGuardHeld{false};
+// A guard decided on the guest (2026-10-22, hit_event_intake.hpp): when, and where the player stood; online_sync.hpp
+// sends it to the host (sync::guardAction), whose mod gives the blow's health back.
+inline std::mutex guardDecidedMutex;inline uint64_t guardDecidedMs=0;inline std::array<int64_t,3> guardDecidedAt{};
 // Building mode: the game's HudScreenType BlueprintMultiTool - 28 until June, 29 in 1.0 (LogicEditor came in at 20; headset
 // report 19 of 2026-10-17, "the quick slot in building mode works differently": the building controls never applied).
 constexpr uint8_t buildingScreen=29;

@@ -221,5 +221,12 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   const auto h=encodeShot(7,camera,true);const auto ha=decodeAction(h.data(),h.size());ck(ha&&ha->kind==heldAimAction&&ha->id==7&&ha->aim==camera);ck(!decodeAction(s.data(),s.size()-1));ck(!decode(s.data(),s.size()));
   auto bad=camera;const Quat zero{0,0,0,0};std::memcpy(bad.data()+24,&zero,16);const auto b=encodeShot(1,bad);ck(!decodeAction(b.data(),b.size()));
   const float nan=std::numeric_limits<float>::quiet_NaN();std::memcpy(bad.data()+24,&nan,4);const auto c=encodeShot(1,bad);ck(!decodeAction(c.data(),c.size()));}
+ // The clocks (2026-10-22): the sender's clock, the echo and the hold come back as they were; a wrong size or a clock of 0 is refused.
+ {const auto c=encodeClock(9,123456789012345LL,98765432109876LL,4321u);ck(c.size()==clockActionBytes&&c[2]==clockAction);const auto a=decodeAction(c.data(),c.size());
+  ck(a&&a->kind==clockAction&&a->id==9&&a->clockSent==123456789012345LL&&a->clockEcho==98765432109876LL&&a->clockHold==4321u);
+  ck(!decodeAction(c.data(),c.size()-1));const auto z=encodeClock(1,0,0,0);ck(!decodeAction(z.data(),z.size()));const auto first=encodeClock(1,5,0,0);ck(decodeAction(first.data(),first.size()).has_value());}
+ // A guard decided on the guest (2026-10-22): the place and the flag come back; another size or flag is refused.
+ {const std::array<int64_t,3> at{11,-22,33};const auto g=encodeGuard(4,at,1);ck(g.size()==guardActionBytes&&g[2]==guardAction);const auto a=decodeAction(g.data(),g.size());
+  ck(a&&a->kind==guardAction&&a->id==4&&a->at==at&&a->character);ck(!decodeAction(g.data(),g.size()-1));auto bad=g;bad[29]=2;ck(!decodeAction(bad.data(),bad.size()));}
  std::cout<<"player_sync "<<n<<" PASS\n";return 0;}
  catch(const std::exception& e){std::cerr<<"player_sync FAIL "<<e.what()<<"\n";return 1;}}

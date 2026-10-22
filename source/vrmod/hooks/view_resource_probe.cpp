@@ -622,6 +622,7 @@ namespace inputActor {inline const bool clientTicksSet=[]{clientWorldTicks=[](ui
 #include "opportunity_take_observer.hpp"
 #include "sequence_request_observer.hpp"
 #include "water_displacement_bridge.hpp"
+#include "hit_event_intake.hpp"
 #include "shadow_history_probe.hpp"
 #include "shared_point_lights.hpp"
 #include "stable_frustum_bridge.hpp"
@@ -3560,6 +3561,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         optional("grass_movement",[&]{grassMovementBridge::install();},[&]{});
         optional("snow_displacement",[&]{snowDisplacementBridge::install();},[&]{});
         optional("water_displacement",[&]{waterDisplacementBridge::install();},[&]{});
+        optional("hit_event_intake",[&]{hitEventIntake::install();},[&]{});
         optional("shadow_history",[&]{shadowHistoryProbe::install();},[&]{});
         {void* const modelStubs[8]{reinterpret_cast<void*>(&evr_vfx_model_stub0),reinterpret_cast<void*>(&evr_vfx_model_stub1),reinterpret_cast<void*>(&evr_vfx_model_stub2),reinterpret_cast<void*>(&evr_vfx_model_stub3),
             reinterpret_cast<void*>(&evr_vfx_model_stub4),reinterpret_cast<void*>(&evr_vfx_model_stub5),reinterpret_cast<void*>(&evr_vfx_model_stub6),reinterpret_cast<void*>(&evr_vfx_model_stub7)};
@@ -4080,7 +4082,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         objectWatch::uninstall();
         statusVignette::uninstall();
         if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
-        vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
+        vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
         shadowProjection::disable();
         detailBinding::disable();
         cullingHistory::disable();
@@ -4128,7 +4130,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             objectWatch::uninstall();
             statusVignette::uninstall();
             if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
-            vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
+            vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
             try{equipmentObserver::disable();}catch(...){}
             try{inputDirection::disable();}catch(...){}
             try{contactQuiescenceObserver::disable();}catch(...){}
@@ -4407,9 +4409,53 @@ struct LazyCamera {
         std::lock_guard<std::mutex> lock(rootCamera::mutex);ready=rootCamera::latest.number!=0;return ready;
     }
 };
+// The host's part for the other players' mods without VR (2026-10-22, user: "update it so that it works whether the friend
+// plays in VR or not"). On the friend's server without VR the guest's decided hits, arrows, parries and guards were heard
+// (online_sync_hit_heard) and never applied: the hooks that apply them came only with the live controller's policies of a
+// VR start. Here the same parts, none of the VR input: the iterator observer (the server World's binding, the own Actor,
+// the own bow's identity), the attack colliders' sweep with the guests' decided hits and weapons, the list of targets on
+// the own Actor's ticks (the host's things near the guests, their arrows steered, their health given back), the server's
+// parry and the spawn of shots. Flags and function pointers at the start; the hooks once the camera knows the local player.
+// EVR_FLAT_HOST_PARTS=0: off (as 0.9.7).
+bool hostPartsWanted=false,hostPartsTried=false,inputActorOn=false,selectionOn=false,bowOn=false;
+void prepareHostParts(){
+    {char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FLAT_HOST_PARTS",v,sizeof v);hostPartsWanted=!(n==1&&v[0]=='0');}
+    if(!hostPartsWanted){logFile->event("online_flat_host_parts","\"enabled\":false,\"reason\":\"EVR_FLAT_HOST_PARTS=0\"");return;}
+    // per event name 300 lines (as a VR start: auto_start.hpp EVR_LOG_NAME_CAP), now that the observers record
+    {unsigned cap=300;if(const char* text=std::getenv("EVR_LOG_NAME_CAP")){char* end=nullptr;const auto n=std::strtoul(text,&end,10);if(end&&!*end&&n>=100&&n<=20000)cap=unsigned(n);}logFile->setNameCap(cap);}
+    nativeImpactComponents::requested=true;actionSequenceObserver::requested=true;   // recording stays on (no eye pairs to wait for)
+    sequenceColliderObserver::requested=true;impactHierarchyObserver::requested=true;attachmentObserver::requested=true;
+    motionColliderApply::requested=true;motionColliderApply::live=true;liveTargets::requested=true;
+    remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;
+    controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
+    inputRanged::liveBowWatch=true;bowSpawnObserver::remoteAlways=true;   // the own shots known as own (not a guest's)
+}
+void installHostParts(){
+    if(!hostPartsWanted||hostPartsTried)return;hostPartsTried=true;
+    const auto part=[](const char* name,void(*install)(),bool& on){
+        try{install();on=true;}catch(const std::exception& e){on=false;logFile->event("optional_hook_skipped","\"hook\":"+jsonString(name)+",\"reason\":"+jsonString(e.what()));}};
+    part("input_actor",[]{inputActor::install();},inputActorOn);
+    // Without the iterator observer the own Actor and bow are not known: the parry and the shots would take the host's own for a guest's.
+    if(inputActorOn){part("motion_event_selection",[]{motionEventSelection::install();},selectionOn);
+        parryObserver::install();part("bow_spawn",[]{bowSpawnObserver::install();},bowOn);}
+    logFile->event("online_flat_host_parts","\"enabled\":true,\"input_actor\":"+std::string(inputActorOn?"true":"false")+",\"targets\":"+(selectionOn?"true":"false")+
+        ",\"parry\":"+(parryObserver::enabled?"true":"false")+",\"shots\":"+(bowOn?"true":"false")+",\"fishing_cast\":false,\"vr_input\":false");
+}
+void removeHostParts() noexcept {
+    if(selectionOn)try{motionEventSelection::disable();}catch(...){}   // a session without a sample is reported, not fatal
+    parryObserver::disable();
+    if(bowOn)try{bowSpawnObserver::disable();}catch(...){}
+    if(inputActorOn)try{inputActor::disable();}catch(...){}
+    selectionOn=bowOn=inputActorOn=false;
+}
 // Another world than before (or the first): everything that belonged to the old Scene is forgotten, not undone.
 void adopt(uintptr_t view) noexcept {
     try{
+        // One library runs through every world of the game here (a VR start loads a fresh copy per world): what the
+        // observers learnt of the old Worlds goes (the World binding keeps eight Worlds at most and is never cleared).
+        {std::lock_guard<std::mutex> lock(nativeImpactComponents::mutex);nativeImpactComponents::bindings.clear();nativeImpactComponents::known.clear();}
+        {std::lock_guard<std::mutex> lock(actionSequenceObserver::mutex);actionSequenceObserver::latest={};actionSequenceObserver::qualified.clear();}
+        {std::lock_guard<std::mutex> lock(remoteMelee::mutex);remoteMelee::weapons={};remoteMelee::players={};remoteMelee::hits={};remoteMelee::peerEntities.clear();}
         remoteBody::bodies.clear();remoteBody::scene=0;motionVisual::scene=0;motionVisual::contextReady=false;
         motionHandVisual::rig.reset();motionHandVisual::poseResource=0;motionHandVisual::sourceHandle=0;
         {std::lock_guard<std::mutex> lock(equipmentObserver::otherMutex);equipmentObserver::others.clear();}
@@ -4507,6 +4553,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_OnlineFlat(void* directory){
         if(!onlineFlat::findWorld){rootCamera::install();cameraInstalled=true;onlineFlat::cameraReady=true;}
         equipmentObserver::requested=true;equipmentObserver::continuous=true;equipmentObserver::otherWorldsPass=true;equipmentObserver::install();
         onlineSync::configure(true);onlineSync::flat=true;
+        onlineFlat::prepareHostParts();
+        if(cameraInstalled)onlineFlat::installHostParts();
         target=reinterpret_cast<void*>(baseAddress+renderRva);
         require(MH_CreateHook(target,reinterpret_cast<void*>(&onlineFlat::render),reinterpret_cast<void**>(&onlineFlat::nativeRender)),"online flat render hook");
         require(MH_EnableHook(target),"online flat render hook enable");hooked=true;
@@ -4518,7 +4566,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_OnlineFlat(void* directory){
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             const auto now=GetTickCount64();
             if(!cameraInstalled&&!cameraBroken&&provenWorldView&&now-onlineFlat::provenSeen.load()<=500&&now-cameraTried>=1000){cameraTried=now;++cameraAttempts;
-                try{if(lazyCamera.poll()){cameraInstalled=true;onlineFlat::cameraReady=true;logFile->event("online_flat_camera","\"installed\":true,\"attempts\":"+std::to_string(cameraAttempts));}}
+                try{if(lazyCamera.poll()){cameraInstalled=true;onlineFlat::cameraReady=true;logFile->event("online_flat_camera","\"installed\":true,\"attempts\":"+std::to_string(cameraAttempts));onlineFlat::installHostParts();}}
                 catch(const std::exception& e){cameraBroken=true;try{rootCamera::disable();}catch(...){}
                     logFile->event("online_flat_camera","\"installed\":false,\"attempts\":"+std::to_string(cameraAttempts)+",\"reason\":"+jsonString(e.what()));}
             }
@@ -4532,6 +4580,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_OnlineFlat(void* directory){
         const bool retiredInTime=!worldDrawn||onlineFlat::retired.load();onlineFlat::retired=true;
         const auto status=MH_DisableHook(target);hooked=false;
         for(unsigned n=0;n<200&&onlineFlat::inFlight.load();n++)std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        onlineFlat::removeHostParts();
         equipmentObserver::disable();if(cameraInstalled)rootCamera::disable();
         const DWORD result=(onlineFlat::failures.load()||!retiredInTime||status!=MH_OK||(!onlineFlat::findWorld&&!onlineFlat::frames.load()))?1u:0u;
         logFile->event("online_flat_complete","\"result\":"+std::to_string(result)+",\"worlds\":"+std::to_string(onlineFlat::worlds)+",\"frames\":"+std::to_string(onlineFlat::frames.load())+",\"skipped\":"+std::to_string(onlineFlat::skipped.load())+
@@ -4541,6 +4590,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_OnlineFlat(void* directory){
     }catch(const std::exception& e){
         onlineFlat::retired=true;
         if(hooked&&target)MH_DisableHook(target);
+        onlineFlat::removeHostParts();
         try{equipmentObserver::disable();}catch(...){}
         try{rootCamera::disable();}catch(...){}
         if(logFile)try{logFile->event("online_flat_failure","\"reason\":"+jsonString(e.what()));}catch(...){}

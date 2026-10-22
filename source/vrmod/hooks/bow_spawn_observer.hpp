@@ -84,6 +84,9 @@ constexpr uintptr_t staffParentRva=0x224c68;
 constexpr float aimFocusLimit=3.f;
 // Other players' shots (observe below). EVR_REMOTE_SHOTS=0: as before (a guest's arrow went the tracked branch).
 inline const bool remoteShotsWanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_SHOTS",v,sizeof v);return !(n==1&&v[0]=='0');}();
+// A host without VR (view_resource_probe.cpp onlineFlat, 2026-10-22): every shot is looked at for the other players' aims,
+// and the staff's casts too - the own ones keep the game's aim (no tracked hands).
+inline bool remoteAlways=false;
 inline constexpr uint64_t remoteShotMs=1000,remoteHeldMs=300;inline unsigned remoteLogs=0;
 // The nearest new aim another player's mod sent (controllerUiFixture::remoteShots) whose start lies within aimFocusLimit
 // of this input's camera focus; a shot is used up, a held aim stays. Returns why none was taken, or "applied".
@@ -142,7 +145,7 @@ __declspec(noinline) bool __fastcall observe(void* output,void* nativeContext,co
  {const ObserverLastError preserve;
   // The one-shot witness stops after 64 calls. The repeatable draw route must keep
   // aiming every shot of a session, so it is not counted out.
-  if(accepting.load()&&caller==baseAddress+callerRva&&(calls.fetch_add(1)<64||controllerUiFixture::bowDrawRequested||controllerUiFixture::rangedAimRequested||controllerUiFixture::liveHandUseRequested)){try{
+  if(accepting.load()&&caller==baseAddress+callerRva&&(calls.fetch_add(1)<64||controllerUiFixture::bowDrawRequested||controllerUiFixture::rangedAimRequested||controllerUiFixture::liveHandUseRequested||remoteAlways)){try{
    const auto c=reinterpret_cast<uintptr_t>(context),v=reinterpret_cast<uintptr_t>(event);
    // Type hash belongs to the outer BlobVariant, not this resolved payload.
    // 1e951d is exclusively the 51e20bf3 branch (native byte signatures checked).
@@ -272,7 +275,7 @@ __declspec(noinline) bool __fastcall observe(void* output,void* nativeContext,co
      <<",\"context_bytes\":"<<jsonString(nativeImpactComponents::asHex(ctx))<<",\"event_bytes\":"<<jsonString(nativeImpactComponents::asHex(evt))
      <<",\"camera_bytes\":"<<jsonString(nativeImpactComponents::asHex(camera))
      <<",\"spawn_kind\":"<<unsigned(evt[0x90])<<",\"is_projectile\":"<<(evt[0x148]?"true":"false");pending=row.str();
-   }else if(controllerUiFixture::rangedAimRequested&&parent.caller==staffParentRva&&parent.context==context&&parent.event==event){
+   }else if((controllerUiFixture::rangedAimRequested||remoteAlways)&&parent.caller==staffParentRva&&parent.context==context&&parent.event==event){
     // Staff cast. Unreviewed items and failed checks keep the native camera aim.
     ctx=read<decltype(ctx)>(c);evt=read<decltype(evt)>(v);input=read<uintptr_t>(c+0x88);camera=read<decltype(camera)>(input+0x28);
     const auto weapon=read<uintptr_t>(c+0xb8);const auto identity=inputRanged::bowIdentity(input,weapon);
@@ -289,7 +292,7 @@ __declspec(noinline) bool __fastcall observe(void* output,void* nativeContext,co
      std::memcpy(privateInput.data()+0x28,effectiveCamera.data(),44);
      const auto pointer=reinterpret_cast<uintptr_t>(privateInput.data());std::memcpy(privateContext.data()+0x88,&pointer,8);
      callContext=privateContext.data();aimed=true;
-    }else if(motion::rangedAimModel(nativeItem)&&rangedAim(nativeItem,identity,nativeWeapon[0],camera,aim,aimFrame,reason,bothHands)){
+    }else if(controllerUiFixture::rangedAimRequested&&motion::rangedAimModel(nativeItem)&&rangedAim(nativeItem,identity,nativeWeapon[0],camera,aim,aimFrame,reason,bothHands)){
      effectiveCamera=motion::bowAimCamera(aim,evt,false);
      sourceInput=read<decltype(sourceInput)>(input);privateInput=sourceInput;privateContext=ctx;
      std::memcpy(privateInput.data()+0x28,effectiveCamera.data(),44);

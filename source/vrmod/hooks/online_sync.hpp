@@ -82,11 +82,35 @@ inline std::vector<Character> characters(uint32_t local){
 }
 // Actions of the other players' mods (include/evr/player_sync.hpp sync::Action): each id once per sender.
 inline std::map<uint64_t,std::array<uint16_t,8>> actionsSeen;inline uint64_t actionsHeard=0,actionsRefused=0,actionsSent=0;inline unsigned shotLogs=0;
+// The clocks of the two PCs (sync::clockAction, 2026-10-22): per player the last clock heard and when; each round trip is
+// logged (online_clock): rtt_us, and offset_us = their steady clock minus ours (the logs' "us"), so that a hit's times in the
+// two PCs' logs can be put side by side. The sample of the smallest round trip is the best offset.
+struct PeerClock {int64_t heard=0,heardAt=0,bestRtt=INT64_MAX,bestOffset=0;unsigned samples=0;};
+inline std::map<uint64_t,PeerClock> peerClocks;inline uint16_t clockId=0;inline int64_t clockSentAt=0;inline unsigned clockLogs=0;
+inline int64_t steadyUs(){return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
+inline void clockHeard(uint64_t from,const sync::Action& a){
+    const auto now=steadyUs();auto& c=peerClocks[from];c.heard=a.clockSent;c.heardAt=now;
+    if(!a.clockEcho)return;
+    const int64_t rtt=(now-a.clockEcho)-int64_t(a.clockHold);if(rtt<0||rtt>10000000)return;
+    const int64_t offset=((a.clockSent-int64_t(a.clockHold)-a.clockEcho)+(a.clockSent-now))/2;
+    ++c.samples;if(rtt<c.bestRtt){c.bestRtt=rtt;c.bestOffset=offset;}
+    if(clockLogs<300||c.samples%10==0){++clockLogs;logFile->event("online_clock","\"player\":\""+steamLink::tail(from)+"\",\"rtt_us\":"+std::to_string(rtt)+",\"offset_us\":"+std::to_string(offset)+
+        ",\"best_rtt_us\":"+std::to_string(c.bestRtt)+",\"best_offset_us\":"+std::to_string(c.bestOffset)+",\"samples\":"+std::to_string(c.samples));}
+}
+inline void sendClock(){
+    const auto now=steadyUs();if(clockSentAt&&now-clockSentAt<1000000)return;clockSentAt=now;++clockId;
+    for(auto& p:peers.all())if(p.listed){const auto it=peerClocks.find(p.id);int64_t echo=0;uint32_t hold=0;
+        if(it!=peerClocks.end()&&it->second.heard&&now-it->second.heardAt<5000000){echo=it->second.heard;hold=uint32_t(now-it->second.heardAt);}
+        if(steamLink::send(p.id,sync::encodeClock(clockId,now,echo,hold)))++actionsSent;}
+}
 inline void action(uint64_t from,const uint8_t* data,size_t size){
     const auto a=sync::decodeAction(data,size);if(!a){++actionsRefused;return;}
     auto& seen=actionsSeen[from];const uint16_t key=uint16_t(a->id^(uint16_t(a->kind)<<12));
     if(std::find(seen.begin(),seen.end(),key)!=seen.end())return;
     std::rotate(seen.rbegin(),seen.rbegin()+1,seen.rend());seen[0]=key;++actionsHeard;
+    if(a->kind==sync::clockAction){clockHeard(from,*a);return;}
+    if(a->kind==sync::guardAction){const bool back=a->character&&controllerUiFixture::undoDamage&&controllerUiFixture::undoDamage(a->at,900);
+        if(logs++<200)logFile->event("online_sync_guard_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"blocked\":"+(a->character?"true":"false")+",\"damage_given_back\":"+(back?"true":"false"));return;}
     if(a->kind==sync::castAction){fishingCharge::peerCast(from,a->strength);
         if(logs++<200)logFile->event("online_sync_cast_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"strength\":"+std::to_string(a->strength));}
     if(a->kind==sync::hitAction&&a->shot){if(controllerUiFixture::shotHitArrived)controllerUiFixture::shotHitArrived(a->at,a->character,a->entity,GetTickCount64());
@@ -166,6 +190,17 @@ inline void sendParries(){
     if(!parryRepeats)return;--parryRepeats;
     for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,parryBytes))++actionsSent;
 }
+// This player's guards (sync::guardAction), decided by hit_event_intake.hpp when an enemy's blow came while guarding:
+// three frames in a row, while this player's game is a client.
+inline uint64_t guardSeen=0;inline uint16_t guardId=0;inline unsigned guardRepeats=0;inline std::vector<uint8_t> guardBytes;
+inline void sendGuards(){
+    {std::lock_guard<std::mutex> lock(controllerUiFixture::guardDecidedMutex);
+     if(controllerUiFixture::guardDecidedMs&&controllerUiFixture::guardDecidedMs!=guardSeen){guardSeen=controllerUiFixture::guardDecidedMs;
+        guardBytes=sync::encodeGuard(++guardId,controllerUiFixture::guardDecidedAt,1);guardRepeats=3;
+        if(logs++<200)logFile->event("online_sync_guard_sent","\"id\":"+std::to_string(guardId));}}
+    if(!guardRepeats)return;--guardRepeats;
+    for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,guardBytes))++actionsSent;
+}
 inline void sendShots(){
     controllerUiFixture::BowAim b;{std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);b=controllerUiFixture::bowAim;}
     const auto now=GetTickCount64();const bool client=nativeImpactComponents::clientNow(now);
@@ -200,7 +235,7 @@ inline void frame(uint64_t renderSerial) noexcept {
             const auto r=sync::decode(data,size);if(!r){++refused;return;}
             if(!peers.heard(from,*r,now,receiving()))++notCounted;
             else if(!r->roster.empty()){++rostersHeard;for(const auto id:r->roster)if(id!=steamLink::self){if(!learned.count(id)){++learnedTotal;if(logs++<200)logFile->event("online_sync_learned","\"player\":\""+steamLink::tail(id)+"\",\"from\":\""+steamLink::tail(from)+"\"");}learned[id]=now;}}});
-        sendCasts();sendShots();sendParries();sendHits();
+        sendCasts();sendShots();sendParries();sendHits();sendGuards();sendClock();
         // Out: the body of this frame; for a second after it stopped (the view left first person, the hands are gone)
         // "the IK is paused", so that the others let go of the body at once; a hello otherwise.
         const auto& mine=motionBodyIk::published;const bool have=mine.have&&mine.serial==renderSerial;

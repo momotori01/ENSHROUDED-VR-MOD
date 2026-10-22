@@ -70,7 +70,12 @@ inline double metres(const WorldPositionQ32& a,const WorldPositionQ32& b){const 
 inline void collider(uintptr_t state,uint32_t entity,void* query,uint32_t sequence,uint32_t localActor,unsigned sample,const Player* own=nullptr) noexcept {
  try{
   const auto now=GetTickCount64();const auto last=weaponMs.load();
-  if(!enabled||!sequence||!last||now<last||now-last>500)return;
+  // A hit the other player's mod decided needs no weapon of theirs here (2026-10-22: a host whose drawing of that player's
+  // weapon lags or is missing took none of their hits); the sweep with the sent weapon does.
+  const bool weaponFresh=last&&now>=last&&now-last<=500;
+  bool hitsWaiting=false;
+  if(nearestTarget&&!weaponFresh){std::lock_guard<std::mutex> lock(mutex);for(const auto& h:hits)if(!h.used&&now>=h.ms&&now-h.ms<=hitMs){hitsWaiting=true;break;}}
+  if(!enabled||!sequence||(!weaponFresh&&!hitsWaiting))return;
   const auto world=read<uintptr_t>(state+0x30);if(!world)return;
   std::array<Player,8> list;std::array<Weapon,8> sent;{std::lock_guard<std::mutex> lock(mutex);list=players;sent=weapons;}
   if(own)list[list.size()-1]=*own;
@@ -99,6 +104,7 @@ inline void collider(uintptr_t state,uint32_t entity,void* query,uint32_t sequen
       ",\"target\":"+std::to_string(thing)+",\"character\":"+(hit.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-hit.ms)+",\"guest_to_host_metres\":"+std::to_string(away)+",\"sweep\":"+std::to_string(hit.sweeps)+",\"sent_entity\":"+std::to_string(hit.entity)+",\"by_entity\":"+(hit.entity&&hit.entity==thing?"true":"false"));
      return;}
     if(have&&confirmedLogs++<300)logFile->event("remote_melee_hit_unmatched","\"attacker\":"+std::to_string(p.entity)+",\"character\":"+(hit.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-hit.ms)+",\"sent_entity\":"+std::to_string(hit.entity));}
+   if(!weaponFresh)return;
    ++checked;const Weapon* best=nullptr;double bestMetres=4;uint64_t nearestAge=UINT64_MAX;double nearestMetres=-1;
    for(const auto& w:sent){if(!w.ms||now<w.ms)continue;const double m=metres(w.root,p.at);
     if(nearestMetres<0||m<nearestMetres){nearestMetres=m;nearestAge=now-w.ms;}

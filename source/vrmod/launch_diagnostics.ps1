@@ -271,6 +271,9 @@ try {
     if($CaptureShaders){$env:EVR_CAPTURE_SHADERS='1'}else{Remove-Item Env:EVR_CAPTURE_SHADERS -ErrorAction SilentlyContinue}
     $arguments=@{}
     if ($DirectPlay) { $arguments.ArgumentList='--play' }
+    # EVR_GAME_ARGS (2026-10-22): the game's arguments instead, e.g. '+connect 127.0.0.1:15637' to join the local dedicated
+    # server as a guest (S:\SteamLibrary\steamapps\common\EnshroudedServer, listening on 127.0.0.1 only).
+    if ($env:EVR_GAME_ARGS) { $arguments.ArgumentList=$env:EVR_GAME_ARGS }
     # Interactive tests need an actual visible game surface; helper processes remain hidden.
     $gameWindowStyle=if($InteractiveWindow){'Normal'}else{'Hidden'}
     # VR launches render the eyes with DLSS (user decision 2026-10-06); only antiAliasing (and dlss with

@@ -10,6 +10,7 @@ import csv
 import hashlib
 import json
 import pathlib
+import re
 import subprocess
 import time
 from inject_camera_observer import inject
@@ -29,8 +30,9 @@ def main():
     mod = pathlib.Path(__file__).resolve().parents[1]
     binary = mod / 'build/bin/Release'
     game = mod.parent / 'enshrouded.exe'
-    profile = json.loads((mod / 'config/profiles/build23966345.json').read_text())
-    if hashlib.sha256(game.read_bytes()).hexdigest() != profile['exe_sha256']: raise ValueError('unsupported game hash')
+    # the build the hook library is made for (include/evr/game_build.hpp; the June profile's hash was left from before 1.0)
+    supported = re.search(r'sha256Prefix="([0-9a-f]+)"', (mod / 'include/evr/game_build.hpp').read_text(encoding='utf-8')).group(1)
+    if not hashlib.sha256(game.read_bytes()).hexdigest().startswith(supported): raise ValueError('unsupported game hash')
     if bool(args.launch) == bool(args.attach): p.error('one of --launch and --attach')
     if args.attach:
         if args.proof: p.error('--attach finds the world itself: no --proof')

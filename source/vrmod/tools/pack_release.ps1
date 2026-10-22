@@ -1,5 +1,5 @@
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')][string]$Version='0.1.0',
+    [ValidatePattern('^\d+\.\d+\.\d+(\.\d+)?$')][string]$Version='0.1.0',   # 2026-10-22, user: 0.0.0.1 a step from 0.9.8 on (x.y.z.w)
     [switch]$Install,         # also put the package into this game folder (the game must be closed)
     # The GitHub repository whose releases the update button looks at (EnshroudedVR\Update-EnshroudedVR.ps1 reads it from
     # the package's manifest). -ReleaseZip: also EnshroudedVR-<Version>.zip in vrmod\release, the asset of the release with the
