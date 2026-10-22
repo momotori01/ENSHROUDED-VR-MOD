@@ -1013,6 +1013,32 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateImage(VkDevice d, const VkImageCreateInf
         if (n <= 64) try { note("sweep_usage_added", "\"format\":" + std::to_string(info->format) + ",\"width\":" + std::to_string(info->extent.width) +
             ",\"height\":" + std::to_string(info->extent.height) + ",\"usage\":" + std::to_string(info->usage)); } catch (...) {}
     }
+    // The eye targets (2026-10-23, a player's log: Apple Vision Pro through SteamVR, eyes of 4294 x 4138, full screen
+    // forced to 3840 x 2160, vsync on): the game made them without the transfer usages there (usage 28; 31 on this PC,
+    // also with that player's resolution scale 0.67 - Mock game-20261023-004801 - so not that; which setting is not
+    // known), so the copy into the headset's swapchain was refused ("stereo transfer missing image
+    // usage") and the VR session stopped at its first pair. An RGBA8 colour target of an eye swapchain's size gets both
+    // transfer usages - what it has here anyway. Not the runtime's own images (made inside xrCreateSwapchain, or with
+    // external memory: shared with the compositor, whose import must match).
+    VkImageCreateInfo eyeTarget{};
+    if (info && !::evr::creatingXrSwapchain && info->imageType == VK_IMAGE_TYPE_2D && info->tiling == VK_IMAGE_TILING_OPTIMAL &&
+        info->mipLevels == 1 && info->arrayLayers == 1 && info->samples == VK_SAMPLE_COUNT_1_BIT &&
+        (info->format == VK_FORMAT_R8G8B8A8_UNORM || info->format == VK_FORMAT_R8G8B8A8_SRGB) && (info->usage & VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT)) {
+        bool eyeSized = false, external = false;
+        for (int e = 0; e < 2; ++e) { const auto w = ::evr::eyeExtents.width[e].load(), h = ::evr::eyeExtents.height[e].load();
+            if (w && h && info->extent.width == w && info->extent.height == h) eyeSized = true; }
+        for (auto next = reinterpret_cast<const VkBaseInStructure *>(info->pNext); next; next = next->pNext)
+            if (next->sType == VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO) external = true;
+        if (eyeSized && !external) {
+            constexpr VkImageUsageFlags both = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+            const auto asked = info->usage;
+            if ((asked & both) != both) { eyeTarget = *info; eyeTarget.usage |= both; info = &eyeTarget; }
+            // on record: what the game asked for and what it got (here 31 both; the player's log: 28 asked)
+            static std::atomic<unsigned> logged{0};
+            if (logged.fetch_add(1) < 8) try { note("eye_target_image", "\"format\":" + std::to_string(info->format) + ",\"width\":" + std::to_string(info->extent.width) +
+                ",\"height\":" + std::to_string(info->extent.height) + ",\"asked_usage\":" + std::to_string(asked) + ",\"usage\":" + std::to_string(info->usage)); } catch (...) {}
+        }
+    }
     // The eyes' sun shadow maps can be copied from one to the other (shadow_share.hpp).
     VkImageCreateInfo shareable{};
     if (info && shadowShareCreate(*info, shareable)) info = &shareable;

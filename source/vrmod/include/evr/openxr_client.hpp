@@ -1,5 +1,6 @@
 #pragma once
 #include <iomanip>
+#include <atomic>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -69,6 +70,13 @@ struct UiQuadPlacement {
     std::array<UiQuadPart, 12> parts{};
     uint32_t partCount = 0;
 };
+// The eye swapchains' size and the swapchain creation in progress, for the Vulkan layer's image creation
+// (layer/diagnostic_layer.cpp evrCreateImage: the game's eye targets of that size get the transfer usages the copy into
+// the swapchain needs; images the runtime makes inside xrCreateSwapchain are left as they are).
+struct EyeExtents {std::atomic<uint32_t> width[2]{},height[2]{};};
+inline EyeExtents eyeExtents;
+inline thread_local bool creatingXrSwapchain=false;
+struct CreatingXrSwapchain {CreatingXrSwapchain(){creatingXrSwapchain=true;}~CreatingXrSwapchain(){creatingXrSwapchain=false;}};
 class OpenXrClient : private OpenXrDispatch
 {
     Log &log;
@@ -790,7 +798,8 @@ class OpenXrClient : private OpenXrDispatch
             sc.width = t.width;
             sc.height = t.height;
             sc.faceCount = sc.arraySize = sc.mipCount = 1;
-            xrCheck(xrCreateSwapchain(session, &sc, &t.handle), "xrCreateSwapchain");
+            {const CreatingXrSwapchain creating;xrCheck(xrCreateSwapchain(session, &sc, &t.handle), "xrCreateSwapchain");}
+            eyeExtents.width[eye]=t.width;eyeExtents.height[eye]=t.height;
             xrCheck(xrEnumerateSwapchainImages(t.handle, 0, &n, nullptr), "swap images");
             t.images.resize(n, {XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
             xrCheck(xrEnumerateSwapchainImages(
@@ -824,7 +833,7 @@ class OpenXrClient : private OpenXrDispatch
             XrSwapchainCreateInfo sc{XR_TYPE_SWAPCHAIN_CREATE_INFO};
             sc.usageFlags=XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT|XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT|XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT;
             sc.format=requested;sc.width=width;sc.height=height;sc.sampleCount=sc.faceCount=sc.arraySize=sc.mipCount=1;
-            xrCheck(xrCreateSwapchain(session,&sc,&next.handle),"UI create swapchain");
+            {const CreatingXrSwapchain creating;xrCheck(xrCreateSwapchain(session,&sc,&next.handle),"UI create swapchain");}
             uint32_t n=0;xrCheck(xrEnumerateSwapchainImages(next.handle,0,&n,nullptr),"UI image count");
             if (!n) throw std::runtime_error("UI swapchain has no images");
             next.images.resize(n,{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
