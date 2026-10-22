@@ -8,6 +8,7 @@
 #include <evr/fov_crop.hpp>
 #include <evr/symmetric_fov.hpp>
 #include <evr/openxr_dispatch.hpp>
+#include <evr/process_exit.hpp>
 #include <evr/vulkan.hpp>
 #include <functional>
 #include <openxr/openxr_platform.h>
@@ -1372,6 +1373,8 @@ class OpenXrClient : private OpenXrDispatch
     void shutdown() noexcept
     {
         if (!instance)
+            return;
+        if (processExiting()) // the runtime may be half gone (process_exit.hpp); the handles end with the process
             return;
         if (vk.device && vk.vkDeviceWaitIdle)
             vk.vkDeviceWaitIdle(vk.device);

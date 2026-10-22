@@ -3,6 +3,7 @@
 #include <evr/vulkan.hpp>
 #include <evr/vulkan_extensions.hpp>
 #include <evr/openxr_dispatch.hpp>
+#include <evr/process_exit.hpp>
 #include <openxr/openxr_platform.h>
 #include <filesystem>
 
@@ -42,6 +43,7 @@ class XrPreflight
     XrSystemId system = XR_NULL_SYSTEM_ID;
     void cleanup() noexcept
     {
+        if (processExiting()) return; // static destructor at process exit: leave the runtime alone (process_exit.hpp)
         XrPreflightGuard guard;
         if (instance && destroy) destroy(instance);
         instance = XR_NULL_HANDLE;

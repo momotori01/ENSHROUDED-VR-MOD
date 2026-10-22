@@ -37,7 +37,14 @@ struct Skeleton {
 // legsRest (0..1): the legs leave the animation for the rest pose hanging under the hips (1) - the double jump's flip, whose
 // feet came up in front of the eyes (user, 2026-10-18 after the headset run of 13:30: "the double jump without the legs'
 // animation"); between 0 and 1 a blend, for the way in and out.
-struct Targets {Pose head;std::array<Pose,2> socket;std::array<bool,2> hand{true,true};bool swim=false;bool hipsGiven=false;Pose hips=identityPose();float legsRest=0;};
+// legsBack (radians): the hanging legs swung back by this much about the body's right (the glider's flying-squirrel pose,
+// user 2026-10-22 23:30: "gliding is a flying squirrel's pose - can the legs, the body, stretch backward?"); 0 straight down.
+// legsHeld (with heldWeight 0..1): the hanging legs are these instead of the rest pose's - the legs of the first jump,
+// kept at the double jump's second press (legsNow below; user 2026-10-22 23:45: "can the double jump's legs move as in the
+// first jump? suddenly standing straight bothers me a little"); toward the rest pose (swung back by legsBack) as the
+// weight falls, for the glider.
+struct Targets {Pose head;std::array<Pose,2> socket;std::array<bool,2> hand{true,true};bool swim=false;bool hipsGiven=false;Pose hips=identityPose();float legsRest=0;float legsBack=0;
+ const std::vector<Pose>* legsHeld=nullptr;float heldWeight=0;};
 struct Settings {
  Vec3 eyeInHead{0,.0522f,.1f}; // head joint -> midpoint of the eye joints in the rest pose (measured)
  // Neck pivot -> eyes, in the head's frame. Fitted to the headset poses of the first real-device run (2026-10-11,
@@ -99,6 +106,15 @@ inline std::vector<Pose> globals(const std::vector<Joint>& joints,const std::vec
  std::vector<Pose> out(joints.size());
  for(size_t i=0;i<joints.size();i++){if(parents[i]!=UINT16_MAX&&parents[i]>=i)throw std::invalid_argument("body skeleton order");
   out[i]=parents[i]==UINT16_MAX?pose(joints[i]):compose(out[parents[i]],pose(joints[i]));}
+ return out;
+}
+// The animation's legs now, from the hips and without the animation's heading (what Targets::legsHeld takes).
+inline std::vector<Pose> legsNow(const std::vector<Joint>& animated,const std::vector<Joint>& rest,const std::vector<uint16_t>& parents,const Skeleton& k={}){
+ const auto R=globals(rest,parents),A=globals(animated,parents);
+ if(k.hips>=A.size())throw std::invalid_argument("body ik joint");
+ const auto un=inverse(levelHeading(rotate(multiply(A[k.hips].orientation,inverse(R[k.hips].orientation)),{0,0,1}),{0,0,0,1}));
+ std::vector<Pose> out(A.size());
+ for(size_t j=0;j<A.size();j++)out[j]={normalized(multiply(un,A[j].orientation)),rotate(un,A[j].position-A[k.hips].position)};
  return out;
 }
 inline std::vector<Joint> solve(const std::vector<Joint>& animated,const std::vector<Joint>& rest,const std::vector<uint16_t>& parents,
@@ -172,14 +188,19 @@ inline std::vector<Joint> solve(const std::vector<Joint>& animated,const std::ve
  //    legsRest: toward the rest pose's leg, hanging from the hips (its foot that far below them).
  const auto yawDelta=normalized(multiply(yaw,inverse(animatedYaw)));
  const float hang=std::clamp(t.legsRest,0.f,1.f);
+ const float swing=std::isfinite(t.legsBack)?std::clamp(t.legsBack,0.f,1.6f):0.f;
+ const Quat back{std::sin(swing*.5f),0,0,std::cos(swing*.5f)},backNow{std::sin(swing*hang*.5f),0,0,std::cos(swing*hang*.5f)};   // about the body's right: down turns to behind
+ const float hw=t.legsHeld&&t.legsHeld->size()==count&&std::isfinite(t.heldWeight)?std::clamp(t.heldWeight,0.f,1.f):0.f;
+ const auto restLeg=[&](uint16_t j){const auto r=rotate(back,R[j].position-R[k.hips].position);return hw>0?r+((*t.legsHeld)[j].position-r)*hw:r;};
+ const auto restTurn=[&](uint16_t j){const auto r=multiply(back,R[j].orientation);return hw>0?blend(r,(*t.legsHeld)[j].orientation,hw):r;};
  const auto under=[&](uint16_t j){const auto a=rotate(yawDelta,A[j].position-A[k.hips].position);
-  return hang>0?a+(turned(R[j].position-R[k.hips].position)-a)*hang:a;};
+  return hang>0?a+(turned(restLeg(j))-a)*hang:a;};
  for(unsigned leg=0;leg<2&&!t.swim;leg++){
   const auto T0=under(k.thigh[leg]),K0=under(k.knee[leg]),F0=under(k.ankle[leg]);
   const float a=length(R[k.knee[leg]].position-R[k.thigh[leg]].position),b=length(R[k.ankle[leg]].position-R[k.knee[leg]].position); // rest lengths: an animation may stretch a bone
   const auto T=onHips(k.thigh[leg]).position;
   Vec3 target{hips.x+F0.x,A[k.ankle[leg]].position.y,hips.z+F0.z};
-  if(hang>0)target.y+=(hips.y+R[k.ankle[leg]].position.y-R[k.hips].position.y-target.y)*hang;
+  if(hang>0)target.y+=(hips.y+restLeg(k.ankle[leg]).y-target.y)*hang;
   // Hips above the animation (it crouches or lunges, the player stands): the foot stays on the ground and comes in
   // under the hip as far as the leg needs; only a leg too short even straight down leaves the ground.
   const float reach=a+b-1e-3f,down=T.y-target.y;
@@ -187,13 +208,13 @@ inline std::vector<Joint> solve(const std::vector<Joint>& animated,const std::ve
    if(down>0&&down<reach)target=Vec3{T.x,target.y,T.z}+unit(out,{0,0,1})*std::sqrt(reach*reach-down*down);
    else{r.legShort[leg]=std::max(down-reach,0.f);target=T+Vec3{0,-reach,0};}}
   const auto bend=K0-(T0+F0)*.5f;                                    // a straight animated leg gives no direction: forward then
-  const auto pole=bend+turned({0,0,s.kneeForward})*std::clamp(1-length(bend)/.03f,0.f,1.f);
+  const auto pole=bend+turned(rotate(backNow,{0,0,s.kneeForward}))*std::clamp(1-length(bend)/.03f,0.f,1.f);
   const auto knee=twoBoneMiddle(T,target,a,b,pole);
   const auto u0=unit(K0-T0,{0,-1,0}),f0=unit(F0-K0,{0,-1,0}),u1=unit(knee-T,u0),f1=unit(target-knee,f0);
   auto n0=cross(u0,f0);if(length(n0)<1e-3f)n0=cross(pole,unit(F0-T0,u0));
   auto n1=cross(u1,f1);if(length(n1)<1e-3f)n1=cross(pole,unit(target-T,u1));
   const auto from=[&](uint16_t j,Quat q){const auto animatedBase=multiply(yawDelta,A[j].orientation);
-   return multiply(q,hang>0?blend(animatedBase,multiply(yaw,R[j].orientation),hang):animatedBase);};
+   return multiply(q,hang>0?blend(animatedBase,multiply(yaw,restTurn(j)),hang):animatedBase);};
   const auto shin=alignFrames(f0,n0,f1,n1);
   put(k.thigh[leg],{from(k.thigh[leg],alignFrames(u0,n0,u1,n1)),T});
   put(k.knee[leg],{from(k.knee[leg],shin),knee});put(k.kneeHelper[leg],{from(k.kneeHelper[leg],{0,0,0,1}),knee});

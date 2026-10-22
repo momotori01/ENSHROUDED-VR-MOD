@@ -228,5 +228,11 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
  // A guard decided on the guest (2026-10-22): the place and the flag come back; another size or flag is refused.
  {const std::array<int64_t,3> at{11,-22,33};const auto g=encodeGuard(4,at,1);ck(g.size()==guardActionBytes&&g[2]==guardAction);const auto a=decodeAction(g.data(),g.size());
   ck(a&&a->kind==guardAction&&a->id==4&&a->at==at&&a->character);ck(!decodeAction(g.data(),g.size()-1));auto bad=g;bad[29]=2;ck(!decodeAction(bad.data(),bad.size()));}
+ // kind 8, a shot's surface: the place as it was and the heading back as a unit vector (int16 steps); a zero heading or
+ // a wrong size is refused
+ {const std::array<int64_t,3> at{int64_t(3480)<<32,int64_t(812)<<32,-(int64_t(1712)<<32)};const auto g=encodeSurfaceShot(9,at,{0,-.6f,1.6f});
+  ck(g.size()==surfaceShotActionBytes&&g[2]==surfaceShotAction);const auto a=decodeAction(g.data(),g.size());
+  ck(a&&a->kind==surfaceShotAction&&a->id==9&&a->at==at&&a->shot&&std::abs(length(a->dir)-1)<1e-4f&&std::abs(a->dir.y+.3511f)<1e-3f&&std::abs(a->dir.z-.9363f)<1e-3f&&std::abs(a->dir.x)<1e-4f);
+  ck(!decodeAction(g.data(),g.size()-1));const auto zero=encodeSurfaceShot(9,at,{0,0,0});ck(!decodeAction(zero.data(),zero.size()));}
  std::cout<<"player_sync "<<n<<" PASS\n";return 0;}
  catch(const std::exception& e){std::cerr<<"player_sync FAIL "<<e.what()<<"\n";return 1;}}

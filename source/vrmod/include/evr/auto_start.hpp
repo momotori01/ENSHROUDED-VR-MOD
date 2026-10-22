@@ -27,6 +27,19 @@ inline bool field(const std::string& text,const std::string& name,size_t& begin,
     }
     return found==1;
 }
+// The same for a value of true or false without quotes ("enableHdr": true).
+inline bool flag(const std::string& text,const std::string& name,size_t& begin,size_t& end){
+    const std::string key="\""+name+"\"";size_t found=0;
+    for(size_t at=text.find(key);at!=std::string::npos;at=text.find(key,at+1)){
+        size_t i=at+key.size();
+        while(i<text.size()&&(text[i]==' '||text[i]=='\t'))++i;
+        if(i>=text.size()||text[i]!=':')continue;
+        ++i;while(i<text.size()&&(text[i]==' '||text[i]=='\t'||text[i]=='\r'||text[i]=='\n'))++i;
+        for(const char* v:{"true","false"}){const std::string w=v;
+            if(text.compare(i,w.size(),w)==0&&(i+w.size()>=text.size()||!std::isalnum(static_cast<unsigned char>(text[i+w.size()])))){++found;begin=i;end=i+w.size();break;}}
+    }
+    return found==1;
+}
 inline bool word(const std::string& s){if(s.empty()||s.size()>40)return false;for(const char c:s)if(!std::isalnum(static_cast<unsigned char>(c)))return false;return true;}
 struct Change {std::string name,original,applied;};
 struct RenderRecord {std::vector<Change> changes;};
@@ -69,6 +82,13 @@ inline bool applyVr(const std::string& text,const std::string& mode,const Render
     // pairs a second. The same scale for FSR 3 (keen::pc::RenderFsr3PresetSetting: UltraPerformance, Performance,
     // Balance, Quality, Native - "Balance", not "Balanced"); DLAA is FSR 3's Native. A file without the field is left.
     if(field(out,"fsr3",b,e)){const auto fsr=fsr3Preset(mode);if(!fsr.empty()&&!put("fsr3",fsr))return false;}
+    // HDR (2026-10-23, a player's report, Apple Vision Pro through SteamVR, the game's HDR on): the game's final picture
+    // is then not the 8-bit RGBA the mod takes the eyes from ("unsupported calibration target"), and the VR session
+    // stopped 10 s into the world. A VR start turns the game's HDR off; put back at the next start without VR. A file
+    // without the field, or with HDR off, is left.
+    // (A second VR start before it was put back keeps the first start's original, as for the others.)
+    if(flag(out,"enableHdr",b,e)){const auto now=out.substr(b,e-b),was=original("enableHdr",now);
+        if(now=="true"||was=="true"){record.changes.push_back({"enableHdr",was,"false"});out=out.substr(0,b)+"false"+out.substr(e);}}
     if(giQuality.empty()||giQuality=="Keep")return true;
     if(!word(giQuality)){reason="the GI quality '"+giQuality+"' is not a word";return false;}
     return put("dynamicGi",giQuality);
@@ -77,7 +97,7 @@ inline bool applyVr(const std::string& text,const std::string& mode,const Render
 inline std::string restore(const std::string& text,const RenderRecord& record,std::vector<std::string>* restored=nullptr){
     auto out=text;
     for(const auto& c:record.changes){size_t b=0,e=0;
-        if(!field(out,c.name,b,e)||out.substr(b,e-b)!=c.applied||c.applied==c.original)continue;
+        if(!(field(out,c.name,b,e)||flag(out,c.name,b,e))||out.substr(b,e-b)!=c.applied||c.applied==c.original)continue;
         out=out.substr(0,b)+c.original+out.substr(e);if(restored)restored->push_back(c.name);}
     return out;
 }

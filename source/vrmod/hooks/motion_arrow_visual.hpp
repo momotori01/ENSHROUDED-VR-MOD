@@ -40,7 +40,8 @@ inline bool haveRelative=false,wasHeld=false;inline Quat relative{0,0,0,1};inlin
 // the 62 bows; no skill, perk, buff or arrow changes the speed, the gravity or the drag - docs/analysis/
 // arrow_flight_skills_20261021): the shown ranged weapon's item in include/evr/bow_speed_catalog.hpp, 90 for one not
 // in it. EVR_ARROW_FLIGHT_SPEED=<m/s> sets one speed for every bow (a test).
-struct Flight {bool on=false,stuck=false,reported=false,strong=false;float speed=90,gravity=25;uint32_t item=0;uint64_t serial=0,start=0,stuckAt=0;std::array<uint8_t,56> transform{};Vec3 dir{};Quat rotation{0,0,0,1};float reach=1e9f;std::array<int64_t,3> last{};};
+struct Flight {bool on=false,stuck=false,reported=false,strong=false;float speed=90,gravity=25;uint32_t item=0;uint64_t serial=0,start=0,stuckAt=0;std::array<uint8_t,56> transform{};Vec3 dir{};Quat rotation{0,0,0,1};float reach=1e9f;std::array<int64_t,3> last{};
+    uint64_t firstAsk=0,lastAnswer=0;bool rayHeard=false,wallKnown=false;std::array<int64_t,3> wall{};};
 inline Flight flight;inline uint64_t aimSeen=0;inline unsigned flightLogs=0;
 inline const int flightMode=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT",v,sizeof v);return n==1&&v[0]=='0'?0:n==1&&v[0]=='2'?2:1;}();
 inline const float flightSpeedSet=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT_SPEED",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):0.f;return std::isfinite(f)&&f>1?f:0.f;}();
@@ -48,6 +49,15 @@ inline const float flightGravity=[]{char v[16]{};const auto n=GetEnvironmentVari
 inline bool (*flightHit)(const std::array<int64_t,3>&,const std::array<int64_t,3>&,float&,std::array<int64_t,3>&,bool&,uint32_t&)=nullptr;
 inline void (*flightReport)(const std::array<int64_t,3>&,bool,uint32_t)=nullptr;
 inline float (*flightReach)(WorldPositionQ32,Vec3,uint64_t)=nullptr;
+// The world's surfaces (2026-10-22, user: "online, an arrow that hits a wall shows no effect"): each frame of the flight
+// the arrow asks the game's own ray test (world_ray.hpp, cast on the game's thread inside its own client ray) along its
+// way, 0.15 s ahead, and stops where the newest answer puts a wall, the ground or a building - once it has passed that
+// place. The level ground (flightReach) is used only while no answer has come. The place goes to the host
+// (flightSurface: online_sync.hpp, kind 8), whose parked arrow is put just before it and hits it there - the game's own
+// effect and the arrow in the wall, for everyone.
+inline uint64_t (*flightAsk)(const float*,const float*)=nullptr;
+inline bool (*flightAnswer)(uint64_t&,bool&,std::array<int64_t,3>&)=nullptr;
+inline void (*flightSurface)(const std::array<int64_t,3>&,Vec3)=nullptr;
 inline WorldPositionQ32 moved(const WorldPositionQ32& p,const Vec3& m){return {p.x+int64_t(double(m.x)*4294967296.),p.y+int64_t(double(m.y)*4294967296.),p.z+int64_t(double(m.z)*4294967296.)};}
 // The flight's frame: true while the clone is shown flying (or stuck where it hit).
 inline bool flyFrame(uint64_t now,uint64_t currentSerial){
@@ -77,16 +87,30 @@ inline bool flyFrame(uint64_t now,uint64_t currentSerial){
         Vec3 vel=flight.dir*flight.speed;vel.y-=float(flight.gravity*t);
         auto p=moved(p0,disp);std::array<int64_t,3> now3{p.x,p.y,p.z};
         float along=0;std::array<int64_t,3> at{};bool character=false;uint32_t entity=0;
-        const bool ground=length(disp)>=flight.reach;
-        if(flightHit&&flightHit(flight.last,now3,along,at,character,entity)){
-            const Vec3 seg{float(double(now3[0]-flight.last[0])/4294967296.),float(double(now3[1]-flight.last[1])/4294967296.),float(double(now3[2]-flight.last[2])/4294967296.)};
+        const auto rel=[](const std::array<int64_t,3>& a,const std::array<int64_t,3>& b){return Vec3{float(double(a[0]-b[0])/4294967296.),float(double(a[1]-b[1])/4294967296.),float(double(a[2]-b[2])/4294967296.)};};
+        const Vec3 seg=rel(now3,flight.last);const float segLength=length(seg),speedNow=length(vel);const Vec3 heading=speedNow>1e-3f?vel*(1/speedNow):flight.dir;
+        if(flightAsk&&flightAnswer){
+            uint64_t serial=0;bool wall=false;std::array<int64_t,3> place{};
+            if(flightAnswer(serial,wall,place)&&flight.firstAsk&&serial>=flight.firstAsk&&serial>flight.lastAnswer){flight.lastAnswer=serial;flight.rayHeard=true;flight.wallKnown=wall;if(wall)flight.wall=place;}
+            const double q=1.0/4294967296.0;const Vec3 ahead=heading*std::max(speedNow*.15f,2.f);
+            const float from[3]{float(double(p.x)*q),float(double(p.y)*q),float(double(p.z)*q)},to[3]{from[0]+ahead.x,from[1]+ahead.y,from[2]+ahead.z};
+            const auto asked=flightAsk(from,to);if(!flight.firstAsk)flight.firstAsk=asked;}
+        float wallAlong=2;   // where on this frame's way the known surface lies (0..1) once the arrow is past it; 2: not
+        if(flight.wallKnown&&dot(rel(now3,flight.wall),heading)>=0)wallAlong=segLength>1e-4f?std::clamp(dot(rel(flight.wall,flight.last),seg)/(segLength*segLength),0.f,1.f):0.f;
+        const bool ground=!flight.rayHeard&&length(disp)>=flight.reach;
+        const bool creature=flightHit&&flightHit(flight.last,now3,along,at,character,entity);
+        if(!(creature&&along<=wallAlong)&&wallAlong<=1){
+            const WorldPositionQ32 w{flight.wall[0],flight.wall[1],flight.wall[2]};p=moved(w,heading*-.05f);flight.stuck=true;flight.stuckAt=now;
+            if(flightSurface&&!flight.reported){flight.reported=true;flightSurface(flight.wall,heading);}
+            if(flightLogs++<300)logFile->event("arrow_flight_surface","\"frame\":"+std::to_string(liveFrame.frame)+",\"seconds\":"+std::to_string(t)+",\"answers\":"+std::to_string(flight.lastAnswer-flight.firstAsk+1)+
+                ",\"heading\":["+std::to_string(heading.x)+","+std::to_string(heading.y)+","+std::to_string(heading.z)+"]");
+        }else if(creature){
             const WorldPositionQ32 l{flight.last[0],flight.last[1],flight.last[2]};p=moved(l,seg*along);flight.stuck=true;flight.stuckAt=now;
             if(flightReport&&!flight.reported){flight.reported=true;flightReport(at,character,entity);}
             if(flightLogs++<300)logFile->event("arrow_flight_hit","\"frame\":"+std::to_string(liveFrame.frame)+",\"entity\":"+std::to_string(entity)+",\"character\":"+(character?"true":"false")+",\"seconds\":"+std::to_string(t));
         }else if(ground){flight.stuck=true;flight.stuckAt=now;
             if(flightLogs++<300)logFile->event("arrow_flight_ground","\"frame\":"+std::to_string(liveFrame.frame)+",\"seconds\":"+std::to_string(t)+",\"reach\":"+std::to_string(flight.reach));}
-        const float speed=length(vel);
-        const auto rotation=speed>1e-3f?normalized(multiply(motion::alignDirections(flight.dir,vel*(1/speed)),flight.rotation)):flight.rotation;
+        const auto rotation=speedNow>1e-3f?normalized(multiply(motion::alignDirections(flight.dir,heading),flight.rotation)):flight.rotation;
         std::memcpy(transform.data(),&p,24);std::memcpy(transform.data()+24,&rotation,16);
         flight.last={p.x,p.y,p.z};
         if(flight.stuck)flight.transform=transform;   // it stays where it stopped

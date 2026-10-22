@@ -270,14 +270,37 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
         targets.socket[h]=inModel(grip);}
     static const bool swimWanted=[]{char value[8]{};const auto n=GetEnvironmentVariableA("EVR_BODY_IK_SWIM",value,sizeof value);return !(n&&n<sizeof value&&value[0]=='0');}();
     targets.swim=swimWanted&&swimming&&swimming(GetTickCount64());
-    // The double jump: the legs hang under the hips (include/evr/body_ik.hpp legsRest), in over 0.1 s and out over 0.2 s
-    // after it (landing). EVR_BODY_IK_JUMP_LEGS=0 in the game's environment: the animation's legs as before.
+    // The double jump and the glider: the legs hang under the hips (include/evr/body_ik.hpp legsRest), in over 0.1 s and
+    // out over 0.2 s after it (landing). The glider is the player's HangGliding state (37, input_actor_observer.hpp keeps
+    // the state each tick): user, 2026-10-22 23:00 "while gliding the legs go wrong, they come forward" - the double
+    // jump's own press ended after 3 s in the air (input_actor_observer.hpp own), and a glider opened from a fall had none,
+    // so the glide animation's legs came back under the upright body. EVR_BODY_IK_JUMP_LEGS=0 in the game's environment:
+    // the animation's legs as before; EVR_BODY_IK_GLIDE_LEGS=0: the glider's legs from the animation.
     {static const bool wanted=[]{char value[8]{};const auto n=GetEnvironmentVariableA("EVR_BODY_IK_JUMP_LEGS",value,sizeof value);return !(n==1&&value[0]=='0');}();
+     static const bool glideWanted=[]{char value[8]{};const auto n=GetEnvironmentVariableA("EVR_BODY_IK_GLIDE_LEGS",value,sizeof value);return !(n==1&&value[0]=='0');}();
      static float weight=0;static uint64_t last=0;static unsigned logs=0;const auto now=GetTickCount64();
-     const bool on=wanted&&!targets.swim&&inputActor::localJump::doubleJump(now);const float dt=last&&now>last?std::min(float(now-last)/1000.f,.1f):0.f;last=now;
+     const auto stateAt=controllerUiFixture::playerActorStateMs.load();
+     const bool gliding=glideWanted&&stateAt&&now>=stateAt&&now-stateAt<=250&&(controllerUiFixture::playerActorState.load()>>37&1);
+     const bool on=wanted&&!targets.swim&&(inputActor::localJump::doubleJump(now)||gliding);const float dt=last&&now>last?std::min(float(now-last)/1000.f,.1f):0.f;last=now;
      const float before=weight;weight=on?std::min(1.f,weight+dt/.1f):std::max(0.f,weight-dt/.2f);targets.legsRest=weight;
+     // On the glider the hanging legs swing back (the flying squirrel, user 2026-10-22 23:30), in and out over 0.3 s;
+     // EVR_BODY_IK_GLIDE_BACK_DEG=<0..90> (70 if not set; 0: they hang straight down as in the double jump).
+     {static const float backDeg=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_BODY_IK_GLIDE_BACK_DEG",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):70.f;return std::isfinite(f)?std::clamp(f,0.f,90.f):70.f;}();
+      static float back=0;back=gliding&&on?std::min(1.f,back+dt/.3f):std::max(0.f,back-dt/.3f);targets.legsBack=backDeg*back*3.14159265f/180;
+      // The double jump's legs are the first jump's (user 2026-10-22 23:45: "can they move as in the first jump? suddenly
+      // standing straight bothers me"): the animation's legs of the frame before the second press are kept and hang
+      // under the hips through it; into the glider's pose as that comes in. EVR_BODY_IK_JUMP_LEGS_HELD=0: the straight hang.
+      static const bool heldWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_BODY_IK_JUMP_LEGS_HELD",v,sizeof v);return !(n==1&&v[0]=='0');}();
+      static std::vector<Pose> lastLegs,heldLegs;static bool wasOn=false;
+      if(heldWanted)try{
+          if(on&&!wasOn){heldLegs.swap(lastLegs);lastLegs.clear();}
+          if(!on&&before==0)lastLegs=bodyik::legsNow(animated,rig.neutral(),parents);   // out of the jump: the animation's, for the next one
+          if(!on&&weight==0)heldLegs.clear();
+      }catch(...){heldLegs.clear();lastLegs.clear();}
+      wasOn=on;
+      if(!heldLegs.empty()){targets.legsHeld=&heldLegs;targets.heldWeight=1-back;}}
      if((before==0)!=(weight==0)&&logs++<200)logFile->event("motion_body_ik_jump_legs","\"frame\":"+std::to_string(liveFrame.frame)+",\"resting\":"+(weight>0?"true":"false")+
-         ",\"jump_count\":"+std::to_string(inputActor::localJump::count.load())+",\"jump_type\":"+std::to_string(inputActor::localJump::type.load()));}
+         ",\"gliding\":"+(gliding?"true":"false")+",\"jump_count\":"+std::to_string(inputActor::localJump::count.load())+",\"jump_type\":"+std::to_string(inputActor::localJump::type.load()));}
     if(leaning)bodyik::lean(animated,parents,leanQ);
     bodyik::Report report;
     auto joints=bodyik::solve(animated,rig.neutral(),parents,targets,{},{},&report);

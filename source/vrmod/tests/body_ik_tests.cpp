@@ -209,6 +209,23 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
    ck(angle(hanging[a].orientation,R[a].orientation)<1.f&&angle(hanging[k.thigh[leg]].orientation,R[k.thigh[leg]].orientation)<1.f);
    ck(half[a].position.y<animatedLegs[a].position.y-.05f&&half[a].position.y>hanging[a].position.y+.05f);
    ck(std::abs(length(half[k.knee[leg]].position-half[k.thigh[leg]].position)-length(R[k.knee[leg]].position-R[k.thigh[leg]].position))<1e-4f);}
+  // legsBack (the glider): the hanging legs swing back about the body's right - the feet behind the hips and higher, the
+  // bones as long as at rest, the knees facing down-forward; 0 is the straight hang above.
+  t.legsRest=1;t.legsBack=70*pi/180;const auto swung=globals(solve(tuck,rest,parents,t,k,s),parents);t.legsBack=0;
+  for(unsigned leg=0;leg<2;leg++){const auto a=k.ankle[leg],th=k.thigh[leg],kn=k.knee[leg];
+   const auto leg0=R[a].position-R[th].position,leg1=swung[a].position-swung[th].position;
+   ck(leg1.z<hanging[a].position.z-hanging[th].position.z-.3f&&swung[a].position.y>hanging[a].position.y+.3f);   // behind, up
+   ck(std::abs(length(swung[kn].position-swung[th].position)-length(R[kn].position-R[th].position))<1e-4f&&
+      std::abs(length(swung[a].position-swung[kn].position)-length(R[a].position-R[kn].position))<1e-4f);
+   const float pitch=std::atan2(-leg1.z,-leg1.y)-std::atan2(-leg0.z,-leg0.y);ck(std::abs(pitch*180/pi-70)<3);       // swung by the angle
+   ck(angle(swung[a].orientation,normalized(multiply(Quat{std::sin(35*pi/180),0,0,std::cos(35*pi/180)},R[a].orientation)))<2.f);}
+  // legsHeld: the hanging legs are the kept ones (the first jump's) - the tuck kept gives the tuck's legs again, as the
+  // animation gave them; half weight lies between them and the straight hang.
+  {const auto kept=legsNow(tuck,rest,parents,k);t.legsRest=1;t.legsHeld=&kept;t.heldWeight=1;const auto heldLegs=globals(solve(tuck,rest,parents,t,k,s),parents);
+   t.heldWeight=.5f;const auto halfHeld=globals(solve(tuck,rest,parents,t,k,s),parents);t.legsHeld=nullptr;t.heldWeight=0;
+   for(unsigned leg=0;leg<2;leg++){const auto a=k.ankle[leg];
+    ck(near(heldLegs[a].position,animatedLegs[a].position,1e-2f)&&near(heldLegs[k.knee[leg]].position,animatedLegs[k.knee[leg]].position,1e-2f));
+    ck(halfHeld[a].position.y>hanging[a].position.y+.05f&&halfHeld[a].position.y<heldLegs[a].position.y-.05f);}}
   for(auto j:{1,15,17,44,74})ck(near(hanging[size_t(j)].position,animatedLegs[size_t(j)].position,1e-4f));}   // the rest of the body as it was
  {Targets t=atRest;t.head.position.x=NAN;bool threw=false;try{solve(rest,rest,parents,t);}catch(const std::invalid_argument&){threw=true;}ck(threw);
   auto shorter=rest;shorter.pop_back();threw=false;try{solve(shorter,rest,parents,atRest);}catch(const std::invalid_argument&){threw=true;}ck(threw);

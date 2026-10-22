@@ -624,6 +624,7 @@ namespace inputActor {inline const bool clientTicksSet=[]{clientWorldTicks=[](ui
 #include "sequence_request_observer.hpp"
 #include "water_displacement_bridge.hpp"
 #include "hit_event_intake.hpp"
+#include "world_ray.hpp"
 #include "shadow_history_probe.hpp"
 #include "shared_point_lights.hpp"
 #include "stable_frustum_bridge.hpp"
@@ -3563,6 +3564,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         optional("snow_displacement",[&]{snowDisplacementBridge::install();},[&]{});
         optional("water_displacement",[&]{waterDisplacementBridge::install();},[&]{});
         optional("hit_event_intake",[&]{hitEventIntake::install();},[&]{});
+        optional("world_ray",[&]{worldRay::install();},[&]{});   // the guest's arrows against walls (EVR_ARROW_WALLS=0: off); EVR_RAYCAST_CENSUS=1: the census
         optional("shadow_history",[&]{shadowHistoryProbe::install();},[&]{});
         {void* const modelStubs[8]{reinterpret_cast<void*>(&evr_vfx_model_stub0),reinterpret_cast<void*>(&evr_vfx_model_stub1),reinterpret_cast<void*>(&evr_vfx_model_stub2),reinterpret_cast<void*>(&evr_vfx_model_stub3),
             reinterpret_cast<void*>(&evr_vfx_model_stub4),reinterpret_cast<void*>(&evr_vfx_model_stub5),reinterpret_cast<void*>(&evr_vfx_model_stub6),reinterpret_cast<void*>(&evr_vfx_model_stub7)};
@@ -3673,6 +3675,17 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                 controllerUiFixture::creatureNear=&liveTargets::creatureNear;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;
                 controllerUiFixture::localParryDecided=&parryObserver::localDecided;
                 motionArrowVisual::flightHit=&liveTargets::segmentHit;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
+                controllerUiFixture::shotSurfaceArrived=&liveTargets::publishSurfaceHit;
+                // the world's surfaces for the guest's own arrow: the game's ray test (world_ray.hpp), when its hook is on
+                motionArrowVisual::flightAsk=[](const float* from,const float* to)->uint64_t{return worldRay::enabled?worldRay::ask(from,to):0;};
+                motionArrowVisual::flightAnswer=[](uint64_t& serial,bool& hit,std::array<int64_t,3>& at){const auto a=worldRay::answer();if(!a.serial)return false;
+                    serial=a.serial;hit=a.hit;for(int k=0;k<3;k++)at[size_t(k)]=int64_t(double(a.at[k])*4294967296.);return true;};
+                motionArrowVisual::flightSurface=[](const std::array<int64_t,3>& at,Vec3 dir){
+                    // the wall or ground this guest's own arrow met, to the host (online_sync.hpp sendHits, kind 8)
+                    if(!onlineSync::requested)return;
+                    std::lock_guard<std::mutex> lock(controllerUiFixture::hitReportMutex);auto* slot=&controllerUiFixture::hitReports[0];
+                    for(auto& r:controllerUiFixture::hitReports)if(r.serial<slot->serial)slot=&r;
+                    *slot={++controllerUiFixture::hitReportSerial,GetTickCount64(),at,false,true,0,true,dir};};
                 motionArrowVisual::flightReach=[](WorldPositionQ32 origin,Vec3 direction,uint64_t now){int by=0;const float r=liveTargets::aimReach(origin,direction,now,by);return by==1?r:1e9f;};
                 motionArrowVisual::flightReport=[](const std::array<int64_t,3>& at,bool character,uint32_t entity){
                     // the hit of this guest's own arrow, to the host (online_sync.hpp sendHits, as a stroke's touch)
@@ -4083,7 +4096,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         objectWatch::uninstall();
         statusVignette::uninstall();
         if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
-        vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
+        vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
         shadowProjection::disable();
         detailBinding::disable();
         cullingHistory::disable();
@@ -4131,7 +4144,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             objectWatch::uninstall();
             statusVignette::uninstall();
             if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
-            vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
+            vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
             try{equipmentObserver::disable();}catch(...){}
             try{inputDirection::disable();}catch(...){}
             try{contactQuiescenceObserver::disable();}catch(...){}

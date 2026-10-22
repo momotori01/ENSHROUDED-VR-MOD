@@ -173,12 +173,17 @@ inline std::optional<Received> decode(const std::vector<uint8_t>& bytes){return 
 //   reached the player while the player guarded, decided on the player's PC when the blow's HitEvent came
 //   (hit_event_intake.hpp); where the player stood (Q32.32, 3 x int64) and flags (1 = blocked). The host's mod gives the
 //   player the health the blow took back (live_melee_targets.hpp undoDamage), as for a parry. Older mods drop the kind.
-inline constexpr uint8_t actionMagic=0xe6,actionVersion=1,castAction=1,shotAction=2,heldAimAction=3,parryAction=4,hitAction=5,clockAction=6,guardAction=7;
+//   kind 8, a shot's surface (2026-10-22, user: "online, an arrow that hits a wall shows no effect"): the player's own
+//   arrow, flown on its PC, met a wall, the ground or a building there (the game's own ray test, world_ray.hpp): the
+//   place (Q32.32, 3 x int64) and the arrow's heading (3 x int16 over 32767). The host's mod puts its parked copy of the
+//   arrow just before that place, flying on along the heading, so that the host's game hits the surface itself (its
+//   effect, the arrow in the wall). Older mods drop the kind.
+inline constexpr uint8_t actionMagic=0xe6,actionVersion=1,castAction=1,shotAction=2,heldAimAction=3,parryAction=4,hitAction=5,clockAction=6,guardAction=7,surfaceShotAction=8;
 inline constexpr size_t castActionBytes=7,shotActionBytes=5+40,parryActionBytes=5+24,hitActionBytes=5+24+1;
 // A hit with the entity touched (2026-10-22): the id of a creature is the same in the host's World and the guest's.
-inline constexpr size_t hitEntityActionBytes=hitActionBytes+4,clockActionBytes=5+8+8+4,guardActionBytes=5+24+1;
+inline constexpr size_t hitEntityActionBytes=hitActionBytes+4,clockActionBytes=5+8+8+4,guardActionBytes=5+24+1,surfaceShotActionBytes=5+24+6;
 struct Action {uint8_t kind=0;uint16_t id=0;float strength=0;std::array<uint8_t,40> aim{};std::array<int64_t,3> at{};bool character=false,shot=false;uint32_t entity=0;
-    int64_t clockSent=0,clockEcho=0;uint32_t clockHold=0;};
+    int64_t clockSent=0,clockEcho=0;uint32_t clockHold=0;Vec3 dir{};};
 inline std::vector<uint8_t> encodeCast(uint16_t id,float strength){
     std::vector<uint8_t> out{actionMagic,actionVersion,castAction};detail::put16(out,int(id));
     const auto s=uint16_t(std::lround(std::clamp(std::isfinite(strength)?strength:0.f,0.f,1.f)*65535));out.push_back(uint8_t(s&255));out.push_back(uint8_t(s>>8));return out;
@@ -201,6 +206,9 @@ inline std::vector<uint8_t> encodeClock(uint16_t id,int64_t sentUs,int64_t echoU
 }
 inline std::vector<uint8_t> encodeGuard(uint16_t id,const std::array<int64_t,3>& at,uint8_t flags){std::vector<uint8_t> out{actionMagic,actionVersion,guardAction};detail::put16(out,int(id));
     const auto* b=reinterpret_cast<const uint8_t*>(at.data());out.insert(out.end(),b,b+24);out.push_back(flags);return out;}
+inline std::vector<uint8_t> encodeSurfaceShot(uint16_t id,const std::array<int64_t,3>& at,Vec3 dir){std::vector<uint8_t> out{actionMagic,actionVersion,surfaceShotAction};detail::put16(out,int(id));
+    const auto* b=reinterpret_cast<const uint8_t*>(at.data());out.insert(out.end(),b,b+24);const float n=length(dir);
+    for(const float c:{dir.x,dir.y,dir.z})detail::put16(out,int(std::lround(std::clamp(n>1e-6f&&std::isfinite(c)?c/n:0.f,-1.f,1.f)*32767)));return out;}
 inline std::optional<Action> decodeAction(const uint8_t* data,size_t size){
     if(!data||size<3||data[0]!=actionMagic||data[1]!=actionVersion)return std::nullopt;
     Action a;a.kind=data[2];
@@ -212,6 +220,9 @@ inline std::optional<Action> decodeAction(const uint8_t* data,size_t size){
     if(a.kind==parryAction){if(size!=parryActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);return a;}
     if(a.kind==hitAction){if((size!=hitActionBytes&&size!=hitEntityActionBytes)||data[29]>3)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);a.character=(data[29]&1)!=0;a.shot=(data[29]&2)!=0;
         if(size==hitEntityActionBytes)a.entity=uint32_t(data[30])|uint32_t(data[31])<<8|uint32_t(data[32])<<16|uint32_t(data[33])<<24;return a;}
+    if(a.kind==surfaceShotAction){if(size!=surfaceShotActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);
+        const auto c=[&](int k){return float(int16_t(uint16_t(data[29+2*k])|uint16_t(data[30+2*k])<<8))/32767.f;};a.dir={c(0),c(1),c(2)};
+        const float n=length(a.dir);if(!(n>.5f&&n<1.5f))return std::nullopt;a.dir=a.dir*(1/n);a.shot=true;return a;}
     if(a.kind==guardAction){if(size!=guardActionBytes||data[29]>1)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);a.character=data[29]==1;return a;}
     if(a.kind==clockAction){if(size!=clockActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;
         uint64_t s=0,e=0;uint32_t h=0;for(int k=0;k<8;++k){s|=uint64_t(data[5+k])<<(8*k);e|=uint64_t(data[13+k])<<(8*k);}for(int k=0;k<4;++k)h|=uint32_t(data[21+k])<<(8*k);

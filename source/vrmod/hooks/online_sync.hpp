@@ -113,6 +113,8 @@ inline void action(uint64_t from,const uint8_t* data,size_t size){
         if(logs++<200)logFile->event("online_sync_guard_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"blocked\":"+(a->character?"true":"false")+",\"damage_given_back\":"+(back?"true":"false"));return;}
     if(a->kind==sync::castAction){fishingCharge::peerCast(from,a->strength);
         if(logs++<200)logFile->event("online_sync_cast_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"strength\":"+std::to_string(a->strength));}
+    if(a->kind==sync::surfaceShotAction){if(controllerUiFixture::shotSurfaceArrived)controllerUiFixture::shotSurfaceArrived(a->at,a->dir,GetTickCount64());
+        if(logs++<200)logFile->event("online_sync_shot_surface_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id));return;}
     if(a->kind==sync::hitAction&&a->shot){if(controllerUiFixture::shotHitArrived)controllerUiFixture::shotHitArrived(a->at,a->character,a->entity,GetTickCount64());
         if(logs++<200)logFile->event("online_sync_shot_hit_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"character\":"+(a->character?"true":"false"));return;}
     if(a->kind==sync::hitAction){remoteMelee::publishHit(from,a->at,a->character,a->entity,GetTickCount64());
@@ -166,8 +168,8 @@ inline void sendHits(){
     {std::lock_guard<std::mutex> lock(controllerUiFixture::hitReportMutex);const uint64_t sentBefore=hitSent;   // (review W3)
      for(const auto& r:controllerUiFixture::hitReports)if(r.serial>sentBefore){
         auto* slot=&hitsOut[0];for(auto& h:hitsOut)if(!h.repeats){slot=&h;break;}
-        *slot={sync::encodeHit(++hitId,r.at,r.character,r.shot,r.entity),3u};hitSent=std::max(hitSent,r.serial);
-        if(logs++<200)logFile->event("online_sync_hit_sent","\"id\":"+std::to_string(hitId)+",\"character\":"+(r.character?"true":"false")+",\"shot\":"+(r.shot?"true":"false")+",\"entity\":"+std::to_string(r.entity));}}
+        *slot={r.surface?sync::encodeSurfaceShot(++hitId,r.at,r.dir):sync::encodeHit(++hitId,r.at,r.character,r.shot,r.entity),3u};hitSent=std::max(hitSent,r.serial);
+        if(logs++<200)logFile->event("online_sync_hit_sent","\"id\":"+std::to_string(hitId)+",\"character\":"+(r.character?"true":"false")+",\"shot\":"+(r.shot?"true":"false")+",\"surface\":"+(r.surface?"true":"false")+",\"entity\":"+std::to_string(r.entity));}}
     for(auto& h:hitsOut){if(!h.repeats)continue;--h.repeats;for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,h.bytes))++actionsSent;}
 }
 // This player's parries (sync::parryAction), decided here as the solo relaxed parry decides (parry_observer.hpp): a

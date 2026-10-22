@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <evr/auto_start.hpp>
 #include <fstream>
 #include <iostream>
@@ -39,7 +40,18 @@ int main(int argc,char** argv){try{unsigned n=0;
    const std::string noFsr=json.substr(0,json.find("      \"fsr3\""))+json.substr(json.find("      \"shadows\""));
    ck(applyVr(noFsr,"Performance",nullptr,o,rec,why)&&rec.changes.size()==2&&restore(o,rec)==noFsr);}
   ck(!applyVr("{}","Quality",nullptr,out,r,reason)&&!reason.empty()&&out=="{}");
-  // The GI quality of a VR start (2026-10-15): put with the others, recorded, Keep leaves it, a missing field refuses.
+  // HDR (2026-10-23): on in the game -> off for VR, recorded, put back; off is left; vsync (another true/false) untouched.
+ {const std::string hdr=json.substr(0,json.find("    \"render\""))+"    \"hdrSettings\": {\r\n      \"enableHdr\": true\r\n    },\r\n"+json.substr(json.find("    \"render\""));
+  size_t b=0,e=0;ck(flag(hdr,"enableHdr",b,e)&&hdr.substr(b,e-b)=="true"&&flag(hdr,"vsync",b,e)&&!field(hdr,"enableHdr",b,e));
+  std::string o,why;RenderRecord rec;ck(applyVr(hdr,"Quality",nullptr,o,rec,why)&&o.find("\"enableHdr\": false")!=std::string::npos&&o.find("\"vsync\": false")!=std::string::npos);
+  ck(rec.changes.size()==4&&rec.changes[3].name=="enableHdr"&&rec.changes[3].original=="true"&&rec.changes[3].applied=="false");
+  RenderRecord parsed;ck(parseRecord(recordText(rec),parsed)&&parsed.changes.size()==4);
+  std::vector<std::string> names;ck(restore(o,parsed,&names)==hdr&&std::find(names.begin(),names.end(),"enableHdr")!=names.end());
+  // a second VR start before anything was put back: no change to the file, the original "true" kept for the way back
+  std::string again;RenderRecord second;ck(applyVr(o,"Quality",&rec,again,second,why)&&again==o&&second.changes.size()==4&&second.changes[3].original=="true"&&restore(again,second)==hdr);
+  const auto at=hdr.find("true\r\n    },");const std::string off=hdr.substr(0,at)+"false"+hdr.substr(at+4);
+  ck(applyVr(off,"Quality",nullptr,o,rec,why)&&rec.changes.size()==3&&o.find("\"enableHdr\": false")!=std::string::npos);}
+ // The GI quality of a VR start (2026-10-15): put with the others, recorded, Keep leaves it, a missing field refuses.
   const std::string gi=json.substr(0,json.find("\"shadows\""))+"\"dynamicGi\": \"Performance\",\r\n      "+json.substr(json.find("\"shadows\""));
   {std::string o,why;RenderRecord rec;ck(applyVr(gi,"Quality",nullptr,o,rec,why,"High")&&o.find("\"dynamicGi\": \"High\"")!=std::string::npos&&rec.changes.size()==4&&rec.changes[3].name=="dynamicGi"&&rec.changes[3].original=="Performance");
    const auto back=restore(o,rec);ck(back==gi);

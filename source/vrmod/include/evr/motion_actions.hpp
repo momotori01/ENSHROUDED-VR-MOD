@@ -1,4 +1,5 @@
 #pragma once
+#include <evr/process_exit.hpp>
 #include <algorithm>
 #include <evr/math.hpp>
 #include <cstring>
@@ -220,6 +221,7 @@ public:
         return XR_SUCCEEDED(xrStopHapticFeedback(session,&hi));
     }
     bool close()noexcept{
+        if(processExiting())return false; // process exit: leave the runtime alone (process_exit.hpp)
         bool ok=true;if(attached)for(unsigned h=0;h<2;h++)ok=stop(h)&&ok;
         if(xrDestroySpace)for(auto* collection:{&gripSpaces,&aimSpaces})for(auto& space:*collection)if(space){ok=XR_SUCCEEDED(xrDestroySpace(space))&&ok;space=XR_NULL_HANDLE;}
         if(set&&xrDestroyActionSet){ok=XR_SUCCEEDED(xrDestroyActionSet(set))&&ok;set=XR_NULL_HANDLE;}

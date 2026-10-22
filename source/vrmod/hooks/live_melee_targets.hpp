@@ -126,9 +126,10 @@ inline void sampleOtherPlayers(uint64_t now);
 // the spawn and 50 ms; 6 m when it does not move yet) - when it is first seen (2026-10-21 05:40, review: every new
 // flying thing of the 0.6 s was parked and later dropped - an enemy's arrow, or anything thrown out at a kill, would
 // have been lost with it). A second arrow of the same shot flies as made.
-struct RemoteArrow {uint32_t entity=0;uint64_t ms=0;bool parked=false;};
+struct RemoteArrow {uint32_t entity=0;uint64_t ms=0;bool parked=false;float speed=90;};
 struct ShotHit {std::array<int64_t,3> at{};bool character=false,used=true;uint64_t ms=0;uint32_t entity=0;};
-inline std::array<RemoteArrow,8> remoteArrows{};inline std::array<ShotHit,4> shotHits{};
+struct SurfaceHit {std::array<int64_t,3> at{};Vec3 dir{};bool used=true;uint64_t ms=0;};   // a guest's arrow met a wall or the ground (online_sync.hpp kind 8)
+inline std::array<RemoteArrow,8> remoteArrows{};inline std::array<ShotHit,4> shotHits{};inline std::array<SurfaceHit,4> surfaceHits{};
 inline std::unordered_map<uint32_t,uint8_t> arrowKnown;inline bool arrowPrimed=false;inline uint64_t arrowScanAt=0;inline unsigned arrowLogs=0;
 inline std::vector<uint32_t> arrowKeys;inline std::vector<uint64_t> arrowBits;inline uint64_t arrowParkedFor=0;
 inline const bool steerWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_ARROW_STEER",v,sizeof v);return !(n==1&&v[0]=='0');}();
@@ -969,6 +970,9 @@ inline bool segmentHit(const std::array<int64_t,3>& from,const std::array<int64_
 inline void publishShotHit(const std::array<int64_t,3>& at,bool character,uint32_t entity,uint64_t now){
  std::lock_guard<std::mutex> lock(mutex);if(!steerWanted)return;ShotHit* slot=&shotHits[0];for(auto& h:shotHits)if(h.ms<slot->ms)slot=&h;*slot={at,character,false,now,entity};
 }
+inline void publishSurfaceHit(const std::array<int64_t,3>& at,Vec3 dir,uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);if(!steerWanted)return;SurfaceHit* slot=&surfaceHits[0];for(auto& h:surfaceHits)if(h.ms<slot->ms)slot=&h;*slot={at,dir,false,now};
+}
 inline void steerArrowsBody(uintptr_t world,uint64_t now);
 inline void steerArrows(uintptr_t world,uint64_t now){try{steerArrowsBody(world,now);}catch(...){}}   // (review M5: a failed read ends the arrows' part only, not the tick)
 inline void steerArrowsBody(uintptr_t world,uint64_t now){   // under mutex, on the World's tick
@@ -999,7 +1003,7 @@ inline void steerArrowsBody(uintptr_t world,uint64_t now){   // under mutex, on 
        if(vc&&gc&&cc&&aligned&&fromRelease>=0&&fromRelease<=reach){auto p=read<WorldPositionQ32>(cc);p.y+=int64_t(300.0*4294967296.);const Vec3 zero{};const uint8_t off=0;SIZE_T n=0;
         parked=WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(cc),&p,24,&n)&&WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(vc),&zero,12,&n)&&
          WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(gc+16),&off,1,&n);}}catch(...){}
-      if(parked){arrowParkedFor=spawned;RemoteArrow* slot=&remoteArrows[0];for(auto& a:remoteArrows)if(a.ms<slot->ms)slot=&a;*slot={id,now,true};}
+      if(parked){arrowParkedFor=spawned;RemoteArrow* slot=&remoteArrows[0];for(auto& a:remoteArrows)if(a.ms<slot->ms)slot=&a;*slot={id,now,true,speedSeen>1&&speedSeen<400?speedSeen:90.f};}
       if(arrowLogs++<300)logFile->event("remote_arrow_seen","\"entity\":"+std::to_string(id)+",\"since_spawn_ms\":"+std::to_string(now-spawned)+",\"from_release_m\":"+std::to_string(fromRelease)+",\"speed_seen\":"+std::to_string(speedSeen)+",\"reach_m\":"+std::to_string(reach)+",\"aligned\":"+(aligned?"true":"false")+",\"parked\":"+(parked?"true":"false"));}}
     arrowKnown.swap(seen);arrowPrimed=true;}}}
  else if(otherPlayers.empty()&&arrowPrimed){arrowKnown.clear();arrowPrimed=false;}
@@ -1029,6 +1033,25 @@ inline void steerArrowsBody(uintptr_t world,uint64_t now){   // under mutex, on 
    arrow->parked=false;
    if(arrowLogs++<300)logFile->event("remote_arrow_steered","\"entity\":"+std::to_string(arrow->entity)+",\"character\":"+(h.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-h.ms)+
     ",\"guest_to_host_m\":"+std::to_string(best<3||byEntity?best:-1.)+",\"by_entity\":"+(byEntity?"true":"false")+",\"moved_m\":"+std::to_string(distance)+",\"speed\":"+std::to_string(speed)+",\"written\":"+(wrote?"true":"false"));
+   h.used=true;arrow->entity=0;
+  }catch(...){arrow->entity=0;}
+ }
+ // A guest's arrow met a wall, the ground or a building on its PC (world_ray.hpp there, kind 8): the parked arrow is put
+ // 1 m before that place, flying on along the arrow's heading with its own speed and its gravity on again - the host's
+ // game hits that surface itself: its effect and the arrow in it, seen by everyone (user 2026-10-22: "online, an arrow
+ // that hits a wall shows no effect"). EVR_REMOTE_ARROW_STEER=0 leaves this too.
+ for(auto& h:surfaceHits){if(h.used)continue;if(now<h.ms||now-h.ms>1500){h.used=true;if(arrowLogs++<300)logFile->event("remote_arrow_surface_unmatched","\"age_ms\":"+std::to_string(now-h.ms));continue;}
+  RemoteArrow* arrow=nullptr;for(auto& a:remoteArrows)if(a.entity&&now-a.ms<=3000&&(!arrow||a.ms>arrow->ms))arrow=&a;if(!arrow)continue;
+  try{const auto e=nativeImpactComponents::entityAtWorld(world,arrow->entity);
+   const auto vc=nativeImpactComponents::component(e,unsigned(types.velocity),12),gc=nativeImpactComponents::component(e,unsigned(types.gravity),20),cc=nativeImpactComponents::component(e,unsigned(types.current),56);
+   if(!vc||!cc){arrow->entity=0;continue;}
+   const float n=length(h.dir);if(!(n>.5f)){h.used=true;continue;}const Vec3 dir=h.dir*(1/n);
+   const WorldPositionQ32 place{h.at[0]-int64_t(double(dir.x)*4294967296.),h.at[1]-int64_t(double(dir.y)*4294967296.),h.at[2]-int64_t(double(dir.z)*4294967296.)};
+   const Vec3 nv=dir*std::max(arrow->speed,30.f);const uint8_t on=1;SIZE_T w=0;
+   const bool wrote=WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(cc),&place,24,&w)&&WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(vc),&nv,12,&w)&&
+    (!gc||WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(gc+16),&on,1,&w));
+   arrow->parked=false;
+   if(arrowLogs++<300)logFile->event("remote_arrow_to_surface","\"entity\":"+std::to_string(arrow->entity)+",\"hit_age_ms\":"+std::to_string(now-h.ms)+",\"speed\":"+std::to_string(arrow->speed)+",\"written\":"+(wrote?"true":"false"));
    h.used=true;arrow->entity=0;
   }catch(...){arrow->entity=0;}
  }

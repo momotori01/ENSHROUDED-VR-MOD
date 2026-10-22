@@ -288,7 +288,7 @@ inline void (*hitThing)(uint32_t,uint64_t,uint64_t)=nullptr;
 inline bool (*clientNowFn)(uint64_t)=nullptr;
 // The touches of this player's strokes, for the host (online_sync.hpp sendHits, sync::hitAction): where the thing stood
 // on this PC. hitReport (view_resource_probe.cpp) fills them on a client only. Under hitReportMutex.
-struct HitReport {uint64_t serial=0,ms=0;std::array<int64_t,3> at{};bool character=false,shot=false;uint32_t entity=0;};   // shot: an arrow's hit (not a stroke's)
+struct HitReport {uint64_t serial=0,ms=0;std::array<int64_t,3> at{};bool character=false,shot=false;uint32_t entity=0;bool surface=false;evr::Vec3 dir{};};   // shot: an arrow's hit (not a stroke's); surface: an arrow's wall or ground (dir its heading)
 inline std::array<HitReport,8> hitReports{};inline uint64_t hitReportSerial=0;inline std::mutex hitReportMutex;
 inline void (*hitReport)(uint32_t,bool,uint64_t)=nullptr;
 // The host side of a guest's arrow: when another player's projectile was made here last (bow_spawn_observer.hpp), and
@@ -310,6 +310,7 @@ inline std::atomic<bool> bowStrongDrawing{false};
 // where that projectile was made (the camera the guest sent at its release); written before remoteSpawnAt
 inline std::array<std::atomic<int64_t>,3> remoteSpawnOrigin{};inline std::array<std::atomic<float>,3> remoteSpawnDirection{};
 inline void (*shotHitArrived)(const std::array<int64_t,3>&,bool,uint32_t,uint64_t)=nullptr;
+inline void (*shotSurfaceArrived)(const std::array<int64_t,3>&,evr::Vec3,uint64_t)=nullptr;   // a guest's arrow met a surface (live_melee_targets.hpp publishSurfaceHit)
 struct HitWatch {uint64_t from=0,until=0;unsigned hands=0;double seconds=0;bool left=false;uint64_t binding=0;
  struct Item {uint32_t entity=0;int32_t state=-1;float last=-1,closest=-1;bool touched=false,learned=false,character=false;};std::array<Item,16> items{};size_t count=0;};
 inline HitWatch hitWatch;
