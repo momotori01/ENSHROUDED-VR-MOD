@@ -20,7 +20,7 @@ inline bool requested=false;
 // Both are taken where the server's components are missing; the host and a game of one keep the server's.
 // Players are the entities with keen::ecs::NetworkPlayerAttributes; one at no health is a fallen player a teammate revives
 // (its revivieData +0x28: NetworkReviveData state, duration, left; reviveDuration +0x44) - see downedNear below.
-struct Types {uintptr_t world=0,registry=0;int model=-1;uint16_t modelBytes=0;int health=-1,current=-1,actor=-1,selected=-1,relevant=-1,networkHealth=-1,render=-1,networkActor=-1,player=-1,enemy=-1,destructible=-1,clientCollider=-1,feedbackMaterial=-1,velocity=-1,gravity=-1;
+struct Types {uintptr_t world=0,registry=0;int model=-1;uint16_t modelBytes=0;int health=-1,current=-1,actor=-1,selected=-1,relevant=-1,networkHealth=-1,render=-1,networkActor=-1,player=-1,enemy=-1,destructible=-1,clientCollider=-1,feedbackMaterial=-1,velocity=-1,gravity=-1,stamina=-1,blockValue=-1,staminaDamageMod=-1;
  uint16_t healthBytes=68,selectedBytes=0,relevantBytes=0,renderBytes=0,playerBytes=0;bool usable=false;};
 struct Layout {bool health=false,current=false,actor=false,selected=false,relevant=false,networkHealth=false,render=false,player=false,enemy=false,destructible=false,clientThing=false;std::array<uint64_t,10> bits{};
  uint16_t healthOffset=0,currentOffset=0,selectedOffset=0,relevantOffset=0,networkHealthOffset=0,renderOffset=0,playerOffset=0;};
@@ -211,6 +211,9 @@ inline void learn(uintptr_t world){
   else if(n=="keen::ecs::CollisionFeedbackMaterialComponent")types.feedbackMaterial=int(id);
   else if(n=="keen::ecs::Velocity"&&size==12)types.velocity=int(id);
   else if(n=="keen::ecs::Gravity"&&size==20)types.gravity=int(id);
+  else if(n=="keen::ecs::Stamina"&&size==40)types.stamina=int(id);
+  else if(n=="keen::ecs::Block"&&size==12)types.blockValue=int(id);
+  else if(n=="keen::ecs::StaminaDamageMod"&&size==24)types.staminaDamageMod=int(id);
   else if(n=="keen::ecs::ModelComponent"&&size>=4&&size<=64){types.model=int(id);types.modelBytes=size;}
  }
  if(types.health<0){   // which types of this build look like it (bounded; names up to 64 characters)
@@ -915,6 +918,39 @@ inline bool undoDamage(const std::array<int64_t,3>& enemy,uint64_t windowMs){
  const bool back=highest>current;if(back){SIZE_T n=0;WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(v),&highest,4,&n);}
  if(predictLogs++<300)logFile->event("parry_damage_given_back","\"player\":"+std::to_string(who->entity)+",\"health\":"+std::to_string(current)+",\"to\":"+std::to_string(highest)+",\"window_ms\":"+std::to_string(windowMs));
  return back;
+}
+// A guest's guard (2026-10-22, user: "is the guard invincible then? that is not allowed"): the guest decided the blow was blocked
+// (hit_event_intake.hpp guard: the game's guard state, the attacker within 80 degrees of the guard's front, stamina left), and
+// here the host's game does what its own block does (applyDamage 0x3d50d0, 0x3d6e42..0x3d702a): no health lost - the health of
+// the last windowMs given back - and stamina taken instead, round(10/50 x damage x StaminaDamageMod - Block) at the least 0
+// (0xe618d0; the balancing's 10 and 50 at +0x4c / +0x3c). Block and StaminaDamageMod: the guest's own attribute components
+// here (the melee, ranged and magic additions of StaminaDamageMod and the attack's own stamina factor are not read: 1). With
+// no stamina left the guest's game ends its guard by itself. EVR_GUARD_STAMINA=0: the health only (0.9.8).
+inline const bool guardStaminaWanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_GUARD_STAMINA",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline uintptr_t storageValueAt(uint32_t entity,int type,unsigned bytes){   // under mutex: an attribute's value (sint32 storage +8, its count at +4)
+ if(!types.world||type<0)return 0;
+ try{const auto c=nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(types.world,entity),unsigned(type),bytes);if(!c)return 0;
+  std::array<uint8_t,8> head{};if(!block(c,head.data(),head.size())||!head[4]||head[4]>8)return 0;return c+8;}catch(...){return 0;}
+}
+inline bool guardGiveBack(const std::array<int64_t,3>& guest,uint64_t windowMs){
+ std::lock_guard<std::mutex> lock(mutex);if(!giveBackWanted)return false;const auto now=GetTickCount64();
+ PlayerHealth* who=nullptr;double best=8;
+ for(auto& p:playerHealth)if(p.entity){const double d=metres(p.at,guest);if(d<best){best=d;who=&p;}}
+ if(!who)return false;const auto v=healthValueAt(who->entity);int32_t current=-1;if(!v||!block(v,&current,4)||current<=0)return false;
+ int32_t highest=current;for(const auto& [ms,value]:who->history)if(ms&&now>=ms&&now-ms<=windowMs)highest=std::max(highest,value);
+ const int32_t drop=highest-current;if(drop<=0)return false;
+ int32_t blockValue=0;float mod=1;int32_t stamina=-1,after=-1,cost=0;
+ if(guardStaminaWanted){
+  if(const auto b=storageValueAt(who->entity,types.blockValue,12)){int32_t x=0;if(block(b,&x,4)&&x>=0&&x<100000)blockValue=x;}
+  if(types.world&&types.staminaDamageMod>=0)try{const auto c=nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(types.world,who->entity),unsigned(types.staminaDamageMod),24);
+   float x=0;if(c&&block(c+8,&x,4)&&std::isfinite(x)&&x>0&&x<10)mod=x;}catch(...){}
+  cost=evr::guard::staminaCost(drop,mod,blockValue);
+  if(const auto st=storageValueAt(who->entity,types.stamina,40);st&&block(st,&stamina,4)&&stamina>=0){
+   after=std::max(0,stamina-cost);if(after!=stamina){SIZE_T n=0;WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(st),&after,4,&n);}}}
+ SIZE_T n=0;WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(v),&highest,4,&n);
+ if(predictLogs++<300)logFile->event("guard_given_back","\"player\":"+std::to_string(who->entity)+",\"health\":"+std::to_string(current)+",\"to\":"+std::to_string(highest)+",\"window_ms\":"+std::to_string(windowMs)+
+  ",\"block\":"+std::to_string(blockValue)+",\"stamina_damage_mod\":"+std::to_string(mod)+",\"stamina_cost\":"+std::to_string(cost)+",\"stamina\":"+std::to_string(stamina)+",\"stamina_after\":"+std::to_string(after));
+ return true;
 }
 // The first kept thing a flying shot's path meets (motion_arrow_visual.hpp, a guest's own arrow flown on its PC): the
 // segment from..to against each creature's and thing's upright body (creature 0.5 m, thing 0.4 m); where on the

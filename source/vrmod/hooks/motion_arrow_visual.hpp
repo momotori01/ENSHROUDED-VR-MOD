@@ -151,7 +151,9 @@ inline void foreignArrows(uint64_t now,uint64_t currentSerial,const WorldPositio
     if(foreignShot!=flight.serial){foreignShot=flight.serial;foreignSeen=0;foreignCount=0;}
     // every 100 ms, every 250 ms once the shot's copy is found: a look reads the Scene's model table to its end (some MB in a
     // big world, on the render thread)
-    if(now-foreignScan>=(foreignSeen?250u:100u))try{foreignScan=now;   // (review W9: a failed read ends this look only)
+    // every frame for the first 0.7 s (2026-10-22, user after 0.9.8: "the arrow shot diagonally up shows more" - the host's
+    // mod without VR now puts the guest's arrows 300 m up, and the copy is drawn on its way there between two looks)
+    if(now-flight.start<=700||now-foreignScan>=(foreignSeen?250u:100u))try{foreignScan=now;   // (review W9: a failed read ends this look only)
         rootCamera::Sample root;const bool body=rootCamera::trySnapshot(root)&&root.number;
         const auto objects=read<uintptr_t>(scene+0x1b0),generations=read<uintptr_t>(scene+0x1c8);
         const auto total=size_t(std::min<uint64_t>(std::min<uint64_t>(read<uint64_t>(scene+0x1b8)/0x1b0,read<uint64_t>(scene+0x1d0)),65536));

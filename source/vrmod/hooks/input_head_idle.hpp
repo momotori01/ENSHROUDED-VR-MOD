@@ -168,6 +168,9 @@ inline void patch(const game::ClientInputBytes& source,game::ClientInputBytes& o
                 const std::array<float,2> turned{c*stick[0]-s*stick[1],s*stick[0]+c*stick[1]};
                 std::memcpy(output.data()+0x38,&proposal.aimWithoutRoll,sizeof(Quat));
                 if(std::isfinite(turned[0])&&std::isfinite(turned[1]))std::memcpy(output.data()+game::clientStick,turned.data(),sizeof(turned));
+                // the character's front while guarding (the game's +Z, as its hit angle takes it), level
+                {auto f=rotate(normalized(proposal.aimWithoutRoll),Vec3{0,0,1});f.y=0;const float l=std::sqrt(f.x*f.x+f.z*f.z);
+                 if(l>1e-4f&&std::isfinite(l)){std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);controllerUiFixture::guardWorldForward={f.x/l,0,f.z/l};controllerUiFixture::guardWorldForwardMs=now;}}
                 static std::atomic<uint64_t> logged{0};static std::atomic<unsigned> lines{0};
                 if(logged.exchange(guard.serial)!=guard.serial||(stick[0]!=0||stick[1]!=0)&&lines.load()<40){++lines;std::ostringstream o;o<<std::setprecision(6)<<"\"tick\":"<<tick<<",\"serial\":"<<guard.serial
                     <<",\"guard\":["<<guard.direction.x<<','<<guard.direction.z<<"],\"guard_yaw\":"<<proposal.yaw<<",\"turn\":"<<turn<<",\"stick\":["<<stick[0]<<','<<stick[1]<<"],\"sent_stick\":["<<turned[0]<<','<<turned[1]<<']';

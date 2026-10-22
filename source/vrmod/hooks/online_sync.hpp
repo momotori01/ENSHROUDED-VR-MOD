@@ -109,7 +109,7 @@ inline void action(uint64_t from,const uint8_t* data,size_t size){
     if(std::find(seen.begin(),seen.end(),key)!=seen.end())return;
     std::rotate(seen.rbegin(),seen.rbegin()+1,seen.rend());seen[0]=key;++actionsHeard;
     if(a->kind==sync::clockAction){clockHeard(from,*a);return;}
-    if(a->kind==sync::guardAction){const bool back=a->character&&controllerUiFixture::undoDamage&&controllerUiFixture::undoDamage(a->at,900);
+    if(a->kind==sync::guardAction){const auto giveBack=controllerUiFixture::guardGiveBack?controllerUiFixture::guardGiveBack:controllerUiFixture::undoDamage;const bool back=a->character&&giveBack&&giveBack(a->at,900);
         if(logs++<200)logFile->event("online_sync_guard_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"blocked\":"+(a->character?"true":"false")+",\"damage_given_back\":"+(back?"true":"false"));return;}
     if(a->kind==sync::castAction){fishingCharge::peerCast(from,a->strength);
         if(logs++<200)logFile->event("online_sync_cast_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"strength\":"+std::to_string(a->strength));}
@@ -247,6 +247,11 @@ inline void frame(uint64_t renderSerial) noexcept {
         for(const auto& p:peers.all()){places.push_back(sync::metres(p.place));known.push_back(p.placed?1:0);}
         std::vector<char> everyFrame(peers.all().size(),0);
         if(placed)for(const auto i:sync::bodyRecipients(sync::metres(lastPlace),places,known,sightMetres,mostEveryFrame))everyFrame[i]=1;
+        // A client's body to the host every frame, wherever the host's own character stands (2026-10-22, guest log 20261022-140736:
+        // 592 bodies in 13 minutes - the friend's character was far away - so the host's server swept the guest's strokes
+        // without the guest's weapon). A client's game talks with the host's game only: its game peers are the host.
+        if(placed&&nativeImpactComponents::clientNow(GetTickCount64())){const auto hosts=steamLink::gamePeersWithin(10000);size_t i=0;
+            for(const auto& p:peers.all()){if(std::find(hosts.begin(),hosts.end(),p.id)!=hosts.end())everyFrame[i]=1;++i;}}
         size_t index=0;
         for(auto& p:peers.all()){
             const bool inSight=everyFrame[index++]!=0;

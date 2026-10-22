@@ -658,7 +658,7 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
         const uint32_t eyes=snapshot.eyeMask;
         static const bool singleCapture=[]{const auto f=std::getenv("EVR_CAPTURE_SINGLE");return f&&!std::strcmp(f,"1");}();
         const bool both=eyes==3||singleCapture;   // with EVR_CAPTURE_SINGLE the picture of the eye drawn is taken alone
-        auto fixtureCapture=both?nativeFixtureCapture.exchange(0):0u;auto burstCapture=both?nativeCaptureBurst.take():decltype(nativeCaptureBurst.take()){};if(both&&!burstCapture)burstCapture=bugCaptureBurst.take();
+        auto fixtureCapture=both?nativeFixtureCapture.exchange(0):0u;auto burstCapture=both?nativeCaptureBurst.take():decltype(nativeCaptureBurst.take()){};bool bugBurst=false;if(both&&!burstCapture){burstCapture=bugCaptureBurst.take();bugBurst=bool(burstCapture);}
         // F8: pictures of both eyes where the player stands (EVR_CAPTURE_KEY=1; for Mock sessions that the user moves by
         // the keyboard - 2026-10-14: "I move with the keyboard; take the fog and brightness differences"). A beep says
         // the key was taken; on a frame of one eye the picture comes with the next frame of both.
@@ -762,22 +762,31 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
         // Diagnostic synchronization only. This does not flush/retire native allocators.
         if(!async)vkCheck(xr.vk.vkDeviceWaitIdle(xr.vk.device),"native game pair GPU completion");
         const auto idleComplete=std::chrono::steady_clock::now();
+        auto copyDone=idleComplete,uiDone=idleComplete;   // where a capture's time goes (2026-10-22: 130 of 160 ms were not the eyes')
         if(queueTraceBudget.load())note("native_copy_begin","\"frame\":"+std::to_string(frame)+",\"pair\":"+std::to_string(pairNumber)+",\"thread\":"+std::to_string(GetCurrentThreadId())+",\"last_present\":"+std::to_string(presents.load()));
         // The bug report's history: a save asked for (evrSaveEyeHistory: the button pressed, the report's window ended) is
         // written before this pair; a picture of this pair goes into the ring if one is due.
         if(state.history&&!state.historyFailed){
-            if(const auto asked=eyeHistoryAsked.load();asked!=eyeHistoryDone.load())try{
+            // two slots a frame (about ten frames for the twenty), the frame held some milliseconds each instead of 90..236 ms once
+            static uint64_t savingAsked=0,savingFrame=0;static double savingMs=0;
+            const auto asked=eyeHistoryAsked.load();
+            if(state.history->saving||asked!=eyeHistoryDone.load())try{
                 const auto start=std::chrono::steady_clock::now();
-                state.transfer->finish();std::error_code ec;std::filesystem::create_directories(std::filesystem::path(output)/"native-xr",ec);
-                const auto frames=state.history->save(xr.vk.queue,output+"/native-xr");eyeHistoryDone=asked;
-                std::string list;for(const auto f:frames)list+=(list.empty()?"":",")+std::to_string(f);
-                state.log->event("eye_history_saved","\"frame\":"+std::to_string(frame)+",\"pairs\":"+std::to_string(frames.size())+",\"frames\":["+list+"],\"ms\":"+
-                    std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count()));
+                state.transfer->finish();
+                if(!state.history->saving){std::error_code ec;std::filesystem::create_directories(std::filesystem::path(output)/"native-xr",ec);
+                    state.history->startSave(output+"/native-xr");savingAsked=asked;savingFrame=frame;savingMs=0;}
+                const bool done=state.history->step(xr.vk.queue,2);
+                savingMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-start).count();
+                if(done){eyeHistoryDone=savingAsked;const auto& frames=state.history->savedFrames();
+                    std::string list;for(const auto f:frames)list+=(list.empty()?"":",")+std::to_string(f);
+                    state.log->event("eye_history_saved","\"frame\":"+std::to_string(frame)+",\"asked_at_frame\":"+std::to_string(savingFrame)+",\"pairs\":"+std::to_string(frames.size())+",\"frames\":["+list+"],\"ms\":"+
+                        std::to_string(int(savingMs))+",\"spread_over_frames\":"+std::to_string(frame-savingFrame+1));}
             }catch(const std::exception& e){state.historyFailed=true;eyeHistoryDone=eyeHistoryAsked.load();state.log->event("eye_history_failed","\"stage\":\"save\",\"reason\":"+jsonString(e.what()));}
             state.history->begin(frame,GetTickCount64(),eyes==3);
         }
         state.transfer->copy(src,dst,captures,!async,lumaFrame,eyes);
         if(state.history)state.history->end();
+        copyDone=std::chrono::steady_clock::now();uiDone=copyDone;
         // Desktop UI (2026-10-13, user: "put the UI on the desktop side, for streaming"): with the UI of this frame the
         // desktop's picture - the right eye's copy with the UI over it - is made by the UI's draw below and the desktop
         // shows that; until then it keeps the picture it has. Without a UI in this frame, with a right eye of another
@@ -830,7 +839,9 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
         gpuTimingPair(state.device,pairNumber,*state.log);
         if(submitUi){
             const auto uiIndex=xr.acquireUi(frame);
-            const bool capture=uiReadback; // Motion burst needs eye images; UI remains GPU-submitted each frame.
+            // Motion burst needs eye images; UI remains GPU-submitted each frame. A bug report's pictures take no read back of the UI's
+            // XR and desktop copies (2026-10-22: the UI's part held a picture's frame 55..121 ms; only its one UI picture is kept, below).
+            const bool capture=uiReadback&&!bugBurst;
             UiFade uiFade;bool uiProbe=false;
             if(const int requested=uiHudMode.load()){
                 // The look at the previous frame's UI decides this frame's opacity (one frame late).
@@ -1035,6 +1046,15 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                 ",\"ui_readback_captured\":"+std::string(capture?"true":"false")+",\"gpu_fence_complete\":"+((capture||!async)?"true":"false")+
                 ",\"async_completion\":"+((capture||!async)?"false":"true")+",\"previous_ui_pending\":"+(state.uiTransfer->previousPending?"true":"false")+
                 ",\"format\":\"RGBA8_SRGB\",\"color_policy\":\"unpremultiply_srgb_decode_premultiply\"";
+            // A bug report's picture reads the game's UI back only for its one UI picture (2026-10-22: the copy out of the UI's
+            // mapped memory and the statistics of every picture took about 130 of the 160 ms a picture held the frame).
+            if(bugBurst&&uiReadback&&bugUiWanted.exchange(false))try{   // the bug report's UI picture: the game's UI alone, no statistics
+                const auto native=uiDraw::captureSource(state.device,uiSource);
+                if(native.size()==size_t(uiSource.width)*uiSource.height*4){const auto prefix=output+"/native-xr/ui-frame-"+std::to_string(frame);
+                    {std::ofstream file(prefix+"-native.rgba8",std::ios::binary);file.write(reinterpret_cast<const char*>(native.data()),std::streamsize(native.size()));}
+                    {std::ofstream json(prefix+".json");json<<"{\"frame\":"<<frame<<",\"width\":"<<uiSource.width<<",\"height\":"<<uiSource.height<<",\"by\":\"bug_report\"}\n";}
+                    state.log->event("bug_report_ui_frame","\"frame\":"+std::to_string(frame)+",\"width\":"+std::to_string(uiSource.width)+",\"height\":"+std::to_string(uiSource.height));}
+            }catch(const std::exception& e){state.log->event("bug_report_ui_frame_failed","\"reason\":"+jsonString(e.what()));}
             if(capture&&uiBurst){
                 const auto native=uiDraw::captureSource(state.device,uiSource);
                 if(bugUiWanted.exchange(false)&&native.size()==size_t(uiSource.width)*uiSource.height*4)try{
@@ -1069,6 +1089,7 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
             }
             state.log->event("native_ui_gpu_complete",fields);
         }
+        uiDone=std::chrono::steady_clock::now();
         // The eye left out: its kept picture warped to this frame's pose, into the image acquired for it.
         for(uint32_t eye=0;eye<2;++eye){
             if((eyes>>eye&1)||!xr.eyeWarpable(eye)||!state.warp||state.warpFailed)continue;
@@ -1140,7 +1161,7 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
         state.log->event("native_completion_cpu_timing","\"frame\":"+std::to_string(frame)+
             ",\"evidence_us\":"+std::to_string(micros(completionStart,evidenceComplete))+
             ",\"device_idle_us\":"+std::to_string(micros(evidenceComplete,idleComplete))+
-            ",\"transfer_and_capture_us\":"+std::to_string(micros(idleComplete,transferComplete))+
+            ",\"transfer_and_capture_us\":"+std::to_string(micros(idleComplete,transferComplete))+",\"eye_copy_us\":"+std::to_string(micros(idleComplete,copyDone))+",\"ui_us\":"+std::to_string(micros(copyDone,uiDone))+
             ",\"end_frame_us\":"+std::to_string(micros(transferComplete,finishComplete))+
             ",\"total_us\":"+std::to_string(micros(completionStart,finishComplete))+
             ",\"transfer_free_us\":"+std::to_string(transferTiming.freeUs)+

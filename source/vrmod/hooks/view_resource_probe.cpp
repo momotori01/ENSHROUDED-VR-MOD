@@ -53,6 +53,7 @@
 #include <evr/quick_slot.hpp>
 #include <evr/body_ik.hpp>
 #include <evr/player_sync.hpp>
+#include <evr/guard_rule.hpp>
 #include <evr/live_contact.hpp>
 #include <evr/attack_catalog.hpp>
 #include <evr/live_targets.hpp>
@@ -3669,7 +3670,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                     for(auto& r:controllerUiFixture::hitReports)if(r.serial<slot->serial)slot=&r;
                     *slot={++controllerUiFixture::hitReportSerial,now,at,character,false,entity};};
                 remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::hitThing=&liveTargets::thingTouched;
-                controllerUiFixture::creatureNear=&liveTargets::creatureNear;controllerUiFixture::undoDamage=&liveTargets::undoDamage;
+                controllerUiFixture::creatureNear=&liveTargets::creatureNear;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;
                 controllerUiFixture::localParryDecided=&parryObserver::localDecided;
                 motionArrowVisual::flightHit=&liveTargets::segmentHit;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
                 motionArrowVisual::flightReach=[](WorldPositionQ32 origin,Vec3 direction,uint64_t now){int by=0;const float r=liveTargets::aimReach(origin,direction,now,by);return by==1?r:1e9f;};
@@ -4426,7 +4427,7 @@ void prepareHostParts(){
     nativeImpactComponents::requested=true;actionSequenceObserver::requested=true;   // recording stays on (no eye pairs to wait for)
     sequenceColliderObserver::requested=true;impactHierarchyObserver::requested=true;attachmentObserver::requested=true;
     motionColliderApply::requested=true;motionColliderApply::live=true;liveTargets::requested=true;
-    remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;
+    remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;
     controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
     inputRanged::liveBowWatch=true;bowSpawnObserver::remoteAlways=true;   // the own shots known as own (not a guest's)
 }

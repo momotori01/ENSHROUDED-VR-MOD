@@ -59,7 +59,7 @@ public:
     }
     EyeHistory(const EyeHistory&)=delete;EyeHistory& operator=(const EyeHistory&)=delete;
     // The owner destroys this after the GPU is done with the transfers (as the stereo transfer).
-    ~EyeHistory(){destroySlots();if(fence)v.vkDestroyFence(v.device,fence,nullptr);if(pool)v.vkDestroyCommandPool(v.device,pool,nullptr);}
+    ~EyeHistory(){releaseSave();destroySlots();if(fence)v.vkDestroyFence(v.device,fence,nullptr);if(pool)v.vkDestroyCommandPool(v.device,pool,nullptr);}
     // Before a pair's copy: is a picture due in it (both eyes drawn, everyMs since the last, not frozen)?
     void begin(uint64_t frame,uint64_t ms,bool bothEyes){due=!frozen&&bothEyes&&(!lastMs||ms<lastMs||ms-lastMs>=everyMs);dueFrame=frame;dueMs=ms;}
     // stereo transfer's history hook: the eye's source, in TRANSFER_SRC_OPTIMAL, right after its copy.
@@ -77,22 +77,50 @@ public:
     }
     // After the pair's copy was recorded.
     void end(){if(!due||ring.empty())return;if(ring[next].written[0]||ring[next].written[1]){next=(next+1)%uint32_t(ring.size());lastMs=dueMs;++shots;}due=false;}
-    // The slots, oldest first, read back and written (`folder`/frame-<n>-eye-<e>.ppm, RGB). Waits for the GPU: call it
-    // between pairs on the thread that records the transfers, after the transfer's own work is done (finish()).
-    // Returns the frames written; the slots are emptied.
-    std::vector<uint64_t> save(VkQueue queue,const std::string& folder){
-        std::vector<uint64_t> frames;if(ring.empty())return frames;
-        const VkDeviceSize bytes=VkDeviceSize(width)*height*4;
-        VkBuffer buffer{};VkDeviceMemory memory{};
-        VkBufferCreateInfo b{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};b.size=bytes*2;b.usage=VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-        vkCheck(v.vkCreateBuffer(v.device,&b,nullptr,&buffer),"eye history readback buffer");
+    // The slots, oldest first, read back and written (`folder`/frame-<n>-eye-<e>.ppm, RGB), a few a frame (2026-10-22:
+    // the whole save at once, 20 slots one after the other, held the frame 90..236 ms - twice in each report, the stutter
+    // the user felt; guest log 20261022-140736 eye_history_saved). startSave() takes the slots written so far and stops
+    // new pictures; step() reads back and writes up to `count` of them; true when all are written (savedFrames()).
+    // Waits for the GPU: call them between pairs on the thread that records the transfers, after the transfer's own work
+    // is done (finish()).
+    bool saving=false;
+    void startSave(const std::string& folder){
+        if(saving)return;saveOrder.clear();saveNext=0;saveFrames.clear();saveFolder=folder;
+        if(ring.empty()){saving=true;return;}
+        saveBytes=VkDeviceSize(width)*height*4;
+        VkBufferCreateInfo b{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};b.size=saveBytes*2;b.usage=VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+        vkCheck(v.vkCreateBuffer(v.device,&b,nullptr,&saveBuffer),"eye history readback buffer");
         try{
-            VkMemoryRequirements req{};v.vkGetBufferMemoryRequirements(v.device,buffer,&req);
-            memory=v.allocate(req,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
-            vkCheck(v.vkBindBufferMemory(v.device,buffer,memory,0),"eye history readback bind");
-            std::vector<uint32_t> order;for(uint32_t k=0;k<ring.size();++k){const uint32_t at=(next+k)%uint32_t(ring.size());if(ring[at].written[0]&&ring[at].written[1])order.push_back(at);}
+            VkMemoryRequirements req{};v.vkGetBufferMemoryRequirements(v.device,saveBuffer,&req);
+            saveMemory=v.allocate(req,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
+            vkCheck(v.vkBindBufferMemory(v.device,saveBuffer,saveMemory,0),"eye history readback bind");
+        }catch(...){releaseSave();throw;}
+        for(uint32_t k=0;k<ring.size();++k){const uint32_t at=(next+k)%uint32_t(ring.size());if(ring[at].written[0]&&ring[at].written[1])saveOrder.push_back(at);}
+        saving=true;frozen=true;
+    }
+    bool step(VkQueue queue,size_t count){
+        if(!saving)return true;
+        try{for(size_t n=0;n<count&&saveNext<saveOrder.size();++n,++saveNext){writeSlot(queue,saveOrder[saveNext]);}}
+        catch(...){releaseSave();saving=false;frozen=false;throw;}
+        if(saveNext<saveOrder.size())return false;
+        releaseSave();saving=false;frozen=false;++saves;return true;
+    }
+    const std::vector<uint64_t>& savedFrames()const{return saveFrames;}
+    // All at once (as before 2026-10-22).
+    std::vector<uint64_t> save(VkQueue queue,const std::string& folder){
+        startSave(folder);while(!step(queue,64)){}
+        return saveFrames;
+    }
+private:
+    std::vector<uint32_t> saveOrder;size_t saveNext=0;std::vector<uint64_t> saveFrames;std::string saveFolder;
+    VkBuffer saveBuffer{};VkDeviceMemory saveMemory{};VkDeviceSize saveBytes=0;
+    void releaseSave() noexcept {
+        if(saveBuffer)v.vkDestroyBuffer(v.device,saveBuffer,nullptr);if(saveMemory)v.vkFreeMemory(v.device,saveMemory,nullptr);saveBuffer={};saveMemory={};
+    }
+    void writeSlot(VkQueue queue,uint32_t at){
+            const VkDeviceSize bytes=saveBytes;const VkBuffer buffer=saveBuffer;const VkDeviceMemory memory=saveMemory;const std::string& folder=saveFolder;
             std::vector<char> row(size_t(width)*3);
-            for(const auto at:order){
+            {
                 auto& slot=ring[at];
                 vkCheck(v.vkResetCommandBuffer(cmd,0),"eye history reset");
                 VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};begin.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -117,11 +145,8 @@ public:
                         out.write(row.data(),std::streamsize(row.size()));}
                 }
                 v.vkUnmapMemory(v.device,memory);
-                frames.push_back(slot.frame);slot.written={false,false};
+                saveFrames.push_back(slot.frame);slot.written={false,false};
             }
-        }catch(...){v.vkDestroyBuffer(v.device,buffer,nullptr);if(memory)v.vkFreeMemory(v.device,memory,nullptr);throw;}
-        v.vkDestroyBuffer(v.device,buffer,nullptr);v.vkFreeMemory(v.device,memory,nullptr);
-        ++saves;return frames;
     }
 };
 }

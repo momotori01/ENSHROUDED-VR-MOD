@@ -45,31 +45,66 @@ inline void record(void* world,uint32_t type,const void* const* data){
 // The guest's guard (2026-10-22, user: "decide the guard on the guest and send only whether it held"; on the friend's server
 // a guest's guard was judged by the host toward the character's old facing). A blow on this player (the HitEvent's target
 // within 1.2 m of the player across and 2.5 m up and down, a loss of health, neither blocked nor parried by the host) that
-// comes while the guard is held: shown as blocked at once (WasBlocked, no health change, no reaction or push: the client
-// plays the block's feedback, no damage number, no stagger) and sent to the host (online_sync.hpp sendGuards), whose mod
-// gives the health back (live_melee_targets.hpp undoDamage). First form: every blow while guarding counts; the blow's
-// direction and the camera's turn are logged (guest_guard_decided) to bring in the guard's cone once it is checked. Only as
-// a guest (liveTargets::guestWorld). EVR_GUEST_GUARD=0: off.
+// comes while the guard is held, by the game's own rule of a block (user 14:00: "is the guard invincible then? that is not
+// allowed" - 0.9.8 took every blow while guarding): the player's Actor is in its guard state (Blocking, 2 - the game's own
+// rules for when a guard holds: its start, a stagger, no stamina), the attacker stands within 80 degrees of the guard's front
+// (the game's hit angle test 0x21a4f0, called by applyDamage at 0x3d6e92 with the Blocking state: (hit angle + pi) in
+// [0, 80] or [280, 360] degrees; the angle between the target's front and the way from the attacker, 0x2190e0, level) - the
+// front the character is given while guarding (input_head_idle.hpp: the back of the shield hand, a two-hand weapon from the
+// head to the hands) - and stamina is left. Then it is shown as blocked at once (WasBlocked, no health change, no reaction
+// or push: the client plays the block's feedback, no damage number, no stagger) and sent to the host (online_sync.hpp
+// sendGuards), whose mod gives the health back and takes the block's stamina (live_melee_targets.hpp guardGiveBack). Only as
+// a guest (liveTargets::guestWorld). EVR_GUEST_GUARD=0: off. Not known here: an attack the game makes unblockable.
 inline const bool guestGuardWanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_GUEST_GUARD",v,sizeof v);return !(n==1&&v[0]=='0');}();
-inline std::array<uint8_t,hitEventBytes> guarded{};inline std::atomic<unsigned> guards{0};
+inline std::array<uint8_t,hitEventBytes> guarded{};inline std::atomic<unsigned> guards{0},refusals{0};
+struct StaminaType {uintptr_t world=0;int id=-2;};inline StaminaType staminaType;   // keen::ecs::NetworkStamina (4 bytes: stamina, max) of a World
+inline int networkStamina(uintptr_t world,uint32_t entity){
+    if(staminaType.world!=world||staminaType.id==-2){staminaType={world,-1};
+        for(unsigned i=0;i<nativeImpactComponents::componentCapacity;++i){try{const auto t=nativeImpactComponents::componentType(world,i);
+            if(t.qualifiedName=="keen::ecs::NetworkStamina"&&t.bytes==4){staminaType.id=int(i);break;}}catch(...){break;}}}
+    if(staminaType.id<0)return -1;
+    try{const auto c=nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(world,entity),unsigned(staminaType.id),4);return c?int(read<uint16_t>(c)):-1;}catch(...){return -1;}
+}
+inline void refuse(const char* why,uint32_t attacker,int32_t health,double angle,int stamina,const char* front){
+    if(refusals.fetch_add(1)>=300)return;
+    std::ostringstream s;s<<std::setprecision(4)<<"\"reason\":\""<<why<<"\",\"attacker\":"<<attacker<<",\"health_change\":"<<health<<",\"angle_deg\":"<<angle*57.29578<<",\"stamina\":"<<stamina<<",\"front\":\""<<front<<"\",\"ms\":"<<GetTickCount64();
+    logFile->event("guest_guard_refused",s.str());
+}
 inline bool guard(void* world,uint32_t type,const void* const* data,const void*& replacement){
     if(!guestGuardWanted||!liveTargets::guestWorld||!controllerUiFixture::liveGuardHeld.load()||!data||!*data)return false;
     const auto queues=read<uintptr_t>(reinterpret_cast<uintptr_t>(world)+queueA);if(!queues||read<uint32_t>(queues+uintptr_t(type)*queueStride+elementSizeAt)!=hitEventBytes)return false;
     auto e=read<std::array<uint8_t,hitEventBytes>>(reinterpret_cast<uintptr_t>(*data));
-    uint32_t flags=0;int32_t health=0;uint32_t attacker=0;std::memcpy(&flags,e.data()+152,4);std::memcpy(&health,e.data()+188,4);std::memcpy(&attacker,e.data()+144,4);
+    uint32_t flags=0;int32_t health=0;uint32_t attacker=0,source=0;std::memcpy(&flags,e.data()+152,4);std::memcpy(&health,e.data()+188,4);std::memcpy(&attacker,e.data()+144,4);std::memcpy(&source,e.data()+164,4);
     if(health>=0||(flags&3)||!attacker)return false;
     rootCamera::Sample own;{std::lock_guard<std::mutex> lock(rootCamera::mutex);own=rootCamera::latest;}
-    if(!own.number||GetTickCount64()-own.milliseconds>1000)return false;
+    const auto now=GetTickCount64();
+    if(!own.number||now-own.milliseconds>1000)return false;
     std::array<int64_t,3> target{};std::memcpy(target.data(),e.data()+8,24);
     const double q=1.0/4294967296.0,dx=double(target[0]-own.stable.position.x)*q,dy=double(target[1]-own.stable.position.y)*q,dz=double(target[2]-own.stable.position.z)*q;
     if(dx*dx+dz*dz>1.2*1.2||std::abs(dy)>2.5)return false;
+    // the game's guard state of this player's Actor (input_actor_observer.hpp), when it is known
+    {const auto ms=controllerUiFixture::playerActorStateMs.load();
+     const auto blocking=controllerUiFixture::blockingMs.load();   // within 150 ms (a guard held drops it for a tick or two: guest log 20261022-123336)
+     if(ms&&now>=ms&&now-ms<=300&&!(blocking&&now>=blocking&&now-blocking<=150)){refuse("not_in_the_guard_state",attacker,health,-1,-1,"");return false;}}
+    // the guard's front: as sent to the game while guarding, else the camera's
+    Vec3 front{};const char* frontFrom="guard";
+    {std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);const auto ms=controllerUiFixture::guardWorldForwardMs;if(ms&&now>=ms&&now-ms<=300)front=controllerUiFixture::guardWorldForward;}
+    if(front.x==0&&front.z==0){frontFrom="camera";auto f=rotate(normalized(own.unshaken.orientation),Vec3{0,0,1});const float l=std::sqrt(f.x*f.x+f.z*f.z);if(l>1e-4f&&std::isfinite(l))front={f.x/l,0,f.z/l};}
+    if(front.x==0&&front.z==0){refuse("front_unknown",attacker,health,-1,-1,frontFrom);return false;}
+    // where the attacker stands (the list of targets of this PC; the shooter of a shot)
+    std::array<int64_t,3> from{};bool found=false;for(const auto id:{attacker,source})if(id&&liveTargets::entityPosition(id,from,now)){found=true;break;}
+    if(!found){refuse("attacker_unknown",attacker,health,-1,-1,frontFrom);return false;}
+    const double ax=double(from[0]-own.stable.position.x)*q,az=double(from[2]-own.stable.position.z)*q,al=std::sqrt(ax*ax+az*az);
+    const double angle=evr::guard::angleFromFront(front.x,front.z,ax,az);
+    const int stamina=networkStamina(reinterpret_cast<uintptr_t>(world),own.entity);
+    if(angle>evr::guard::halfAngle){refuse("outside_the_guard",attacker,health,angle,stamina,frontFrom);return false;}
+    if(stamina==0){refuse("no_stamina",attacker,health,angle,stamina,frontFrom);return false;}
     guarded=e;flags|=1u;const int32_t zero=0;const uint16_t none=0;std::memcpy(guarded.data()+152,&flags,4);std::memcpy(guarded.data()+188,&zero,4);
     std::memcpy(guarded.data()+224,&none,2);std::memcpy(guarded.data()+226,&none,2);replacement=guarded.data();
-    {std::lock_guard<std::mutex> lock(controllerUiFixture::guardDecidedMutex);auto now=GetTickCount64();if(now<=controllerUiFixture::guardDecidedMs)now=controllerUiFixture::guardDecidedMs+1;
-     controllerUiFixture::guardDecidedMs=now;controllerUiFixture::guardDecidedAt={own.stable.position.x,own.stable.position.y,own.stable.position.z};}
-    float dir[3]{};std::memcpy(dir,e.data()+132,12);const auto o=own.unshaken.orientation;
-    if(guards.fetch_add(1)<300){std::ostringstream s;s<<std::setprecision(5)<<"\"attacker\":"<<attacker<<",\"health_change\":"<<health<<",\"flags\":"<<(flags&~1u)<<",\"hit_direction\":["<<dir[0]<<','<<dir[1]<<','<<dir[2]
-        <<"],\"camera_orientation\":["<<o.x<<','<<o.y<<','<<o.z<<','<<o.w<<"],\"target_from_player_m\":["<<dx<<','<<dy<<','<<dz<<"],\"ms\":"<<GetTickCount64();
+    {std::lock_guard<std::mutex> lock(controllerUiFixture::guardDecidedMutex);auto at=now;if(at<=controllerUiFixture::guardDecidedMs)at=controllerUiFixture::guardDecidedMs+1;
+     controllerUiFixture::guardDecidedMs=at;controllerUiFixture::guardDecidedAt={own.stable.position.x,own.stable.position.y,own.stable.position.z};}
+    if(guards.fetch_add(1)<300){std::ostringstream s;s<<std::setprecision(5)<<"\"attacker\":"<<attacker<<",\"health_change\":"<<health<<",\"flags\":"<<(flags&~1u)<<",\"angle_deg\":"<<angle*57.29578
+        <<",\"front\":\""<<frontFrom<<"\",\"front_dir\":["<<front.x<<','<<front.z<<"],\"attacker_m\":"<<al<<",\"stamina\":"<<stamina<<",\"target_from_player_m\":["<<dx<<','<<dy<<','<<dz<<"],\"ms\":"<<now;
         logFile->event("guest_guard_decided",s.str());}
     return true;
 }

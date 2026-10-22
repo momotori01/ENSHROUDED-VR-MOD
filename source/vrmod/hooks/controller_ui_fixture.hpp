@@ -36,6 +36,7 @@
 #include <evr/live_secondary.hpp>
 #include <evr/throwable_catalog.hpp>
 #include <evr/live_guard.hpp>
+#include <evr/guard_rule.hpp>
 #include <evr/quick_slot.hpp>
 #include "menu_pointer.hpp"
 #include "aim_mark.hpp"
@@ -456,6 +457,9 @@ struct FishingAim {uint64_t until=0,serial=0;evr::Vec3 direction{};};
 // The guard's direction while the live guard holds the block (tracking space, level): input_head_idle.hpp sends the
 // camera this way, and bodyHeading (guard only) makes the character look along it. Under fishingAimMutex.
 inline FishingAim guardAim;
+// The same direction in the game's world (level, unit) and when it was last sent (input_head_idle.hpp): where the character
+// looks while guarding - a guest decides its guard toward it (hit_event_intake.hpp). Under fishingAimMutex.
+inline evr::Vec3 guardWorldForward{};inline uint64_t guardWorldForwardMs=0;
 inline FishingAim fishingAim;inline std::mutex fishingAimMutex;
 // The bow's shot as the sent camera (2026-10-19): from the release for sentMs the input this player's game sends carries
 // the camera the shot needs (bow_aim.hpp bowAimCameraKnownMuzzle) - the server that makes the arrow, this PC's or the
@@ -561,9 +565,12 @@ inline bool (*creatureNear)(float,std::array<int64_t,3>&,uint32_t&)=nullptr;
 // (parry_observer.hpp localDecided). The enemy's id in this PC's World, the swing's time.
 inline void (*localParryDecided)(uint32_t,uint64_t)=nullptr;
 inline bool (*undoDamage)(const std::array<int64_t,3>&,uint64_t)=nullptr;
+// A guest's guard (online_sync.hpp guardAction): the health given back and the block's stamina taken, as the game's own
+// block costs it (live_melee_targets.hpp guardGiveBack). Set in view_resource_probe.cpp.
+inline bool (*guardGiveBack)(const std::array<int64_t,3>&,uint64_t)=nullptr;
 // wandNextShotMs: no swing of the wand shoots before it (motion_event_selection_observer.hpp sets it when a swing's action starts).
 inline std::atomic<uint64_t> wandNextShotMs{0};
-inline std::atomic<uint64_t> playerActorState{0},playerActorStateMs{0},blockOpportunityMs{0};   // blockOpportunityMs: the last tick the player's BlockOpportunity (5) was up (parry_observer.hpp relaxed parry)   // the block button is held by the live guard (input_actor_observer.hpp records the actor's look then)
+inline std::atomic<uint64_t> playerActorState{0},playerActorStateMs{0},blockOpportunityMs{0},blockingMs{0};   // blockOpportunityMs: the last tick the player's BlockOpportunity (5) was up (parry_observer.hpp relaxed parry)   // the block button is held by the live guard (input_actor_observer.hpp records the actor's look then)
 inline evr::game::ControllerMotionFixture motion;
 inline evr::game::MotionObservation(*observeMotion)()=nullptr;
 inline bool attackRequested=false,attackCompleted=false;

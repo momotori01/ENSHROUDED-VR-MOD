@@ -585,6 +585,14 @@ inline bool ownedElsewhere(uint32_t sequence,uint32_t item,int64_t trigger,uint3
     ",\"trigger\":"+std::to_string(trigger)+",\"owned_trigger\":"+std::to_string(ownedTrigger.load())+",\"later_by_ms\":"+std::to_string(double(difference)/1e6)+",\"taken_for_the_same_attack\":"+(same?"true":"false"));}
  return same;
 }
+// A guest's own attack on its client (2026-10-22, user as a guest: "striking a tree or a thing walks me forward the way of the
+// old model"; guest log 20261022-140736: live_event_retime 0 - a client has no World with its own Actor, so no action of
+// its own is ever owned here). The action this guest's stroke began (the pending one below) is held as owned on this
+// side instead: its movement and turn withheld at every call site, as the host withholds them on its server
+// (remoteActions). EVR_GUEST_STILL=0: off.
+inline const bool guestStillWanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_GUEST_STILL",v,sizeof v);return !(n==1&&v[0]=='0');}();
+struct GuestOwned{uint32_t sequence=0,item=0,entity=0;int64_t trigger=0;uint64_t until=0;};inline GuestOwned guestOwned;inline std::mutex guestOwnedMutex;
+inline std::atomic<unsigned> guestStilled{0},guestOwnedActions{0};
 inline void stillReplica(void* output,const void* actor,void* registry,const void* filter){
  const auto now=GetTickCount64();const auto until=ownedUntil.load();const bool owning=until&&now<=until;
  if(!owning&&!livePress)return;
@@ -596,14 +604,23 @@ inline void stillReplica(void* output,const void* actor,void* registry,const voi
   // game-20261013-101131: this side was seen in the next attack while the one before was still the owned one). With
   // few frames a second the effect's time, 0.2 s into the attack, can come inside that gap. Until the attack is
   // owned, only the effect is withheld here; sound, factors and abilities wait for the owner's word.
-  int64_t apart=0;bool pending=false;uint64_t pressSerial=0;
+  int64_t apart=0;bool pending=false,guestOwn=false;uint64_t pressSerial=0;
   if(!(owning&&ownedElsewhere(sequence,item,trigger,triggerEntity,&apart))){
+   if(guestStillWanted){std::lock_guard<std::mutex> lock(guestOwnedMutex);
+    guestOwn=guestOwned.until>=now&&guestOwned.sequence==sequence&&guestOwned.item==item&&guestOwned.entity==triggerEntity&&guestOwned.trigger==trigger;}
+   if(!guestOwn){
    if(!livePress||!sequence||!(read<uint8_t>(reinterpret_cast<uintptr_t>(actor)+0x1b1)&1))return;
    const auto press=livePress();
    if(!(press.serial&&press.serial>ownedSerial.load()&&press.pressed&&now>=press.pressed&&now-press.pressed<=1000&&press.entity&&triggerEntity==press.entity&&item==press.item&&trigger!=press.previousTrigger))return;
    pending=true;pressSerial=press.serial;
    {const auto before=read<std::array<uint8_t,3104>>(reinterpret_cast<uintptr_t>(actor));int64_t length=0;std::memcpy(&length,before.data()+0x188,8);uint32_t by=0;
-    if(length>0&&length<=60000000000ll&&movingAction(before,registry,length,sequence,by)){movingNoted(sequence,item,trigger,by,"replica");return;}}
+    if(length>0&&length<=60000000000ll&&movingAction(before,registry,length,sequence,by)){movingNoted(sequence,item,trigger,by,"replica");return;}
+    // a guest: no owner will come - this side holds the action (only a normal attack: movingAction returned above)
+    if(guestStillWanted&&(liveTargets::guestWorld||nativeImpactComponents::clientNow(now))&&length>0&&length<=60000000000ll){
+     {std::lock_guard<std::mutex> lock(guestOwnedMutex);guestOwned={sequence,item,triggerEntity,trigger,now+uint64_t(length/1000000)+1000};}guestOwn=true;
+     if(guestOwnedActions.fetch_add(1)<200)logFile->event("guest_action_held","\"sequence\":"+std::to_string(sequence)+",\"item\":"+std::to_string(item)+",\"trigger\":"+std::to_string(trigger)+
+      ",\"length_ms\":"+std::to_string(length/1000000)+",\"press_serial\":"+std::to_string(press.serial)+",\"press_age_ms\":"+std::to_string(now-press.pressed));}}
+   }
   }
   const auto address=reinterpret_cast<uintptr_t>(output);const auto h=read<std::array<uintptr_t,4>>(address);
   if(h[1]>256||h[1]>h[2]||(!h[0]&&h[1]))throw std::runtime_error("replica event array bounds");
@@ -611,7 +628,7 @@ inline void stillReplica(void* output,const void* actor,void* registry,const voi
   // The swing's sound too (SfxNotifierEvent): this side plays it, at its authored time, after the early hit.
   // And the factors that slow the character for the animation (LerpMovementFactorEvent, LerpRotationFactorEvent).
   for(size_t i=0;i<h[1];++i){const auto p=read<uintptr_t>(h[0]+i*8);const auto type=read<uint32_t>(p);
-   if(type==vfxNotifierEvent||(!pending&&!(stillKeep&1)&&type==sfxNotifierEvent)||(!pending&&!(stillKeep&8)&&(type==lerpMovementFactorEvent||type==lerpRotationFactorEvent))){++withheld;continue;}dst.push_back(p);}
+   if(type==vfxNotifierEvent||(guestOwn&&movesCharacter(type))||(!pending&&!(stillKeep&1)&&type==sfxNotifierEvent)||(!pending&&!(stillKeep&8)&&(type==lerpMovementFactorEvent||type==lerpRotationFactorEvent))){++withheld;if(guestOwn&&type!=vfxNotifierEvent)++guestStilled;continue;}dst.push_back(p);}
   // The abilities to walk, turn and jump, as soon as the early stroke is done: on this side too (see movesNow). A call
   // site can take them only on a tick that gave it an array, so they are offered for 0.4 s from that time on; enabling
   // twice changes nothing.
@@ -637,6 +654,97 @@ inline void stillReplica(void* output,const void* actor,void* registry,const voi
   else if(replicaWithheld.fetch_add(withheld)<24||(abilities&&abilitiesBefore<24)||firstOfAttack)logFile->event("live_still_replica_vfx","\"actor\":"+hex(reinterpret_cast<uintptr_t>(actor))+",\"owned_actor\":"+hex(stillActor.load())+",\"sequence\":"+std::to_string(sequence)+",\"item\":"+std::to_string(item)+",\"movement_abilities_early\":"+std::to_string(abilities)+
    ",\"trigger\":"+std::to_string(trigger)+",\"trigger_later_by_ms\":"+std::to_string(double(apart)/1e6)+",\"owned_serial\":"+std::to_string(ownedSerial.load())+",\"vfx_notifiers_withheld\":"+std::to_string(withheld)+",\"swing_sounds_included\":"+((stillKeep&1)?"false":"true")+",\"events_after\":"+std::to_string(dst.size())+",\"asset_written\":false");
  }catch(const std::exception& e){if(replicaFailures.fetch_add(1)<3)logFile->event("live_still_failure","\"reason\":"+jsonString(e.what()));}
+}
+// Other players' strokes on this host (2026-10-22, user as a VR guest on the friend's host: "attacks still lag", "striking a
+// tree or a thing walks me forward the way of the old model - the animation is still used"). A VR guest's hit is decided on
+// the guest's PC (online_sync.hpp hitAction) and laid here on that player's attack collider (sequence_collider_observer.hpp
+// remoteMelee) - which the server made only at the attack's authored time: the hits waited 250 ms (median of 39, host log
+// 20261022-140712 remote_melee_confirmed hit_age_ms 203..687). And the attack's animation moved and turned the guest's
+// character on the server as a desktop player's. For the characters of players whose mod sends its body (remoteMelee::
+// peerEntities, within 5 s), a normal attack with an Impact (the attack table: no skill; no moving events) is handled as
+// the local player's: its Impacts on the first tick (the authored ones suppressed when they come; liveLedger, as
+// liveEvents) and its movement and turn withheld at every call site (movesCharacter). Skills keep the game's. The guest's
+// client holds the same action likewise (stillReplica, guestOwned). A swing of the wand (user: "the magic's shot lags"):
+// its shots, 350 and 400 ms into the wand's normal attack, on the first tick (as liveEvents' wandSwing), its motion the
+// game's. EVR_REMOTE_STILL=0: off.
+namespace remoteActions {
+inline const bool wanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_STILL",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline std::atomic<uintptr_t> serverWorld{0};   // the World the local player's Actor ticks in (select)
+struct Owned{evr::motion::EventActionKey key;uint64_t until=0;bool still=true;};inline std::array<Owned,8> owned{};   // guarded by retimeMutex
+inline std::atomic<unsigned> started{0},withheld{0},earlyImpacts{0},suppressed{0},failures{0},logs{0};
+// The characters of the players whose mod sends its body, refreshed every 250 ms (select is called for every Actor at about
+// forty call sites: the filter below reads the game's own Actor directly and takes no lock).
+inline std::array<std::atomic<uint32_t>,8> ids{};inline std::atomic<uint64_t> idsMs{0};
+// EVR_REMOTE_STILL_SELF=1 (a test for one player, without -LiveMeleeEarly/-LiveMeleeStill): the own character as another player's.
+inline const bool self=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_STILL_SELF",v,sizeof v);return n==1&&v[0]=='1';}();
+inline bool remotePlayer(uint32_t entity,uint64_t now){
+ if(self){rootCamera::Sample r;return rootCamera::trySnapshot(r)&&r.entity==entity;}
+ if(now-idsMs.load()>250){idsMs=now;std::array<uint32_t,8> fresh{};size_t n=0;
+  {std::lock_guard<std::mutex> lock(remoteMelee::mutex);for(const auto& [peer,e]:remoteMelee::peerEntities)if(n<fresh.size()&&e.first&&now>=e.second&&now-e.second<=5000)fresh[n++]=e.first;}
+  for(size_t i=0;i<ids.size();++i)ids[i]=fresh[i];}
+ for(const auto& id:ids)if(id.load()==entity)return true;
+ return false;
+}
+inline void apply(void* output,const void* actor,void* registry,bool mainSite) noexcept {
+ try{
+  const auto a=reinterpret_cast<uintptr_t>(actor);if(!a)return;
+  // the game's own Actor of this call (BaseActor, 3104 bytes): playing an action (+0x1b1 bit 0), the actor's entity (+0x10)
+  if(!(*reinterpret_cast<const volatile uint8_t*>(a+0x1b1)&1))return;
+  const uint32_t entity=*reinterpret_cast<const volatile uint32_t*>(a+16);const auto now=GetTickCount64();
+  if(!entity||!remotePlayer(entity,now))return;
+  const auto world=serverWorld.load();if(!world)return;
+  const auto before=read<std::array<uint8_t,3104>>(a);const auto key=actionKey(before,world,entity);if(!key.valid())return;
+  int64_t sourceStart=0,sourceEnd=0,length=0;std::memcpy(&sourceStart,before.data()+0x1b8,8);std::memcpy(&sourceEnd,before.data()+0x1c0,8);std::memcpy(&length,before.data()+0x188,8);
+  const auto address=reinterpret_cast<uintptr_t>(output);const auto h=read<std::array<uintptr_t,4>>(address);
+  if(h[1]>256||h[1]>h[2]||(!h[0]&&h[1]))throw std::runtime_error("remote event array bounds");
+  std::vector<uintptr_t> src;for(size_t i=0;i<h[1];++i)src.push_back(read<uintptr_t>(h[0]+i*8));
+  std::vector<uintptr_t> dst;unsigned stilled=0,dropped=0;size_t earlyCount=0;
+  std::array<evr::motion::EarlyEvent,evr::motion::maximumEarlyEvents> ev{};
+  std::lock_guard<std::mutex> lock(retimeMutex);
+  Owned* own=nullptr;for(auto& o:owned)if(o.until>=now&&o.key==key){own=&o;break;}
+  if(!own){
+   if(!mainSite||sourceStart!=0||length<=0||length>60000000000ll||!h[0])return;
+   uint32_t by=0;if(actionKind(before,registry,length,key.sequence,by)!=ActionKind::Normal)return;
+   const bool wand=motion::rangedAimWand(key.item);
+   uint32_t type=spawnImpactEvent;size_t found=0,lasting=0;
+   earlyCount=earlyCandidates(before,registry,length,ev,type,found,lasting,false,wand?100000000:1000000);
+   if(!earlyCount||type!=(wand?spawnEntityEvent:spawnImpactEvent))return;   // an action without a hit (a tool's use, an emote): the game's
+   bool due=false,present=false;for(size_t i=0;i<earlyCount;++i){due=due||ev[i].time<=sourceEnd;present=present||std::find(src.begin(),src.end(),ev[i].variant)!=src.end();}
+   if(due||present)return;
+   for(auto p:src){if(!wand&&movesCharacter(read<uint32_t>(p))){++stilled;continue;}dst.push_back(p);}
+   for(size_t i=0;i<earlyCount;++i)dst.push_back(ev[i].variant);
+   if(dst.size()>h[2]||liveLedger.consider(key,identity(ev[0].variant),true,true,src.size()+earlyCount-1,h[2],now)!=evr::motion::LiveEventLedger<32>::Decision::Append)return;
+   Owned* slot=&owned[0];for(auto& o:owned)if(o.until<slot->until)slot=&o;*slot={key,now+uint64_t(length/1000000)+3000,!wand};
+   if(!wand){   // the hits live until the next attack may begin (as a skill's; impact_lifetime.hpp ownRemote)
+    const auto traits=stillTraits(before,registry,length);const int64_t end=traits.attackAt>0&&traits.attackAt<length?traits.attackAt:length;
+    std::array<std::array<uint8_t,16>,evr::motion::maximumEarlyEvents> guids{};std::array<double,evr::motion::maximumEarlyEvents> factors{};
+    for(size_t i=0;i<earlyCount;++i){guids[i]=identity(ev[i].variant).guid;factors[i]=ev[i].duration>0?std::max(1.0,double(end-sourceEnd)/double(ev[i].duration)):1.0;}
+    impactLifetime::ownRemote(key.sequence,guids.data(),factors.data(),earlyCount,now+uint64_t(length/1000000)+500);}
+  }else{
+   for(auto p:src){const auto type=read<uint32_t>(p);
+    if(mainSite&&(type==spawnImpactEvent||type==spawnEntityEvent)&&liveLedger.consider(key,identity(p),false,false,src.size(),h[2],now)==evr::motion::LiveEventLedger<32>::Decision::Suppress){++dropped;continue;}
+    if(own->still&&movesCharacter(type)){++stilled;continue;}dst.push_back(p);}
+  }
+  if(dst==src)return;
+  if(before!=read<std::array<uint8_t,3104>>(a)||h!=read<std::array<uintptr_t,4>>(address))throw std::runtime_error("remote selection changed its sources");
+  std::memcpy(reinterpret_cast<void*>(h[0]),dst.data(),dst.size()*8);const uint64_t count=dst.size();std::memcpy(reinterpret_cast<void*>(address+8),&count,8);
+  withheld+=stilled;suppressed+=dropped;
+  if(earlyCount){
+   std::array<evr::motion::EventIdentity,evr::motion::maximumEarlyEvents> idsOf{};for(size_t i=0;i<earlyCount;++i)idsOf[i]=identity(ev[i].variant);
+   const bool committed=liveLedger.commit(key,idsOf.data(),earlyCount,now,uint64_t(length/1000000));
+   ++started;earlyImpacts+=unsigned(earlyCount);
+   if(logs.fetch_add(1)<300)logFile->event("remote_action_held","\"entity\":"+std::to_string(entity)+",\"sequence\":"+std::to_string(key.sequence)+",\"item\":"+std::to_string(key.item)+
+    ",\"length_ms\":"+std::to_string(length/1000000)+",\"wand\":"+(motion::rangedAimWand(key.item)?"true":"false")+",\"early_events\":"+std::to_string(earlyCount)+",\"authored_ms\":"+std::to_string(ev[0].time/1000000)+",\"movement_events_withheld\":"+std::to_string(stilled)+
+    ",\"committed\":"+(committed?"true":"false")+",\"events_before\":"+std::to_string(src.size())+",\"events_after\":"+std::to_string(dst.size()));
+  }
+ }catch(const std::exception& e){if(failures.fetch_add(1)<5)try{logFile->event("remote_action_failure","\"reason\":"+jsonString(e.what()));}catch(...){}}
+ catch(...){failures.fetch_add(1);}
+}
+inline void summary(){
+ if(!started.load()&&!withheld.load()&&!failures.load()&&!guestOwnedActions.load())return;
+ logFile->event("remote_actions_summary","\"held\":"+std::to_string(started.load())+",\"early_impacts\":"+std::to_string(earlyImpacts.load())+",\"authored_suppressed\":"+std::to_string(suppressed.load())+
+  ",\"movement_events_withheld\":"+std::to_string(withheld.load())+",\"failures\":"+std::to_string(failures.load())+",\"guest_actions_held\":"+std::to_string(guestOwnedActions.load())+",\"guest_movement_withheld\":"+std::to_string(guestStilled.load()));
+}
 }
 // "A walk breaks the action off" (Actor+1b1 bit 4), put back once the early stroke is done and the tool's use is
 // paid for, for an owned action that was made not to be broken off by a walk (StillTraits, see movesNow). On every Actor instance that plays it: the byte is the instance's own,
@@ -971,6 +1079,7 @@ __declspec(noinline) uintptr_t __fastcall select(void* output,const void* actor,
     if(world){before=read<std::array<uint8_t,3104>>(reinterpret_cast<uintptr_t>(actor));observe=(before[0x1b1]&1)!=0;
      if(liveStill||hideAmmunition){stillWorld=world;stillEntity=entity;stillActor=reinterpret_cast<uintptr_t>(actor);}
      noteActor(actor);   // every call (headset run 11: with the still experiment alone the slots were never found)
+     remoteActions::serverWorld=world;
      if(!nativeImpactComponents::forceClientTicks){liveTargets::tick(world,entity);liveActionbars::tick(world,entity);liveEquipment::tick(world,entity);fogTimer::tick(world,entity);}}
    }
   }catch(const std::exception& e){if(failures.fetch_add(1)<3)logFile->event("motion_event_selection_failure","\"reason\":"+jsonString(e.what()));}
@@ -983,6 +1092,7 @@ __declspec(noinline) uintptr_t __fastcall select(void* output,const void* actor,
  if(liveStill&&accepting.load()&&!(stillKeep&64))walkAbort(actor);
  if(liveStill&&accepting.load()&&controllerUiFixture::liveCooldownEnabled())chainEarly(actor);
  if(liveStill&&accepting.load()&&controllerUiFixture::liveCooldownEnabled()&&!(stillKeep&128))chainStays(output,actor);
+ if(remoteActions::wanted&&accepting.load()&&reinterpret_cast<uintptr_t>(actor)!=stillActor.load()){const ObserverLastError keep;remoteActions::apply(output,actor,registry,caller==callerRva);}
  if((stillExperiment&64)&&liveStill&&accepting.load()&&reinterpret_cast<uintptr_t>(actor)!=stillActor.load())try{
   static std::atomic<unsigned> logged{0};const auto head=read<std::array<uint8_t,0x40>>(reinterpret_cast<uintptr_t>(actor));uint32_t sequence=0,item=0;std::memcpy(&sequence,head.data(),4);std::memcpy(&item,head.data()+0x38,4);
   uint32_t owned=0;{std::lock_guard<std::mutex> lock(retimeMutex);if(stillAction.until>=GetTickCount64())owned=stillAction.key.sequence;}
@@ -1060,7 +1170,7 @@ inline void disable(){
  if(liveRetime)logFile->event("live_event_retime_removed","\"appended\":"+std::to_string(liveAppended.load())+",\"suppressed\":"+std::to_string(liveSuppressed.load())+",\"movement_events_withheld\":"+std::to_string(liveStilled.load())+",\"movement_abilities_early\":"+std::to_string(liveMovedEarly.load())+",\"look_aheads\":"+std::to_string(liveLookAheads.load())+",\"not_single_impact\":"+std::to_string(liveNotSingle.load())+",\"not_qualified\":"+std::to_string(liveUnqualified.load())+",\"failures\":"+std::to_string(failures.load()));
  if(retimeRequested)logFile->event("motion_event_retime_removed","\"appended\":"+std::to_string(appended)+",\"suppressed\":"+std::to_string(suppressed)+",\"blocked\":"+std::to_string(blocked));
  const auto bytes=parsePattern(pattern);const bool restored=scan(reinterpret_cast<const uint8_t*>(baseAddress+rva),bytes.size(),bytes)==std::vector<size_t>{0};
- liveTargets::summary();
+ liveTargets::summary();remoteActions::summary();
  if(hideAmmunition)logFile->event("ammunition_withhold_removed","\"show_ammunition_events_withheld\":"+std::to_string(ammunitionWithheld.load())+",\"failures\":"+std::to_string(ammunitionFailures.load()));
  if(liveStill&&callerCensus){std::ostringstream rows;std::lock_guard<std::mutex> lock(passedMutex);bool first=true;
   for(const auto& row:passedEvents)if(row.count){rows<<(first?"":",")<<"{\"type\":"<<row.type<<",\"caller\":\"0x"<<std::hex<<row.caller<<std::dec<<"\",\"count\":"<<row.count<<",\"first_start_ms\":"<<row.first/1000000<<",\"last_start_ms\":"<<row.last/1000000<<"}";first=false;}

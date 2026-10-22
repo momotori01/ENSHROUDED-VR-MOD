@@ -1,5 +1,6 @@
 #pragma once
 #include <unordered_set>
+#include <smmintrin.h>
 // Native UI extraction; optional XR consumer must prove same-frame ownership below.
 // All native draw calls execute once. Only reviewed UI draws add an attachment.
 namespace uiDraw {
@@ -248,7 +249,17 @@ std::vector<uint8_t> captureSource(VkDevice device,const FrameSource& source){
     std::lock_guard<std::mutex> lock(drawMutex);auto d=drawDevices.find(device);
     if(d!=drawDevices.end())for(const auto& entry:d->second->targets){const auto& t=*entry.second;
         if(t.image==source.image && t.version==source.version && t.present==source.present && t.valid){
-            const auto* start=static_cast<const uint8_t*>(t.mapped);return {start,start+size_t(t.width)*t.height*4};
+            // Out of the mapped memory with streaming loads, 64 bytes a step (2026-10-22: a plain copy of the 8 MB took tens of
+            // milliseconds on the frame - mapped memory the CPU does not cache reads slowly line by line).
+            const auto* start=static_cast<const uint8_t*>(t.mapped);const size_t size=size_t(t.width)*t.height*4;std::vector<uint8_t> out(size);
+            size_t done=0;
+            if(!(reinterpret_cast<uintptr_t>(start)&15)&&!(reinterpret_cast<uintptr_t>(out.data())&15)){
+                auto* s=reinterpret_cast<__m128i*>(const_cast<uint8_t*>(start));auto* d=reinterpret_cast<__m128i*>(out.data());const size_t blocks=size/64;
+                for(size_t i=0;i<blocks;++i){const __m128i a=_mm_stream_load_si128(s+4*i),b=_mm_stream_load_si128(s+4*i+1),c=_mm_stream_load_si128(s+4*i+2),e=_mm_stream_load_si128(s+4*i+3);
+                    _mm_store_si128(d+4*i,a);_mm_store_si128(d+4*i+1,b);_mm_store_si128(d+4*i+2,c);_mm_store_si128(d+4*i+3,e);}
+                done=blocks*64;}
+            if(done<size)std::memcpy(out.data()+done,start+done,size-done);
+            return out;
         }
     }
     throw std::runtime_error("UI capture source identity changed");

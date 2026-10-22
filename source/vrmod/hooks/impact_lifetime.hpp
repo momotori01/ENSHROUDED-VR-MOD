@@ -22,6 +22,14 @@ inline void own(uint32_t sequence,const std::array<uint8_t,16>* guids,const doub
  std::lock_guard<std::mutex> lock(mutex);owned=Owned{};owned.sequence=sequence;owned.count=std::min(count,owned.guids.size());
  for(size_t i=0;i<owned.count;++i){owned.guids[i]=guids[i];owned.factors[i]=factors[i];}owned.until=until;
 }
+// Other players' attacks handed over on their first tick on this host (motion_event_selection_observer.hpp remoteActions,
+// 2026-10-22): their hits live until the next attack may begin, so that the hit their mod sent (online_sync.hpp hitAction),
+// which comes over another path than the game's own input, still finds the collider.
+inline std::array<Owned,8> remote{};inline size_t remoteAt=0;
+inline void ownRemote(uint32_t sequence,const std::array<uint8_t,16>* guids,const double* factors,size_t count,uint64_t until){
+ std::lock_guard<std::mutex> lock(mutex);auto& o=remote[remoteAt++%remote.size()];o=Owned{};o.sequence=sequence;o.count=std::min(count,o.guids.size());
+ for(size_t i=0;i<o.count;++i){o.guids[i]=guids[i];o.factors[i]=factors[i];}o.until=until;
+}
 inline std::pair<int,int> componentIds(uintptr_t world){
  if(const auto it=ids.find(world);it!=ids.end())return it->second;
  std::pair<int,int> r{-1,-1};
@@ -45,6 +53,7 @@ inline void tracked(uintptr_t world,uint32_t entity,const std::array<uint8_t,24>
   uint32_t sequence=0;std::memcpy(&sequence,event.data(),4);std::array<uint8_t,16> guid{};std::memcpy(guid.data(),event.data()+8,16);
   double factor=testFactor;bool skill=false;
   if(owned.sequence==sequence&&GetTickCount64()<=owned.until)for(size_t i=0;i<owned.count;++i)if(owned.guids[i]==guid){factor=owned.factors[i];skill=true;}
+  if(!skill)for(const auto& o:remote)if(o.sequence==sequence&&GetTickCount64()<=o.until)for(size_t i=0;i<o.count;++i)if(o.guids[i]==guid&&o.factors[i]>factor){factor=o.factors[i];skill=true;}
   int64_t lifeTime=0,endOfLife=0,spawnTime=0,newLife=0,newEnd=0;std::array<uint8_t,3> flags{};
   if(life){lifeTime=read<int64_t>(life);endOfLife=read<int64_t>(life+8);flags=read<std::array<uint8_t,3>>(life+16);}
   if(spawn)spawnTime=read<int64_t>(spawn);
