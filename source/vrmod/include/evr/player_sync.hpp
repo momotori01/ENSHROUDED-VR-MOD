@@ -167,7 +167,9 @@ inline std::optional<Received> decode(const std::vector<uint8_t>& bytes){return 
 //   effects - is made on it.
 inline constexpr uint8_t actionMagic=0xe6,actionVersion=1,castAction=1,shotAction=2,heldAimAction=3,parryAction=4,hitAction=5;
 inline constexpr size_t castActionBytes=7,shotActionBytes=5+40,parryActionBytes=5+24,hitActionBytes=5+24+1;
-struct Action {uint8_t kind=0;uint16_t id=0;float strength=0;std::array<uint8_t,40> aim{};std::array<int64_t,3> at{};bool character=false,shot=false;};
+// A hit with the entity touched (2026-10-22): the id of a creature is the same in the host's World and the guest's.
+inline constexpr size_t hitEntityActionBytes=hitActionBytes+4;
+struct Action {uint8_t kind=0;uint16_t id=0;float strength=0;std::array<uint8_t,40> aim{};std::array<int64_t,3> at{};bool character=false,shot=false;uint32_t entity=0;};
 inline std::vector<uint8_t> encodeCast(uint16_t id,float strength){
     std::vector<uint8_t> out{actionMagic,actionVersion,castAction};detail::put16(out,int(id));
     const auto s=uint16_t(std::lround(std::clamp(std::isfinite(strength)?strength:0.f,0.f,1.f)*65535));out.push_back(uint8_t(s&255));out.push_back(uint8_t(s>>8));return out;
@@ -175,9 +177,11 @@ inline std::vector<uint8_t> encodeCast(uint16_t id,float strength){
 inline std::vector<uint8_t> encodeShot(uint16_t id,const std::array<uint8_t,40>& aim,bool held=false){
     std::vector<uint8_t> out{actionMagic,actionVersion,held?heldAimAction:shotAction};detail::put16(out,int(id));out.insert(out.end(),aim.begin(),aim.end());return out;
 }
-inline std::vector<uint8_t> encodeHit(uint16_t id,const std::array<int64_t,3>& at,bool character,bool shot=false){
+inline std::vector<uint8_t> encodeHit(uint16_t id,const std::array<int64_t,3>& at,bool character,bool shot=false,uint32_t entity=0){
     std::vector<uint8_t> out{actionMagic,actionVersion,hitAction};detail::put16(out,int(id));
-    const auto* b=reinterpret_cast<const uint8_t*>(at.data());out.insert(out.end(),b,b+24);out.push_back(uint8_t((character?1:0)|(shot?2:0)));return out;
+    const auto* b=reinterpret_cast<const uint8_t*>(at.data());out.insert(out.end(),b,b+24);out.push_back(uint8_t((character?1:0)|(shot?2:0)));
+    if(entity)for(int k=0;k<4;++k)out.push_back(uint8_t(entity>>(8*k)));
+    return out;
 }
 inline std::vector<uint8_t> encodeParry(uint16_t id,const std::array<int64_t,3>& at){std::vector<uint8_t> out{actionMagic,actionVersion,parryAction};detail::put16(out,int(id));
     const auto* b=reinterpret_cast<const uint8_t*>(at.data());out.insert(out.end(),b,b+24);return out;}
@@ -190,7 +194,8 @@ inline std::optional<Action> decodeAction(const uint8_t* data,size_t size){
         Quat q;std::memcpy(&q,a.aim.data()+24,16);const float n=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
         if(!std::isfinite(n)||std::abs(n-1)>.01f)return std::nullopt;return a;}
     if(a.kind==parryAction){if(size!=parryActionBytes)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);return a;}
-    if(a.kind==hitAction){if(size!=hitActionBytes||data[29]>3)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);a.character=(data[29]&1)!=0;a.shot=(data[29]&2)!=0;return a;}
+    if(a.kind==hitAction){if((size!=hitActionBytes&&size!=hitEntityActionBytes)||data[29]>3)return std::nullopt;a.id=uint16_t(data[3])|uint16_t(data[4])<<8;std::memcpy(a.at.data(),data+5,24);a.character=(data[29]&1)!=0;a.shot=(data[29]&2)!=0;
+        if(size==hitEntityActionBytes)a.entity=uint32_t(data[30])|uint32_t(data[31])<<8|uint32_t(data[32])<<16|uint32_t(data[33])<<24;return a;}
     return std::nullopt;
 }
 

@@ -46,7 +46,7 @@ inline const int flightMode=[]{char v[8]{};const auto n=GetEnvironmentVariableA(
 inline const float flightSpeedSet=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT_SPEED",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):0.f;return std::isfinite(f)&&f>1?f:0.f;}();
 inline const float flightGravity=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT_GRAVITY",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):-1.f;return std::isfinite(f)&&f>=0?f:25.f;}();
 inline bool (*flightHit)(const std::array<int64_t,3>&,const std::array<int64_t,3>&,float&,std::array<int64_t,3>&,bool&,uint32_t&)=nullptr;
-inline void (*flightReport)(const std::array<int64_t,3>&,bool)=nullptr;
+inline void (*flightReport)(const std::array<int64_t,3>&,bool,uint32_t)=nullptr;
 inline float (*flightReach)(WorldPositionQ32,Vec3,uint64_t)=nullptr;
 inline WorldPositionQ32 moved(const WorldPositionQ32& p,const Vec3& m){return {p.x+int64_t(double(m.x)*4294967296.),p.y+int64_t(double(m.y)*4294967296.),p.z+int64_t(double(m.z)*4294967296.)};}
 // The flight's frame: true while the clone is shown flying (or stuck where it hit).
@@ -81,7 +81,7 @@ inline bool flyFrame(uint64_t now,uint64_t currentSerial){
         if(flightHit&&flightHit(flight.last,now3,along,at,character,entity)){
             const Vec3 seg{float(double(now3[0]-flight.last[0])/4294967296.),float(double(now3[1]-flight.last[1])/4294967296.),float(double(now3[2]-flight.last[2])/4294967296.)};
             const WorldPositionQ32 l{flight.last[0],flight.last[1],flight.last[2]};p=moved(l,seg*along);flight.stuck=true;flight.stuckAt=now;
-            if(flightReport&&!flight.reported){flight.reported=true;flightReport(at,character);}
+            if(flightReport&&!flight.reported){flight.reported=true;flightReport(at,character,entity);}
             if(flightLogs++<300)logFile->event("arrow_flight_hit","\"frame\":"+std::to_string(liveFrame.frame)+",\"entity\":"+std::to_string(entity)+",\"character\":"+(character?"true":"false")+",\"seconds\":"+std::to_string(t));
         }else if(ground){flight.stuck=true;flight.stuckAt=now;
             if(flightLogs++<300)logFile->event("arrow_flight_ground","\"frame\":"+std::to_string(liveFrame.frame)+",\"seconds\":"+std::to_string(t)+",\"reach\":"+std::to_string(flight.reach));}
@@ -136,6 +136,57 @@ inline void retire(const char* event,const std::string& detail){
         ",\"reference_released\":"+(released?"true":"false")+detail);
     if(!invalid||!released)throw std::runtime_error("arrow retirement failed");
 }
+// The game's arrows of the own shot (2026-10-22; user after the online session of 10-22: "an arrow flying diagonally up
+// can be seen, and the shot is late"). A guest's arrow is made by the host's server: the guest's log of that session showed,
+// 0.35..0.44 s after each release, an arrow 300 m above the player - where the host puts it out of sight
+// (live_melee_targets.hpp steerArrows) - while the own clone had flown from the release (arrow_flight_start). The game's
+// copy reaching the guest that late, and going up to where the host put it, was the arrow seen. For 2 s from the release
+// the visible unposed models of the arrow's model other than the clone and the arrow at the bow are kept out of the eyes
+// (head_visibility_bridge.hpp), looked for every 100 ms (250 once found); none on the player's body (a quiver) or within 0.8 m of the bow.
+// Only where the own flight runs (a guest; EVR_ARROW_FLIGHT=2 alone, a test). EVR_HIDE_GAME_ARROWS=0: shown.
+inline const bool hideGameArrows=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_HIDE_GAME_ARROWS",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline std::array<uint32_t,6> foreign{};inline size_t foreignCount=0;inline uint64_t foreignScan=0,foreignSerial=0,foreignFrame=0,foreignShot=0;inline unsigned foreignLogs=0,foreignSeen=0;
+inline void foreignArrows(uint64_t now,uint64_t currentSerial,const WorldPositionQ32& bow){
+    if(!hideGameArrows||!flightMode||!scene||!flight.start||now<flight.start||now-flight.start>2000||!(resource||sourceResource)){foreignCount=0;return;}
+    if(foreignShot!=flight.serial){foreignShot=flight.serial;foreignSeen=0;foreignCount=0;}
+    // every 100 ms, every 250 ms once the shot's copy is found: a look reads the Scene's model table to its end (some MB in a
+    // big world, on the render thread)
+    if(now-foreignScan>=(foreignSeen?250u:100u))try{foreignScan=now;   // (review W9: a failed read ends this look only)
+        rootCamera::Sample root;const bool body=rootCamera::trySnapshot(root)&&root.number;
+        const auto objects=read<uintptr_t>(scene+0x1b0),generations=read<uintptr_t>(scene+0x1c8);
+        const auto total=size_t(std::min<uint64_t>(std::min<uint64_t>(read<uint64_t>(scene+0x1b8)/0x1b0,read<uint64_t>(scene+0x1d0)),65536));
+        static std::vector<uint8_t> block;constexpr size_t step=2048;block.resize(step*0x1b0);unsigned empty=0;size_t found=0;double nearestClone=-1;
+        WorldPositionQ32 clonePosition{};const bool clone=handle&&motionVisual::currentObject(handle);if(clone)clonePosition=read<WorldPositionQ32>(motionVisual::object(handle)+0x38);
+        for(size_t first=0;first<total&&empty<8&&found<foreign.size();first+=step){
+            const auto count=std::min<size_t>(step,total-first);SIZE_T got=0;
+            if(!ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(objects+first*0x1b0),block.data(),count*0x1b0,&got)||got!=count*0x1b0)break;
+            bool any=false;
+            for(size_t n=0;n<count&&found<foreign.size();++n){const auto* object=block.data()+n*0x1b0;
+                uintptr_t res=0;uint32_t pose=0,mask=0;WorldPositionQ32 position;std::memcpy(&res,object+layout::modelResource,8);if(!res)continue;
+                any=true;if(res!=resource&&res!=sourceResource)continue;
+                std::memcpy(&pose,object+layout::modelPose,4);std::memcpy(&mask,object+layout::modelMask,4);std::memcpy(&position,object+0x38,24);
+                if(pose||!mask)continue;
+                const uint32_t h=(uint32_t(read<uint8_t>(generations+first+n))<<24)|uint32_t(first+n);
+                if(h==handle||h==source||metres(position,bow)<.8)continue;
+                if(body){const double dx=relativeQ32(position.x,root.stable.position.x),dy=relativeQ32(position.y,root.stable.position.y),dz=relativeQ32(position.z,root.stable.position.z);
+                    if(dx*dx+dz*dz<.7*.7&&dy>-.3&&dy<2.2)continue;}
+                foreign[found++]=h;
+                if(clone){const double d=metres(position,clonePosition);if(nearestClone<0||d<nearestClone)nearestClone=d;}
+            }
+            empty=any?0:empty+1;
+        }
+        foreignCount=found;
+        if(found&&!foreignSeen&&foreignLogs++<300){foreignSeen=1;
+            logFile->event("game_arrow_hidden","\"frame\":"+std::to_string(liveFrame.frame)+",\"shot\":"+std::to_string(flight.serial)+",\"after_release_ms\":"+std::to_string(now-flight.start)+
+                ",\"count\":"+std::to_string(found)+",\"nearest_to_clone_m\":"+std::to_string(nearestClone)+",\"same_model\":"+(resource==sourceResource?"true":"false"));}
+    }catch(const std::exception& x){foreignCount=0;static unsigned told=0;if(told++<5)try{logFile->event("game_arrow_hide_failure","\"reason\":"+jsonString(x.what()));}catch(...){}}
+    catch(...){foreignCount=0;}
+    else{   // between looks: those still there
+        size_t kept=0;for(size_t k=0;k<foreignCount;++k){const auto o=motionVisual::currentObject(foreign[k]);if(!o)continue;const auto res=read<uintptr_t>(o+layout::modelResource);
+            if(res==resource||res==sourceResource)foreign[kept++]=foreign[k];}
+        foreignCount=kept;}
+    foreignSerial=currentSerial;foreignFrame=liveFrame.frame;
+}
 inline void update(const game::StableAnchor& anchor,uint64_t currentSerial){
     const auto& g=motionVisual::bowGeometry;const auto& string=motionBowVisual::drawnString;
     if(!motionVisual::poseReady||motionVisual::updatedSerial!=currentSerial||motionVisual::updatedFrame!=liveFrame.frame||
@@ -147,6 +198,7 @@ inline void update(const game::StableAnchor& anchor,uint64_t currentSerial){
     WorldPositionQ32 bowPosition;Quat bowOrientation;std::memcpy(&bowPosition,bow.data(),24);std::memcpy(&bowOrientation,bow.data()+24,16);
     bowOrientation=normalized(bowOrientation);
     if(!lastSeenBow||now-lastSeenBow>500)lookFastUntil=now+2000;lastSeenBow=now;
+    foreignArrows(now,currentSerial,bowPosition);
     if(source){
         const auto object=motionVisual::currentObject(source);
         if(!object||read<uintptr_t>(object+layout::modelResource)!=sourceResource||read<uint32_t>(object+layout::modelPose)||!(metres(read<WorldPositionQ32>(object+0x38),bowPosition)<keepRange)){

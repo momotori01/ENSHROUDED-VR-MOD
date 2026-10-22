@@ -20,7 +20,7 @@ inline bool requested=false;
 // Both are taken where the server's components are missing; the host and a game of one keep the server's.
 // Players are the entities with keen::ecs::NetworkPlayerAttributes; one at no health is a fallen player a teammate revives
 // (its revivieData +0x28: NetworkReviveData state, duration, left; reviveDuration +0x44) - see downedNear below.
-struct Types {uintptr_t world=0,registry=0;int health=-1,current=-1,actor=-1,selected=-1,relevant=-1,networkHealth=-1,render=-1,networkActor=-1,player=-1,enemy=-1,destructible=-1,clientCollider=-1,feedbackMaterial=-1,velocity=-1,gravity=-1;
+struct Types {uintptr_t world=0,registry=0;int model=-1;uint16_t modelBytes=0;int health=-1,current=-1,actor=-1,selected=-1,relevant=-1,networkHealth=-1,render=-1,networkActor=-1,player=-1,enemy=-1,destructible=-1,clientCollider=-1,feedbackMaterial=-1,velocity=-1,gravity=-1;
  uint16_t healthBytes=68,selectedBytes=0,relevantBytes=0,renderBytes=0,playerBytes=0;bool usable=false;};
 struct Layout {bool health=false,current=false,actor=false,selected=false,relevant=false,networkHealth=false,render=false,player=false,enemy=false,destructible=false,clientThing=false;std::array<uint64_t,10> bits{};
  uint16_t healthOffset=0,currentOffset=0,selectedOffset=0,relevantOffset=0,networkHealthOffset=0,renderOffset=0,playerOffset=0;};
@@ -106,6 +106,7 @@ inline std::mutex mutex;inline std::vector<Cached> cache;inline Types types;inli
 // For the record of what a stroke did (controller_ui_fixture.hpp live_melee_outcome, 2026-10-20).
 inline bool block(uintptr_t address,void* out,size_t bytes);
 // (below, at undoDamage: the own player's place and the other players, kept by tick)
+inline uint32_t estimateLocal=0;   // the local player's entity (estimateStroke)
 inline std::array<int64_t,3> lastOrigin{};inline bool lastOriginKnown=false;inline std::vector<std::pair<uint32_t,std::array<int64_t,3>>> otherPlayers;
 inline void sampleOtherPlayers(uint64_t now);
 // A guest's arrows on this host (2026-10-21; user 04:30: "the host needs only the hit's damage"). The guest flies its
@@ -126,13 +127,16 @@ inline void sampleOtherPlayers(uint64_t now);
 // flying thing of the 0.6 s was parked and later dropped - an enemy's arrow, or anything thrown out at a kill, would
 // have been lost with it). A second arrow of the same shot flies as made.
 struct RemoteArrow {uint32_t entity=0;uint64_t ms=0;bool parked=false;};
-struct ShotHit {std::array<int64_t,3> at{};bool character=false,used=true;uint64_t ms=0;};
+struct ShotHit {std::array<int64_t,3> at{};bool character=false,used=true;uint64_t ms=0;uint32_t entity=0;};
 inline std::array<RemoteArrow,8> remoteArrows{};inline std::array<ShotHit,4> shotHits{};
 inline std::unordered_map<uint32_t,uint8_t> arrowKnown;inline bool arrowPrimed=false;inline uint64_t arrowScanAt=0;inline unsigned arrowLogs=0;
 inline std::vector<uint32_t> arrowKeys;inline std::vector<uint64_t> arrowBits;inline uint64_t arrowParkedFor=0;
 inline const bool steerWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_ARROW_STEER",v,sizeof v);return !(n==1&&v[0]=='0');}();
-inline void publishShotHit(const std::array<int64_t,3>& at,bool character,uint64_t now);
+inline void publishShotHit(const std::array<int64_t,3>& at,bool character,uint32_t entity,uint64_t now);
 inline void steerArrows(uintptr_t world,uint64_t now);
+inline void thingOutcomes(uint64_t now);
+inline void estimateProbe(uintptr_t world,uint32_t local,uint64_t now);
+inline void forgetWorldRecords(uintptr_t world);
 inline Layout layout(uintptr_t address);
 inline int32_t healthNow(uint32_t entity){
  std::lock_guard<std::mutex> lock(mutex);
@@ -172,6 +176,12 @@ inline bool block(uintptr_t address,void* out,size_t bytes){
 inline double metres(const std::array<int64_t,3>& a,const std::array<int64_t,3>& b){
  constexpr double q=1.0/4294967296.0;const double x=double(a[0]-b[0])*q,y=double(a[1]-b[1])*q,z=double(a[2]-b[2])*q;return std::sqrt(x*x+y*y+z*z);
 }
+// The distance of a place to the nearest player - the own one (`own` metres away) or another (2026-10-22: a host kept
+// only the things within 4 m of its own player, and a guest's touch of a pot by the guest found none). Under mutex.
+inline double nearestPlayerMetres(const std::array<int64_t,3>& at,double own){
+ if(guestWorld)return own;   // a guest touches only what is near itself (review W10: the things by others took its 24 places)
+ for(const auto& [id,p]:otherPlayers){(void)id;own=std::min(own,metres(at,p));}return own;
+}
 // The ids of Health, CurrentTransform and Actor in this World's component registry (256 byte records, name at +16).
 inline void learn(uintptr_t world){
  types={};types.world=world;
@@ -181,8 +191,10 @@ inline void learn(uintptr_t world){
  if(!block(header[1],records.data(),records.size()))throw std::runtime_error("live target type registry unreadable");
  for(unsigned id=0;id<header[2];++id){
   const auto* raw=records.data()+size_t(id)*256;uintptr_t text=0,length=0;uint16_t size=0;std::memcpy(&text,raw+16,8);std::memcpy(&length,raw+24,8);std::memcpy(&size,raw+56,2);
-  if(!text||length<16||length>40)continue;
-  char name[41]{};if(!block(text,name,size_t(length)))continue;const std::string_view n(name,size_t(length));
+  // up to 64 characters (2026-10-22: keen::ecs::CollisionFeedbackMaterialComponent has 45, and with a limit of 40 it was
+  // never found - a guest's pots and trees were never things, guest log 20261022-000930: objects 0 all session)
+  if(!text||length<16||length>64)continue;
+  char name[65]{};if(!block(text,name,size_t(length)))continue;const std::string_view n(name,size_t(length));
   if(n=="keen::ecs::Health"&&size>=40&&size<=256){types.health=int(id);types.healthBytes=size;}
   else if(n=="keen::ecs::CurrentTransform"&&size==56)types.current=int(id);
   else if(n=="keen::ecs::Actor")types.actor=int(id);
@@ -198,6 +210,7 @@ inline void learn(uintptr_t world){
   else if(n=="keen::ecs::CollisionFeedbackMaterialComponent")types.feedbackMaterial=int(id);
   else if(n=="keen::ecs::Velocity"&&size==12)types.velocity=int(id);
   else if(n=="keen::ecs::Gravity"&&size==20)types.gravity=int(id);
+  else if(n=="keen::ecs::ModelComponent"&&size>=4&&size<=64){types.model=int(id);types.modelBytes=size;}
  }
  if(types.health<0){   // which types of this build look like it (bounded; names up to 64 characters)
   std::string seen;unsigned shown=0;
@@ -248,14 +261,16 @@ inline void tick(uintptr_t world,uint32_t local){
   const auto now=GetTickCount64();std::lock_guard<std::mutex> lock(mutex);++ticks;
   const auto started=std::chrono::steady_clock::now();
   struct Timed{std::chrono::steady_clock::time_point at;~Timed(){const double s=std::chrono::duration<double>(std::chrono::steady_clock::now()-at).count();tickSeconds+=s;tickSecondsMax=std::max(tickSecondsMax,s);}}timed{started};
-  if(types.world!=world||types.registry!=read<uintptr_t>(world)){++relearns;layouts.clear();cache.clear();cursor=0;learn(world);censusLogs=0;census={};typeCounts={};typePasses=0;}
+  if(types.world!=world||types.registry!=read<uintptr_t>(world)){++relearns;layouts.clear();cache.clear();cursor=0;guestWorld=false;
+   forgetWorldRecords(world);   // (review W11: no writes to an old World's ids)
+   learn(world);censusLogs=0;census={};typeCounts={};typePasses=0;}
   if(!types.usable)return;
-  lastOrigin=origin;lastOriginKnown=true;sampleOtherPlayers(now);steerArrows(world,now);
+  lastOrigin=origin;lastOriginKnown=true;estimateLocal=local;estimateProbe(world,local,now);sampleOtherPlayers(now);steerArrows(world,now);thingOutcomes(now);
   // The targets already known: where they are now, or forget them.
   for(auto i=cache.begin();i!=cache.end();){
    const auto r=record(i->record);game::RootTransform t{};
    bool keep=r.valid&&r.layout==i->layout&&r.data==i->data&&r.row==i->row&&now-i->seen<=4000&&block(i->pose,&t,sizeof(t));
-   if(keep){i->target.position={t.position.x,t.position.y,t.position.z};keep=metres(i->target.position,origin)<=(i->target.character?aimDropMetres:i->target.object?objectKeepMetres+1:dropMetres);}
+   if(keep){i->target.position={t.position.x,t.position.y,t.position.z};keep=nearestPlayerMetres(i->target.position,metres(i->target.position,origin))<=(i->target.character?aimDropMetres:i->target.object?objectKeepMetres+1:dropMetres);}
    if(keep)++i;else{i=cache.erase(i);++dropped;}
   }
   // A slice of the World's entity map.
@@ -273,7 +288,9 @@ inline void tick(uintptr_t world,uint32_t local){
    {const bool now_blind=census.all>=64&&!census.allHealth&&!census.allNetworkHealth&&!census.allEnemies;
     if(now_blind!=blind&&blindLogs++<50)logFile->event("live_targets_blind","\"world\":"+hex(world)+",\"blind\":"+(now_blind?"true":"false")+",\"entities\":"+std::to_string(census.all)+",\"gate\":\""+(now_blind?"off_strokes_attack":"on")+"\"");
     blind=now_blind;
-    const bool nowGuest=guestThingsWanted&&census.all>=64&&!census.allHealth&&census.allNetworkHealth>0;
+    // kept while the World has no Health (2026-10-22, guest log 20261022-000930: with no creature about the count of
+    // NetworkHealth fell to 0 and the guest's pots and trees stopped being things)
+    const bool nowGuest=guestThingsWanted&&census.all>=64&&!census.allHealth&&(census.allNetworkHealth>0||guestWorld);
     if(nowGuest!=guestWorld&&guestLogs++<50)logFile->event("live_targets_guest_world","\"world\":"+hex(world)+",\"guest\":"+(nowGuest?"true":"false")+",\"network_health\":"+std::to_string(census.allNetworkHealth)+
      ",\"client_colliders_are_things\":"+(nowGuest&&types.clientCollider>=0&&types.feedbackMaterial>=0?"true":"false"));
     guestWorld=nowGuest;}
@@ -343,15 +360,17 @@ inline void tick(uintptr_t world,uint32_t local){
       static std::atomic<unsigned> told{0};if(told.fetch_add(1)<100)logFile->event("fallen_player_seen","\"entity\":"+std::to_string(id)+",\"metres\":"+std::to_string(away)+",\"guest_world\":"+(l.health?"false":"true"));}
      d->entity=id;d->position=position;d->seen=now;}
     continue;}
-   if(away>(l.actor?aimKeepMetres:object?objectKeepMetres:keepMetres))continue;
+   // Players are no targets (2026-10-22, the friend's host log: guest hits laid on the guest itself and on the host)
+   if(l.player)continue;
+   if(nearestPlayerMetres(position,away)>(l.actor?aimKeepMetres:object?objectKeepMetres:keepMetres))continue;
    const auto same=record(rows[size_t(at)]);if(!same.valid||same.layout!=r.layout||same.data!=r.data||same.row!=r.row)continue;
    auto known=std::find_if(cache.begin(),cache.end(),[&](const Cached& c){return c.target.entity==id;});
    if(known==cache.end()){
     if(object){   // a few things at most: the nearest of them
      const auto objects=unsigned(std::count_if(cache.begin(),cache.end(),[](const Cached& c){return c.target.object;}));
      if(objects>=maximumObjects){auto farthest=cache.end();double farMetres=-1;
-      for(auto it=cache.begin();it!=cache.end();++it)if(it->target.object){const double m=metres(it->target.position,origin);if(m>farMetres){farMetres=m;farthest=it;}}
-      if(farthest==cache.end()||farMetres<=away)continue;cache.erase(farthest);++dropped;}
+      for(auto it=cache.begin();it!=cache.end();++it)if(it->target.object){const double m=nearestPlayerMetres(it->target.position,metres(it->target.position,origin));if(m>farMetres){farMetres=m;farthest=it;}}
+      if(farthest==cache.end()||farMetres<=nearestPlayerMetres(position,away))continue;cache.erase(farthest);++dropped;}
     }
     if(cache.size()>=maximumCached){   // keep the nearest
      auto farthest=std::max_element(cache.begin(),cache.end(),[&](const Cached& a,const Cached& b){return metres(a.target.position,origin)<metres(b.target.position,origin);});
@@ -490,46 +509,298 @@ inline int32_t stateLocked(const Cached& c){
  else{if(!h[4]||h[4]>8)return -1;std::memcpy(&health,h.data()+8,4);}
  return std::max(health,0);
 }
-// The health a guest sees drops at the touch (2026-10-21, user: "the guest keeps it lowered; the host processes it later
+/// The health a guest sees drops at the touch (2026-10-21, user: "the guest keeps it lowered; the host processes it later
 // - what matters most is that everyone plays with the feel of solo"). On a guest's World the enemy's health is the
 // replicated keen::ecs::NetworkHealth {health, healthMax}, which the host's server writes when its hit has been made
 // (the session of 10-21 00:25: about half a second after the press). At the blade's touch of a creature (the hit stop's
-// watch, controller_ui_fixture.hpp) the guest's copy is lowered by what a stroke of this weapon took the last time
-// (learned from the host's values: the drop that came after a touch), four fifths of it, never to 0 (the creature does
-// not look dead before the host says so). The host's value replaces it when it comes (a little more or less). The first
-// stroke of a weapon only learns. EVR_GUEST_PREDICT_HEALTH=0: off.
-struct Predicted {uint32_t entity=0,before=0,written=0;uint64_t ms=0,key=0;bool open=false;};
-inline std::array<Predicted,8> predicted{};inline std::map<uint64_t,float> learnedDamage;inline unsigned predictLogs=0;
+// watch, controller_ui_fixture.hpp) the guest's copy is lowered by what the stroke takes.
+// 2026-10-22 (the online session of 10-22 00:10, guest log world-2-vr: every predicted value was put back 15..32 ms
+// later by the host's copy from before the hit - "host" equal to "before" - and a weapon's first stroke lowered nothing):
+// - Kept: until the host's value drops below what it was at the touch, the predicted value is written again each frame,
+//   for 0.7 s at most (user: "the host's answer comes 0.3 s later - keep it 0.7 s on the guest"); without a drop by then
+//   it goes back (the host's stroke missed).
+// - Computed, from the first stroke (user 10-22: "learning is a breeding ground of exceptions and a bad feel - compute it
+//   from the weapon and my own state"): include/evr/damage_calc.hpp with the weapon's item (the registry: its damage
+//   distribution +0x684, weapon category +0xd0, perks +0x658), its instance (keen::ecs::ItemState +0xc baseDamageUi,
+//   PerkContainerNew +1 unlockedPerks - both on a guest's World too), the own keen::ecs::NetworkPlayerAttributes (strength,
+//   damage modifiers, crit), the running attack's modifier (the action sequence -> include/evr/damage_tables.hpp attacks)
+//   and the creature's susceptibility by its render model (damage_tables.hpp enemies). The crit is its expected value.
+//   No stroke without an estimate is predicted (the host's value comes as before). On a host or in a game of one the
+//   estimate is only told against the health the stroke really took (damage_estimate_check), to see it hold.
+// - Down to 0 (user 10-22: "kill it on the guest too - a rare revival is better than every enemy dying late"): a creature
+//   whose host value has not followed in 0.7 s comes back.
+// Strokes on one creature in a row each take their own damage; each drop of the host's value settles the oldest.
+// EVR_GUEST_PREDICT_HEALTH=0: off.
+struct Pending {uint64_t ms=0;float damage=0;uint32_t item=0,sequence=0;float mod=1;};
+// lastStale: when the host's copy from before the strokes came last (it overwrote the prediction). 2026-10-22 review W1: a
+// host value equal to the prediction - every kill, 0 and 0 - cannot be told by its change; when the old copy has stopped
+// coming for 0.2 s by the end of the 0.7 s, the prediction is taken as the host's answer and stays.
+struct Predicted {uint32_t entity=0,host=0,written=0,max=0;std::array<Pending,4> strokes{};size_t count=0;uint64_t ms=0,lastStale=0;bool open=false;};
+inline std::array<Predicted,8> predicted{};inline unsigned predictLogs=0;
+constexpr uint64_t predictHoldMs=700;
 inline const bool predictWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_GUEST_PREDICT_HEALTH",v,sizeof v);return !(n==1&&v[0]=='0');}();
+// The types of a World this estimate reads (the client's World for the render model on a host). Under mutex.
+struct EstimateTypes {uintptr_t world=0,registry=0;int selection=-1,inventory=-1,itemState=-1,perks=-1,player=-1,model=-1;unsigned playerBytes=0,modelBytes=0;uint64_t used=0;};
+inline std::array<EstimateTypes,2> estimateTypes{};inline uint64_t estimateTypesUse=0;
+inline const EstimateTypes& estimateTypesOf(uintptr_t world){
+ // the World's own slot, else the one used longest ago (2026-10-22 review W2: the server's and the client's World took one
+ // slot in turn after a World change, and each stroke read every type name again)
+ size_t at=estimateTypes[0].world==world?0:estimateTypes[1].world==world?1:(estimateTypes[0].used<=estimateTypes[1].used?0:1);
+ auto& t=estimateTypes[at];t.used=++estimateTypesUse;
+ const auto registry=read<uintptr_t>(world);if(t.world==world&&t.registry==registry)return t;
+ t={};t.world=world;t.registry=registry;t.used=estimateTypesUse;
+ for(unsigned i=0;i<nativeImpactComponents::componentCapacity;++i){nativeImpactComponents::ComponentType c;try{c=nativeImpactComponents::componentType(world,i);}catch(const std::exception&){break;}
+  const auto& n=c.qualifiedName;
+  if(n=="keen::ecs::SlotSelection"&&c.bytes==216)t.selection=int(i);else if(n=="keen::ecs::Inventory"&&c.bytes==96)t.inventory=int(i);
+  else if(n=="keen::ecs::ItemState"&&c.bytes==20)t.itemState=int(i);else if(n=="keen::ecs::PerkContainerNew"&&c.bytes==2)t.perks=int(i);
+  else if(n=="keen::ecs::NetworkPlayerAttributes"&&c.bytes>=240&&c.bytes<=0x400){t.player=int(i);t.playerBytes=c.bytes;}
+  else if(n=="keen::ecs::ModelComponent"&&c.bytes>=4&&c.bytes<=64){t.model=int(i);t.modelBytes=c.bytes;}}
+ return t;
+}
+struct Estimate {bool valid=false;int32_t loss=0;std::string why="";evr::damage::HitInputs in{};uint32_t item=0,sequence=0,instance=0;bool attackKnown=false,enemyKnown=false,categoryKnown=false;uint8_t ambiguity=0;unsigned perksActive=0;};
+inline std::string estimateJson(const Estimate& e){
+ std::ostringstream o;o<<std::setprecision(4)<<"\"valid\":"<<(e.valid?"true":"false")<<",\"loss\":"<<e.loss<<",\"why\":"<<jsonString(e.why)<<",\"item\":"<<e.item<<",\"instance\":"<<e.instance
+  <<",\"item_damage\":"<<e.in.itemDamage<<",\"distribution\":["<<e.in.distribution[0]<<','<<e.in.distribution[1]<<','<<e.in.distribution[2]<<','<<e.in.distribution[3]<<','<<e.in.distribution[4]<<','<<e.in.distribution[5]<<','<<e.in.distribution[6]<<','<<e.in.distribution[8]
+  <<"],\"perks\":"<<e.perksActive<<",\"strength\":"<<e.in.strength<<",\"category\":"<<e.in.categoryMod<<(e.categoryKnown?"":",\"category_unknown\":true")<<",\"attack\":"<<e.in.attackMod<<",\"sequence\":"<<e.sequence<<(e.attackKnown?"":",\"attack_unknown\":true")
+  <<",\"damage_mod\":"<<e.in.damageMod<<",\"melee_mod\":"<<e.in.meleeDamageMod<<",\"against\":"<<e.in.against<<",\"crit\":["<<e.in.critChance<<','<<e.in.critDamageMod<<"],\"susceptibility\":["<<e.in.susceptibility[0]<<','<<e.in.susceptibility[1]<<','<<e.in.susceptibility[2]<<','<<e.in.susceptibility[3]<<"]"
+  <<(e.enemyKnown?"":",\"enemy_unknown\":true")<<",\"ambiguity\":"<<unsigned(e.ambiguity);
+ return o.str();
+}
+inline uint32_t (*runningSequence)()=nullptr;   // the local player's running action (actionSequenceObserver), set by view_resource_probe.cpp
+// Under mutex. `world`: the World of the local player (the server's in a game of one); `client`: the World with the render models.
+inline Estimate estimateStroke(uintptr_t world,uintptr_t client,uint32_t local,uint32_t entity,uint64_t binding){
+ Estimate e;e.item=uint32_t(binding>>32);if(!world||!local||!entity||!e.item){e.why="no world";return e;}
+ try{
+  const auto& t=estimateTypesOf(world);
+  // the weapon's item in the registry
+  const auto registry=attachmentObserver::itemRegistry.load();if(!registry){e.why="no item registry";return e;}
+  auto reader=inputRanged::readItemBytes;const auto found=game::lookupItem(reader,registry,e.item);
+  if(found.status!=game::ItemLookupStatus::Found||!found.pointer){e.why="item not found";return e;}
+  std::array<float,9> dist{};std::array<uint8_t,16> category{};std::array<uint32_t,5> perkIds{};
+  if(!inputRanged::readItemBytes(found.pointer+0x684,dist.data(),sizeof dist)||!inputRanged::readItemBytes(found.pointer+0xd0,category.data(),16)||
+     !inputRanged::readItemBytes(found.pointer+0x658,perkIds.data(),sizeof perkIds)){e.why="item unreadable";return e;}
+  for(auto& d:dist)if(!std::isfinite(d)||d<0||d>4)d=0;
+  // the instance worn: the selected slot of the player's SlotSelection, or any slot holding the item
+  if(t.selection<0||t.inventory<0||t.itemState<0){e.why="no item types";return e;}
+  const auto player=nativeImpactComponents::entityAtWorld(world,local);
+  const auto sel=nativeImpactComponents::component(player,unsigned(t.selection),216);if(!sel){e.why="no slot selection";return e;}
+  const auto raw=read<std::array<uint8_t,216>>(sel);
+  const auto stackOf=[&](unsigned slot,uint32_t& item,uint32_t& instance){uint32_t row=0;std::memcpy(&row,raw.data()+8*slot,4);const uint8_t index=raw[8*slot+4];item=instance=0;
+   if(!row||index>=8)return false;try{const auto r=nativeImpactComponents::entityAtWorld(world,row);const auto inv=nativeImpactComponents::component(r,unsigned(t.inventory),96);if(!inv)return false;
+    const auto s=read<std::array<uint32_t,3>>(inv+12*index);item=s[0];instance=s[2];return true;}catch(...){return false;}};
+  {uint32_t item=0,instance=0;const unsigned selected=raw[0xc0];if(selected<20&&stackOf(selected,item,instance)&&item==e.item)e.instance=instance;
+   for(unsigned slot=0;slot<20&&!e.instance;++slot)if(stackOf(slot,item,instance)&&item==e.item&&instance)e.instance=instance;}
+  if(!e.instance){e.why="weapon instance not found";return e;}
+  const auto inst=nativeImpactComponents::entityAtWorld(world,e.instance);
+  const auto state=nativeImpactComponents::component(inst,unsigned(t.itemState),20);if(!state){e.why="no item state";return e;}
+  const auto baseDamage=read<uint16_t>(state+0xc);if(!baseDamage){e.why="no base damage";return e;}
+  e.in.itemDamage=float(baseDamage);
+  if(t.perks>=0){const auto p=nativeImpactComponents::component(inst,unsigned(t.perks),2);if(p){e.perksActive=std::min<unsigned>(read<uint8_t>(p+1),5);
+   for(unsigned k=0;k<e.perksActive;++k)if(const auto* perk=evr::damage::perk(perkIds[k]))dist[perk->type]+=perk->add;}}
+  e.in.distribution=dist;
+  // the own attributes
+  if(t.player<0){e.why="no player attributes";return e;}
+  const auto npa=nativeImpactComponents::component(player,unsigned(t.player),t.playerBytes);if(!npa){e.why="no player attributes";return e;}
+  std::array<uint8_t,256> a{};if(!block(npa,a.data(),std::min<size_t>(t.playerBytes,a.size()))){e.why="attributes unreadable";return e;}
+  const auto u16=[&](unsigned off){uint16_t v=0;std::memcpy(&v,a.data()+off,2);return float(v)/100.f;};
+  const auto f32=[&](unsigned off){float v=0;std::memcpy(&v,a.data()+off,4);return std::isfinite(v)?v:0.f;};
+  e.in.strength=float(a[evr::damage::npa_strength]);e.in.damageMod=u16(evr::damage::npa_damageMod);e.in.meleeDamageMod=u16(evr::damage::npa_meleeDamageMod);
+  e.in.meleeTypeMod={u16(evr::damage::npa_meleeCut),u16(evr::damage::npa_meleePierce),u16(evr::damage::npa_meleeBlunt)};
+  e.in.critChance=f32(evr::damage::npa_critChance)+f32(evr::damage::npa_critChanceMelee);e.in.critDamageMod=u16(evr::damage::npa_critDamageMod);
+  {const int field=evr::damage::categoryField(category);e.categoryKnown=field>=0;e.in.categoryMod=field>=0?u16(unsigned(field)):1.f;}
+  // the running attack
+  e.sequence=runningSequence?runningSequence():0;e.attackKnown=e.sequence&&evr::damage::attackKnown(e.sequence);e.in.attackMod=evr::damage::attackMod(e.sequence);
+  // the creature by its render model (the client's World)
+  e.in.against=1;
+  if(client){const auto& ct=estimateTypesOf(client);
+   if(ct.model>=0&&motionVisual::scene)try{const auto ce=nativeImpactComponents::entityAtWorld(client,entity);const auto mc=nativeImpactComponents::component(ce,unsigned(ct.model),ct.modelBytes);
+    const auto handle=mc?read<uint32_t>(mc):0u;const auto object=handle?motionVisual::currentObject(handle):0;const auto res=object?read<uintptr_t>(object+layout::modelResource):0;
+    if(res){const auto guid=read<std::array<uint32_t,4>>(res+0x18);
+     if(const auto* en=evr::damage::enemy(guid)){e.enemyKnown=true;e.ambiguity=en->ambiguity;e.in.susceptibility=en->susceptibility;
+      if(en->againstClass>=0)e.in.against+=u16(unsigned(en->againstClass))-1.f;
+      if(en->flying)e.in.against+=u16(evr::damage::npa_againstFlying)-1.f;
+      if(en->againstFaction>=0)e.in.against+=u16(unsigned(en->againstFaction))-1.f;}}}catch(...){}}
+  e.in.melee=true;e.in.crit=-1;
+  e.loss=evr::damage::hitLoss(e.in).loss;e.valid=e.loss>0;if(!e.valid)e.why="no damage";
+ }catch(const std::exception& x){e.why=x.what();}
+ return e;
+}
+// The own strokes' estimates on a host or in a game of one, told against the health they took (learnHit).
+struct HostEstimate {uint32_t entity=0;uint64_t ms=0;Estimate estimate;};
+inline std::array<HostEstimate,8> hostEstimates{};inline unsigned estimateLogs=0;
+inline uintptr_t clientWorldNow(){rootCamera::Sample root;try{return rootCamera::trySnapshot(root)?root.world:0;}catch(...){return 0;}}   // (review S2: no exception out)
+// A host's or a lone player's own stroke took this much from a creature (the hit stop's watch, controller_ui_fixture.hpp).
+inline void learnHit(uint32_t entity,uint64_t binding,int32_t before,int32_t after){
+ std::lock_guard<std::mutex> lock(mutex);if(!predictWanted||guestWorld||before<=after||after<0)return;(void)binding;
+ for(auto& h:hostEstimates)if(h.entity==entity&&h.ms&&GetTickCount64()-h.ms<=1500){
+  const uint32_t seqNow=runningSequence?runningSequence():0;
+  if(estimateLogs++<400)logFile->event("damage_estimate_check","\"entity\":"+std::to_string(entity)+",\"actual\":"+std::to_string(before-after)+",\"estimated\":"+std::to_string(h.estimate.loss)+
+   ",\"before\":"+std::to_string(before)+",\"after_ms\":"+std::to_string(GetTickCount64()-h.ms)+",\"sequence_at_drop\":"+std::to_string(seqNow)+",\"attack_at_drop\":"+std::to_string(evr::damage::attackMod(seqNow))+","+estimateJson(h.estimate));
+  h.entity=0;return;}
+}
+// A diagnostic (EVR_DAMAGE_ESTIMATE_PROBE=1): every 5 s, the estimate of a stroke of the selected item at the nearest
+// creature kept, without any stroke - whether every read of estimateStroke works in this game (damage_estimate_probe).
+inline const bool estimateProbeWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_DAMAGE_ESTIMATE_PROBE",v,sizeof v);return n==1&&v[0]=='1';}();
+inline uint64_t estimateProbeAt=0;
+inline void estimateProbe(uintptr_t world,uint32_t local,uint64_t now){   // under mutex, on the World's tick
+ if(!estimateProbeWanted||now-estimateProbeAt<5000)return;estimateProbeAt=now;
+ const Cached* nearest=nullptr;double best=1e9;for(const auto& c:cache)if(c.target.character){const double m=metres(c.target.position,lastOrigin);if(m<best){best=m;nearest=&c;}}
+ uint32_t item=0;
+ try{const auto& t=estimateTypesOf(world);const auto player=nativeImpactComponents::entityAtWorld(world,local);
+  const auto sel=t.selection>=0?nativeImpactComponents::component(player,unsigned(t.selection),216):0;
+  // the first worn item whose instance has a damage (the selected one may be no weapon in a test)
+  if(sel){const auto raw=read<std::array<uint8_t,216>>(sel);
+   for(unsigned slot=0;slot<20&&!item;++slot){uint32_t row=0;std::memcpy(&row,raw.data()+8*slot,4);const uint8_t index=raw[8*slot+4];if(!row||index>=8||t.inventory<0||t.itemState<0)continue;
+    try{const auto r=nativeImpactComponents::entityAtWorld(world,row);const auto inv=nativeImpactComponents::component(r,unsigned(t.inventory),96);if(!inv)continue;
+     const auto stack=read<std::array<uint32_t,3>>(inv+12*index);if(!stack[2])continue;const auto ie=nativeImpactComponents::entityAtWorld(world,stack[2]);
+     const auto st=nativeImpactComponents::component(ie,unsigned(t.itemState),20);if(st&&read<uint16_t>(st+0xc))item=stack[0];}catch(...){}}}}catch(...){}
+ const auto client=guestWorld?world:clientWorldNow();
+ const auto e=estimateStroke(world,client,local,nearest?nearest->target.entity:0,uint64_t(item)<<32);
+ if(estimateLogs++<400)logFile->event("damage_estimate_probe","\"creature\":"+std::to_string(nearest?nearest->target.entity:0)+",\"metres\":"+std::to_string(nearest?best:-1.)+",\"guest\":"+(guestWorld?"true":"false")+","+estimateJson(e));
+}
 inline uintptr_t networkHealthAt(uint32_t entity){   // under mutex
  if(!types.world||types.networkHealth<0)return 0;
  try{return nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(types.world,entity),unsigned(types.networkHealth),8);}catch(...){return 0;}
 }
 inline void predictHit(uint32_t entity,uint64_t key,uint64_t now){
- std::lock_guard<std::mutex> lock(mutex);if(!predictWanted||!guestWorld||!entity)return;
+ std::lock_guard<std::mutex> lock(mutex);if(!predictWanted||!entity||!types.world||!lastOriginKnown)return;
+ const uint32_t local=estimateLocal;
+ if(!guestWorld){   // a host or a game of one: the estimate only, told against the health the stroke takes
+  const auto e=estimateStroke(types.world,clientWorldNow(),local,entity,key);
+  HostEstimate* slot=&hostEstimates[0];for(auto& h:hostEstimates)if(!h.entity){slot=&h;break;}else if(h.ms<slot->ms)slot=&h;*slot={entity,now,e};
+  if(!e.valid&&estimateLogs++<400)logFile->event("damage_estimate_failed","\"entity\":"+std::to_string(entity)+","+estimateJson(e));
+  return;}
  const auto at=networkHealthAt(entity);uint32_t value[2]{};if(!at||!block(at,value,sizeof value)||!value[1]||!value[0]||value[0]>value[1])return;
- for(auto& p:predicted)if(p.open&&p.entity==entity)p.open=false;   // a stroke before on it: that one learns no more
- Predicted* slot=&predicted[0];for(auto& p:predicted)if(!p.open&&p.ms<=slot->ms)slot=&p;
- const auto found=learnedDamage.find(key);const float damage=found==learnedDamage.end()?0.f:found->second*.8f;
- uint32_t written=value[0];
- if(damage>=1){written=uint32_t(std::max<int64_t>(1,int64_t(value[0])-int64_t(damage+.5f)));
-  SIZE_T n=0;if(written!=value[0]&&!WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(at),&written,4,&n))written=value[0];}
- *slot={entity,value[0],written,now,key,true};
- if(predictLogs++<300)logFile->event("guest_health_predicted","\"entity\":"+std::to_string(entity)+",\"before\":"+std::to_string(value[0])+",\"written\":"+std::to_string(written)+
-  ",\"max\":"+std::to_string(value[1])+",\"learned\":"+std::to_string(found==learnedDamage.end()?-1.f:found->second));
+ const auto e=estimateStroke(types.world,types.world,local,entity,key);
+ if(!e.valid){if(predictLogs++<300)logFile->event("guest_health_not_predicted","\"entity\":"+std::to_string(entity)+","+estimateJson(e));return;}
+ const float damage=float(e.loss);const uint32_t item=e.item;
+ Predicted* slot=nullptr;for(auto& p:predicted)if(p.open&&p.entity==entity){slot=&p;break;}
+ if(!slot){for(auto& p:predicted)if(!p.open&&(!slot||p.ms<slot->ms))slot=&p;if(!slot){slot=&predicted[0];for(auto& p:predicted)if(p.ms<slot->ms)slot=&p;}
+  *slot={};slot->entity=entity;slot->host=value[0];slot->written=value[0];slot->open=true;}
+ if(slot->count>=slot->strokes.size()){std::move(slot->strokes.begin()+1,slot->strokes.end(),slot->strokes.begin());--slot->count;}
+ slot->strokes[slot->count++]={now,damage,item,e.sequence,e.in.attackMod};slot->ms=now;slot->max=value[1];
+ float owed=0;for(size_t k=0;k<slot->count;++k)owed+=slot->strokes[k].damage;
+ const uint32_t shown=uint32_t(std::max<int64_t>(0,int64_t(slot->host)-int64_t(owed+.5f)));SIZE_T n=0;
+ if(shown!=value[0]&&WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(at),&shown,4,&n))slot->written=shown;
+ if(predictLogs++<300)logFile->event("guest_health_predicted","\"entity\":"+std::to_string(entity)+",\"before\":"+std::to_string(value[0])+",\"written\":"+std::to_string(slot->written)+
+  ",\"max\":"+std::to_string(value[1])+",\"strokes\":"+std::to_string(slot->count)+","+estimateJson(e));
 }
-// Each frame: a predicted health the host's value has replaced teaches the weapon's damage; after two seconds without it,
-// nothing is learned (the host's stroke missed, or its damage was just the predicted one).
+// Each frame: the host's value of a creature with strokes still owed. A drop settles the oldest stroke; the host's copy
+// from before is overwritten again; a stroke not followed by a drop in 0.7 s is given up.
 inline void settlePredictions(uint64_t now){
  std::lock_guard<std::mutex> lock(mutex);
  for(auto& p:predicted){if(!p.open)continue;
   const auto at=networkHealthAt(p.entity);uint32_t value[2]{};
-  if(!at||!block(at,value,sizeof value)){p.open=false;continue;}
-  if(value[0]!=p.written){p.open=false;
-   if(value[0]<p.before){const float d=float(p.before-value[0]);auto& l=learnedDamage[p.key];l=l>0?l*.5f+d*.5f:d;}
-   if(predictLogs++<300)logFile->event("guest_health_host","\"entity\":"+std::to_string(p.entity)+",\"before\":"+std::to_string(p.before)+",\"predicted\":"+std::to_string(p.written)+
-    ",\"host\":"+std::to_string(value[0])+",\"after_ms\":"+std::to_string(now-p.ms));}
-  else if(now-p.ms>2000){p.open=false;if(predictLogs++<300)logFile->event("guest_health_unconfirmed","\"entity\":"+std::to_string(p.entity)+",\"before\":"+std::to_string(p.before)+",\"predicted\":"+std::to_string(p.written));}}
+  if(!at||!block(at,value,sizeof value)||!value[1]){p.open=false;continue;}
+  if(value[0]!=p.written){
+   if(value[0]<p.host&&p.count){   // the host's hit came
+    const float drop=float(p.host-value[0]);
+    if(predictLogs++<300)logFile->event("guest_health_host","\"entity\":"+std::to_string(p.entity)+",\"host_before\":"+std::to_string(p.host)+",\"shown\":"+std::to_string(p.written)+
+     ",\"host\":"+std::to_string(value[0])+",\"host_drop\":"+std::to_string(drop)+",\"predicted_damage\":"+std::to_string(p.strokes[0].damage)+",\"after_ms\":"+std::to_string(now-p.strokes[0].ms)+",\"strokes\":"+std::to_string(p.count));
+    // the strokes this drop covers: the oldest, and the next ones while the drop holds them too
+    float left=drop;size_t settled=0;while(settled<p.count&&(settled==0||left>=p.strokes[settled].damage*.6f)){left-=p.strokes[settled].damage;++settled;}
+    std::move(p.strokes.begin()+settled,p.strokes.begin()+p.count,p.strokes.begin());p.count-=settled;}
+   else if(value[0]>=p.host)p.lastStale=now;   // the host's copy from before (or a heal)
+   p.host=value[0];}
+  // the stroke's own action, when it starts after the touch (review W4: the touch comes before it): its attack modifier
+  {const uint32_t seq=runningSequence?runningSequence():0;
+   if(seq&&evr::damage::attackKnown(seq))for(size_t k=0;k<p.count;++k){auto& s=p.strokes[k];
+    if(now-s.ms<=300&&s.sequence!=seq&&s.mod>0){const float mod=evr::damage::attackMod(seq);
+     if(predictLogs++<300)logFile->event("guest_health_attack_changed","\"entity\":"+std::to_string(p.entity)+",\"sequence\":"+std::to_string(seq)+",\"mod\":"+std::to_string(s.mod)+",\"to\":"+std::to_string(mod)+",\"damage\":"+std::to_string(s.damage));
+     s.damage*=mod/s.mod;s.mod=mod;s.sequence=seq;}}}
+  // strokes the host did not follow
+  if(p.count&&now-p.strokes[0].ms>predictHoldMs&&value[0]==p.written&&(!p.lastStale||now-p.lastStale>=200)){
+   if(predictLogs++<300)logFile->event("guest_health_kept","\"entity\":"+std::to_string(p.entity)+",\"shown\":"+std::to_string(p.written)+",\"stale_ms_ago\":"+std::to_string(p.lastStale?now-p.lastStale:0)+",\"strokes\":"+std::to_string(p.count));
+   p.count=0;p.host=value[0];}
+  while(p.count&&now-p.strokes[0].ms>predictHoldMs){
+   if(predictLogs++<300)logFile->event("guest_health_unconfirmed","\"entity\":"+std::to_string(p.entity)+",\"host\":"+std::to_string(p.host)+",\"predicted_damage\":"+std::to_string(p.strokes[0].damage)+",\"revived\":"+(p.written==0&&p.host>0?"true":"false"));
+   std::move(p.strokes.begin()+1,p.strokes.begin()+p.count,p.strokes.begin());--p.count;}
+  if(!p.count){p.open=false;if(value[0]!=p.host){SIZE_T n=0;WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(at),&p.host,4,&n);}continue;}
+  float owed=0;for(size_t k=0;k<p.count;++k)owed+=p.strokes[k].damage;
+  const uint32_t shown=uint32_t(std::max<int64_t>(0,int64_t(p.host)-int64_t(owed+.5f)));
+  if(shown!=value[0]){SIZE_T n=0;if(WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(at),&shown,4,&n))p.written=shown;}else p.written=shown;}
+}
+// What became of the things a guest's blade touched (2026-10-22, a diagnostic for the guest's own break of pots: a guest's
+// World does not tell a pot from a wall - both are a StaticClientCollider with a CollisionFeedbackMaterialComponent): the
+// thing's components and its render model (the Scene handle in ModelComponent, the model resource's GUID +0x18 and number)
+// at the touch, and 1.5 s later whether it is still in the World (the host broke it, or not). guest_thing_outcome; 300
+// records at the most. Under mutex.
+// The guest's own break (user 2026-10-22: "a pot breaks for certain - break it on the guest; the host's word comes 0.3 s
+// later, so keep it 0.7 s and nothing differs to the eye"): a touched thing whose model is a breakable one
+// (include/evr/breakable_models.hpp, from the game data: docs/analysis/breakable_props_20261022) is taken out of the eyes
+// at once (head_visibility_bridge.hpp) until the host's break takes it out of the World, for 0.7 s at the most - then it
+// shows again (the host did not break it). The host's shards and sound come with its break. Only when one stroke is sure
+// to break it: the model's verdict 0 or 1 (2 only without ClientInteractionOffer / PickupItem - a pickup shares the
+// model), a material of wood, stone or metal, and the weapon's damage of that material - the item's u32 at +0x6a8 / +0x6ac
+// / +0x6b0 (its damage distribution +0x684, the woodDamage tenth; docs/analysis/damage_formula_20261022 1.2) - not
+// below the model's largest maxHealth (a guess of the data study: a stroke takes the weapon's value of the material;
+// guest_break_judge tells each touch). EVR_GUEST_BREAK=0: off.
+struct ModelInfo {uint32_t handle=0;std::array<uint32_t,4> guid{};uint16_t number=0;bool valid=false;};
+struct ThingTouch {uint32_t entity=0;uint64_t ms=0;std::string components;ModelInfo model;};
+inline std::array<ThingTouch,8> thingTouches{};inline unsigned thingLogs=0;
+struct HiddenThing {uint32_t entity=0,handle=0;uint64_t ms=0;};
+inline std::array<HiddenThing,4> hiddenThings{};inline unsigned breakLogs=0;
+constexpr uint64_t guestBreakHoldMs=700;
+inline const bool guestBreakWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_GUEST_BREAK",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline ModelInfo modelOf(const nativeImpactComponents::Entity& e){   // under mutex
+ ModelInfo m;if(types.model<0||types.modelBytes<4||!motionVisual::scene)return m;
+ try{const auto c=nativeImpactComponents::component(e,unsigned(types.model),types.modelBytes);if(!c)return m;m.handle=read<uint32_t>(c);
+  const auto object=m.handle?motionVisual::currentObject(m.handle):0;if(!object)return m;const auto resource=read<uintptr_t>(object+layout::modelResource);if(!resource)return m;
+  m.guid=read<std::array<uint32_t,4>>(resource+0x18);m.number=read<uint16_t>(resource+layout::resourceModel);m.valid=true;}catch(...){}
+ return m;
+}
+inline std::string modelJson(const ModelInfo& m){
+ return "{\"handle\":"+std::to_string(m.handle)+",\"valid\":"+(m.valid?"true":"false")+",\"number\":"+std::to_string(m.number)+",\"guid\":["+std::to_string(m.guid[0])+","+std::to_string(m.guid[1])+","+std::to_string(m.guid[2])+","+std::to_string(m.guid[3])+"]}";
+}
+// The weapon's damage of a material (1 wood, 2 stone, 3 metal) from its item in the registry; -1 unknown.
+inline int64_t materialDamage(uint32_t item,unsigned material){
+ const auto registry=attachmentObserver::itemRegistry.load();if(!item||!registry||material<1||material>3)return -1;
+ try{auto reader=inputRanged::readItemBytes;const auto found=game::lookupItem(reader,registry,item);if(found.status!=game::ItemLookupStatus::Found||!found.pointer)return -1;
+  uint32_t v=0;if(!inputRanged::readItemBytes(found.pointer+0x6a8+4*(material-1),&v,4))return -1;return v<100000?int64_t(v):-1;}catch(...){return -1;}
+}
+inline void thingTouched(uint32_t entity,uint64_t binding,uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);if(!guestWorld||!entity||!types.world)return;
+ for(const auto& t:thingTouches)if(t.entity==entity)return;
+ nativeImpactComponents::Entity e;std::array<uint64_t,10> b{};
+ try{e=nativeImpactComponents::entityAtWorld(types.world,entity);b=read<std::array<uint64_t,10>>(e.layout);}catch(...){return;}
+ const auto model=modelOf(e);
+ // the guest's own break
+ if(guestBreakWanted&&model.valid){
+  if(const auto* known=evr::breakable::find(model.guid)){
+   const auto hasComponent=[&](const char* name){for(unsigned t=0;t<640&&t<nativeImpactComponents::componentCapacity;++t)if((b[t/64]>>(t%64))&1){
+     try{if(nativeImpactComponents::componentType(types.world,t).qualifiedName==name)return true;}catch(...){}}return false;};
+   const bool pickup=known->verdict==2&&(hasComponent("keen::ecs::ClientInteractionOffer")||hasComponent("keen::ecs::PickupItem"));
+   const auto damage=materialDamage(uint32_t(binding>>32),known->material);
+   const bool breaks=known->verdict<=2&&!pickup&&known->material>=1&&known->material<=3&&damage>=int64_t(known->healthMax);
+   if(breaks){HiddenThing* slot=&hiddenThings[0];for(auto& h:hiddenThings)if(!h.entity){slot=&h;break;}else if(h.ms<slot->ms)slot=&h;*slot={entity,model.handle,now};}
+   if(breakLogs++<300)logFile->event("guest_break_judge","\"entity\":"+std::to_string(entity)+",\"model\":"+modelJson(model)+",\"health_max\":"+std::to_string(known->healthMax)+
+    ",\"material\":"+std::to_string(known->material)+",\"verdict\":"+std::to_string(known->verdict)+",\"pickup\":"+(pickup?"true":"false")+
+    ",\"item\":"+std::to_string(uint32_t(binding>>32))+",\"weapon_damage\":"+std::to_string(damage)+",\"broken_here\":"+(breaks?"true":"false"));}}
+ if(thingLogs>=300)return;
+ ThingTouch* slot=&thingTouches[0];for(auto& t:thingTouches)if(!t.entity){slot=&t;break;}else if(t.ms<slot->ms)slot=&t;
+ std::string names;int count=0;
+ for(unsigned t=0;t<640&&t<nativeImpactComponents::componentCapacity&&count<40;++t)if((b[t/64]>>(t%64))&1){
+  try{auto name=nativeImpactComponents::componentType(types.world,t).qualifiedName;if(name.rfind("keen::ecs::",0)==0)name=name.substr(11);names+=(count?",":"")+jsonString(name);++count;}catch(...){}}
+ *slot={entity,now,names,model};
+}
+inline void thingOutcomes(uint64_t now){   // under mutex, on the World's tick
+ for(auto& t:thingTouches){if(!t.entity||now-t.ms<1500)continue;
+  bool there=true;try{nativeImpactComponents::entityAtWorld(types.world,t.entity);}catch(...){there=false;}
+  if(thingLogs++<300)logFile->event("guest_thing_outcome","\"entity\":"+std::to_string(t.entity)+",\"gone_after_1500_ms\":"+(there?"false":"true")+",\"model\":"+modelJson(t.model)+
+   ",\"breakable_model\":"+(t.model.valid&&evr::breakable::find(t.model.guid)?"true":"false")+",\"components\":["+t.components+"]");
+  t.entity=0;}
+ for(auto& h:hiddenThings){if(!h.entity)continue;
+  bool there=true;try{nativeImpactComponents::entityAtWorld(types.world,h.entity);}catch(...){there=false;}
+  if(!there||now-h.ms>guestBreakHoldMs){
+   if(breakLogs++<300)logFile->event(there?"guest_break_undone":"guest_break_confirmed","\"entity\":"+std::to_string(h.entity)+",\"after_ms\":"+std::to_string(now-h.ms));
+   h.entity=0;}}
+}
+// Any thread (the eyes' culling, head_visibility_bridge.hpp): the Scene handles of the things broken on this PC still
+// waiting for the host's break.
+inline size_t hiddenThingHandles(uint32_t* out,size_t maximum,uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);size_t n=0;
+ for(const auto& h:hiddenThings)if(h.entity&&now>=h.ms&&now-h.ms<=guestBreakHoldMs&&n<maximum)out[n++]=h.handle;
+ return n;
 }
 inline int32_t stateNow(uint32_t entity){
  std::lock_guard<std::mutex> lock(mutex);
@@ -612,10 +883,12 @@ inline bool segmentHit(const std::array<int64_t,3>& from,const std::array<int64_
   if(s<best){best=s;at=c.target.position;character=c.target.character;entity=c.target.entity;}}
  if(best>1)return false;along=best;return true;
 }
-inline void publishShotHit(const std::array<int64_t,3>& at,bool character,uint64_t now){
- std::lock_guard<std::mutex> lock(mutex);if(!steerWanted)return;ShotHit* slot=&shotHits[0];for(auto& h:shotHits)if(h.ms<slot->ms)slot=&h;*slot={at,character,false,now};
+inline void publishShotHit(const std::array<int64_t,3>& at,bool character,uint32_t entity,uint64_t now){
+ std::lock_guard<std::mutex> lock(mutex);if(!steerWanted)return;ShotHit* slot=&shotHits[0];for(auto& h:shotHits)if(h.ms<slot->ms)slot=&h;*slot={at,character,false,now,entity};
 }
-inline void steerArrows(uintptr_t world,uint64_t now){   // under mutex, on the World's tick
+inline void steerArrowsBody(uintptr_t world,uint64_t now);
+inline void steerArrows(uintptr_t world,uint64_t now){try{steerArrowsBody(world,now);}catch(...){}}   // (review M5: a failed read ends the arrows' part only, not the tick)
+inline void steerArrowsBody(uintptr_t world,uint64_t now){   // under mutex, on the World's tick
  if(!steerWanted||guestWorld||types.velocity<0||types.gravity<0||types.current<0)return;
  const auto spawned=controllerUiFixture::remoteSpawnAt.load();const bool watching=spawned&&now>=spawned&&now-spawned<=1500;
  // the new flying things after another player's projectile was made here
@@ -660,7 +933,9 @@ inline void steerArrows(uintptr_t world,uint64_t now){   // under mutex, on the 
    const auto vc=nativeImpactComponents::component(e,unsigned(types.velocity),12),cc=nativeImpactComponents::component(e,unsigned(types.current),56);
    if(!vc||!cc){arrow->entity=0;continue;}
    // the host's thing nearest to the guest's hit
-   std::array<int64_t,3> target=h.at;double best=3;for(const auto& c:cache)if(c.target.character==h.character){const double m=metres(c.target.position,h.at);if(m<best){best=m;target=c.target.position;}}
+   std::array<int64_t,3> target=h.at;double best=3;bool byEntity=false;
+   for(const auto& c:cache)if(h.entity&&c.target.entity==h.entity&&c.target.character==h.character&&metres(c.target.position,h.at)<=6.){best=metres(c.target.position,h.at);target=c.target.position;byEntity=true;break;}
+   if(!byEntity)for(const auto& c:cache)if(c.target.character==h.character){const double m=metres(c.target.position,h.at);if(m<best){best=m;target=c.target.position;}}
    target[1]+=int64_t((h.character?1.0:.4)*4294967296.);
    const auto p=read<WorldPositionQ32>(cc);Vec3 dir{float(double(target[0]-p.x)/4294967296.),float(double(target[1]-p.y)/4294967296.),float(double(target[2]-p.z)/4294967296.)};
    const float distance=length(dir);if(!(distance>1e-3f)){h.used=true;continue;}dir=dir*(1/distance);
@@ -670,14 +945,16 @@ inline void steerArrows(uintptr_t world,uint64_t now){   // under mutex, on the 
    const bool wrote=WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(cc),&place,24,&n)&&WriteProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(vc),&nv,12,&n);
    arrow->parked=false;
    if(arrowLogs++<300)logFile->event("remote_arrow_steered","\"entity\":"+std::to_string(arrow->entity)+",\"character\":"+(h.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-h.ms)+
-    ",\"guest_to_host_m\":"+std::to_string(best<3?best:-1.)+",\"moved_m\":"+std::to_string(distance)+",\"speed\":"+std::to_string(speed)+",\"written\":"+(wrote?"true":"false"));
+    ",\"guest_to_host_m\":"+std::to_string(best<3||byEntity?best:-1.)+",\"by_entity\":"+(byEntity?"true":"false")+",\"moved_m\":"+std::to_string(distance)+",\"speed\":"+std::to_string(speed)+",\"written\":"+(wrote?"true":"false"));
    h.used=true;arrow->entity=0;
   }catch(...){arrow->entity=0;}
  }
 }
 // The host's thing nearest to where a guest's stroke touched one (remoteMelee): a creature for a creature's touch.
-inline bool nearestTo(const std::array<int64_t,3>& at,bool character,float within,std::array<int64_t,3>& out,uint32_t& entity,float& away){
+inline bool nearestTo(const std::array<int64_t,3>& at,bool character,uint32_t wanted,float within,std::array<int64_t,3>& out,uint32_t& entity,float& away){
  std::lock_guard<std::mutex> lock(mutex);float best=within;bool found=false;
+ // the same id within 6 m only (a guest's own things - its colliders of pots and walls - may have ids of their own)
+ if(wanted)for(const auto& c:cache)if(c.target.entity==wanted&&c.target.character==character&&metres(c.target.position,at)<=(character?6.:1.5)){out=c.target.position;entity=wanted;away=float(metres(c.target.position,at));return true;}
  for(const auto& c:cache){if(c.target.character!=character)continue;const float d=float(metres(c.target.position,at));
   if(d<best){best=d;out=c.target.position;entity=c.target.entity;found=true;}}
  if(found)away=best;return found;
@@ -685,6 +962,8 @@ inline bool nearestTo(const std::array<int64_t,3>& at,bool character,float withi
 inline bool entityPosition(uint32_t entity,std::array<int64_t,3>& out,uint64_t now){
  std::lock_guard<std::mutex> lock(mutex);
  for(const auto& c:cache)if(entity&&c.target.entity==entity&&now>=c.seen&&now-c.seen<=4000){out=c.target.position;return true;}
+ // a creature the game names this tick before the pass of the map has kept it (review W7: its touch was never sent)
+ if(entity&&quickTick&&now>=quickTick&&now-quickTick<=1000)for(size_t k=0;k<quickCount;++k)if(quick[k].entity==entity){out=quick[k].position;return true;}
  return false;
 }
 // Any thread: how far along this line (the game's world; direction a unit vector) the aim mark sits - the creature in
@@ -700,6 +979,10 @@ inline float aimReach(WorldPositionQ32 origin,Vec3 direction,uint64_t now,int& b
    bodies[count++]={{float(relativeQ32(c.target.position[0],origin.x)),float(relativeQ32(c.target.position[1],origin.y)),float(relativeQ32(c.target.position[2],origin.z))},reach.characterRadius,reach.height};}}
  return evr::aim::markReach({true,{0,0,0},direction},groundY,bodies.data(),count,&by);
 }
+// A new World: the records of strokes, broken things, estimates and parked arrows of the old one go (their ids are another World's).
+// And the estimate's types of the new World are read now, while it loads, not at the first stroke (a few tens of ms).
+inline void forgetWorldRecords(uintptr_t world){predicted={};hiddenThings={};thingTouches={};hostEstimates={};remoteArrows={};
+ if(predictWanted)try{estimateTypesOf(world);}catch(...){}}
 inline void summary(){
  if(!requested)return;std::lock_guard<std::mutex> lock(mutex);
  logFile->event("live_targets_removed","\"ticks\":"+std::to_string(ticks.load())+",\"full_scans\":"+std::to_string(fullScans)+",\"adopted\":"+std::to_string(adopted.load())+",\"dropped\":"+std::to_string(dropped.load())+

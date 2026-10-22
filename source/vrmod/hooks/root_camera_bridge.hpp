@@ -34,6 +34,8 @@ inline std::atomic<uint64_t> heldRenders{0};
 inline bool holdNow(const Sample& s,uint64_t now){return s.number&&now>=s.milliseconds&&now-s.milliseconds>1000&&uiHold&&uiHold();}
 inline uint32_t calibratedEntity=0;
 inline float calibratedHeight=0,lastYaw=0;
+// How far the eyes come down below the calibrated height now (metres; the sneak's, set by the policy).
+inline float(*viewDrop)()=nullptr;
 // Height calibration waits for a settled native target height of the idle camera;
 // until then the anchor follows the native height and is provisional (warmup only).
 // The native target height depends on the camera mode (game163158: PlayerCameraDefault
@@ -289,6 +291,8 @@ inline game::StableAnchor anchor(const Sample& s){
         if(stableHeading.reference(s.entity,reference)){std::lock_guard<std::mutex> lock(headingMutex);headingReference=reference;headingReferenceEntity=s.entity;}
     }
     lastYaw=cameraModes&&stableHeadingUsed?stableHeading.value(s.entity,s.unshaken.orientation,s.controls.gameplayTurn):heading(normalized(s.unshaken.orientation),lastYaw);
+    // Lowered while sneaking (controllerUiFixture::sneakView, 2026-10-22).
+    if(viewDrop)height-=viewDrop();
     game::StableAnchor a;a.root=s.stable.position;a.orientation=euler(lastYaw,0,0);a.cameraOffsetGameUnits={0,height,0};
     return a;
 }

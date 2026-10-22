@@ -162,6 +162,14 @@ inline void onCopy(uintptr_t rsp) noexcept {
                    std::find(indices.begin(),indices.end(),sourceIndex)==indices.end())indices.push_back(sourceIndex);
                 if(index<cpuCount&&indices.size()<body::maximumModels){shield=index;offhandShown=true;}
             }
+            // The things this guest broke on its own PC, until the host's break (live_melee_targets.hpp guestBreak, 2026-10-22).
+            {std::array<uint32_t,4> broken{};const auto n=liveTargets::hiddenThingHandles(broken.data(),broken.size(),GetTickCount64());
+                for(size_t k=0;k<n;++k){const auto h=broken[k];const auto i=h&0xffffff;
+                    if(motionVisual::currentObject(h)&&i<cpuCount&&indices.size()<body::maximumModels-2&&std::find(indices.begin(),indices.end(),i)==indices.end())indices.push_back(i);}}
+            // The game's copies of the own shot (motion_arrow_visual.hpp foreignArrows, 2026-10-22): out of the eyes.
+            if(motionArrowVisual::requested&&motionArrowVisual::foreignSerial==pair.serial&&motionArrowVisual::foreignFrame==liveFrame.frame)
+                for(size_t k=0;k<motionArrowVisual::foreignCount;++k){const auto h=motionArrowVisual::foreign[k];const auto i=h&0xffffff;
+                    if(motionVisual::currentObject(h)&&i<cpuCount&&indices.size()<body::maximumModels-2&&std::find(indices.begin(),indices.end(),i)==indices.end())indices.push_back(i);}
             // The nocked arrow takes the third private slot while no shield is shown (a bow fills the shield hand).
             // The game's own arrow stays out of the eyes for as long as it is at the game's bow.
             if(motionArrowVisual::requested&&motionArrowVisual::hiddenSerial==pair.serial&&motionArrowVisual::hiddenFrame==liveFrame.frame&&motionArrowVisual::source){

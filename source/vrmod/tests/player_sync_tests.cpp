@@ -212,7 +212,9 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   {const std::array<int64_t,3> at{int64_t(5)<<32,-(int64_t(77)<<32),int64_t(1)<<40};const auto e=encodeHit(9,at,true);const auto d=decodeAction(e.data(),e.size());
    ck(e.size()==hitActionBytes&&d&&d->kind==hitAction&&d->id==9&&d->at==at&&d->character);auto bad=e;bad[29]=4;ck(!decodeAction(bad.data(),bad.size()));ck(!d->shot);
    const auto sh=encodeHit(11,at,true,true);const auto sd=decodeAction(sh.data(),sh.size());ck(sd&&sd->shot&&sd->character);
-   const auto o=encodeHit(10,at,false);const auto od=decodeAction(o.data(),o.size());ck(od&&!od->character);}
+   const auto o=encodeHit(10,at,false);const auto od=decodeAction(o.data(),o.size());ck(od&&!od->character);
+   const auto en=encodeHit(12,at,true,false,0x12345678u);const auto ed=decodeAction(en.data(),en.size());ck(en.size()==hitEntityActionBytes&&ed&&ed->entity==0x12345678u&&ed->at==at&&ed->character&&!ed->shot);
+   ck(d->entity==0);auto cut=en;cut.pop_back();ck(!decodeAction(cut.data(),cut.size()));}
   const std::array<int64_t,3> enemy{int64_t(3)<<32,int64_t(4)<<32,-(int64_t(5)<<32)};
   const auto p=encodeParry(300,enemy);const auto pa=decodeAction(p.data(),p.size());ck(p.size()==parryActionBytes&&pa&&pa->kind==parryAction&&pa->id==300&&pa->at==enemy);
   auto longer=p;longer.push_back(0);ck(!decodeAction(longer.data(),longer.size()));

@@ -218,6 +218,24 @@ inline std::atomic<uint64_t> recenterRequests{0},originEpoch{0};inline std::atom
 inline void publishOrigin(float headY,float reference,uint64_t epoch){originHeadY.store(headY);originReference.store(reference);originEpoch.store(epoch);}
 inline bool (*sneakState)(uint64_t now,bool& sneaking,bool& toggle,bool& allowed)=nullptr;
 inline evr::motion::RoomCrouch roomCrouch;inline evr::motion::SneakPresser sneakPresser;inline evr::motion::RecenterPose recenterPose;
+// The view lowered while sneaking (2026-10-22, user: "that I am sneaking is hard to tell - lower the view 40 cm when the
+// sneak is on"): the game's InSneakMode (sneakState) eases the eye height down by dropM over easeSeconds, unless the
+// body's own crouch began it (sneakPresser.bodySneak: the head is down already). The camera's anchor takes it
+// (root_camera_bridge.hpp rootCamera::viewDrop), so the eyes, the hands and the body come down together.
+// EVR_SNEAK_VIEW_DROP=<cm> (0 off, 40 by default).
+namespace sneakView {
+inline const float dropM=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_SNEAK_VIEW_DROP",v,sizeof v);
+    if(n&&n<sizeof v){const int c=std::atoi(v);if(c>=0&&c<=80)return float(c)/100.f;}return .40f;}();
+constexpr double easeSeconds=.3;
+inline std::mutex mutex;inline float from=0,to=0;inline std::chrono::steady_clock::time_point at{};
+inline float valueLocked(std::chrono::steady_clock::time_point now){
+    if(at==std::chrono::steady_clock::time_point{})return to;
+    const double t=std::chrono::duration<double>(now-at).count()/easeSeconds;if(t>=1)return to;if(t<=0)return from;
+    return float(from+(to-from)*(t*t*(3-2*t)));}
+inline void set(float wanted){const auto now=std::chrono::steady_clock::now();std::lock_guard<std::mutex> lock(mutex);
+    if(wanted==to)return;from=valueLocked(now);to=wanted;at=now;}
+inline float current(){std::lock_guard<std::mutex> lock(mutex);return valueLocked(std::chrono::steady_clock::now());}
+}
 // Live held items: the right trigger is the game's use button for what is used that way (hand tools of the right hand
 // slot, building pieces; VHVR uses tools and building with the trigger), and a throwable is thrown by the hand's
 // movement (VHVR ThrowableManager, live_throw.hpp).
@@ -259,9 +277,17 @@ inline size_t (*hitWatchNear)(const evr::motion::LiveMeleeWeapon&,float,HitNear*
 inline int32_t (*hitWatchState)(uint32_t)=nullptr;
 // A guest's health at the touch (live_melee_targets.hpp predictHit / settlePredictions); null when not used.
 inline void (*hitPredict)(uint32_t,uint64_t,uint64_t)=nullptr;inline void (*hitSettle)(uint64_t)=nullptr;
+// A host's or a lone player's stroke: the drop of a touched creature's health, for the damage a guest predicts with (2026-10-22).
+inline void (*hitLearn)(uint32_t,uint64_t,int32_t,int32_t)=nullptr;
+// The jump button pressed in play (2026-10-22: a guest's double jump, input_actor_observer.hpp localJump::own).
+inline void (*jumpPressed)(uint64_t)=nullptr;
+// A thing (not a creature) the blade touched (2026-10-22: live_melee_targets.hpp thingTouched, a guest's diagnostic).
+inline void (*hitThing)(uint32_t,uint64_t,uint64_t)=nullptr;
+// This game is a client (a guest) now: nativeImpactComponents::clientNow, set by view_resource_probe.cpp.
+inline bool (*clientNowFn)(uint64_t)=nullptr;
 // The touches of this player's strokes, for the host (online_sync.hpp sendHits, sync::hitAction): where the thing stood
 // on this PC. hitReport (view_resource_probe.cpp) fills them on a client only. Under hitReportMutex.
-struct HitReport {uint64_t serial=0,ms=0;std::array<int64_t,3> at{};bool character=false,shot=false;};   // shot: an arrow's hit (not a stroke's)
+struct HitReport {uint64_t serial=0,ms=0;std::array<int64_t,3> at{};bool character=false,shot=false;uint32_t entity=0;};   // shot: an arrow's hit (not a stroke's)
 inline std::array<HitReport,8> hitReports{};inline uint64_t hitReportSerial=0;inline std::mutex hitReportMutex;
 inline void (*hitReport)(uint32_t,bool,uint64_t)=nullptr;
 // The host side of a guest's arrow: when another player's projectile was made here last (bow_spawn_observer.hpp), and
@@ -282,9 +308,9 @@ inline std::atomic<uint64_t> bowEarlySpawnUntil{0};
 inline std::atomic<bool> bowStrongDrawing{false};
 // where that projectile was made (the camera the guest sent at its release); written before remoteSpawnAt
 inline std::array<std::atomic<int64_t>,3> remoteSpawnOrigin{};inline std::array<std::atomic<float>,3> remoteSpawnDirection{};
-inline void (*shotHitArrived)(const std::array<int64_t,3>&,bool,uint64_t)=nullptr;
+inline void (*shotHitArrived)(const std::array<int64_t,3>&,bool,uint32_t,uint64_t)=nullptr;
 struct HitWatch {uint64_t from=0,until=0;unsigned hands=0;double seconds=0;bool left=false;uint64_t binding=0;
- struct Item {uint32_t entity=0;int32_t state=-1;float last=-1,closest=-1;bool touched=false;};std::array<Item,16> items{};size_t count=0;};
+ struct Item {uint32_t entity=0;int32_t state=-1;float last=-1,closest=-1;bool touched=false,learned=false,character=false;};std::array<Item,16> items{};size_t count=0;};
 inline HitWatch hitWatch;
 // To the frame that shows the hands: the latest stop asked (serial), which hands (bit 0 left, bit 1 right), how long (ms).
 inline std::atomic<uint32_t> hitStopSerial{0},hitStopHands{0},hitStopMs{0};
@@ -405,6 +431,11 @@ inline bool liveMeleeQuickRelease=false;inline std::atomic<uint64_t> liveAttackP
 // fixed 80 ms tap; the arrow then came about 40 ms later). EVR_BOW_TAP_POLLS=<1..8>, 0: the fixed tap as before.
 inline std::atomic<uint64_t> liveRtPolls{0};
 inline const unsigned bowTapPolls=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_BOW_TAP_POLLS",v,sizeof v);return n==1&&v[0]>='0'&&v[0]<='8'?unsigned(v[0]-'0'):2u;}();
+// A guest's tap is held at least this long (2026-10-22, the online session of 10-22: of a guest's 31 releases - each read
+// twice by its game, held 31..47 ms - the host's server made 12 arrows; after the 18th none at all. A guess: a tap that short
+// does not always reach the server. The guest's own arrow flies from the release on its PC (motion_arrow_visual.hpp), so a
+// longer tap delays nothing that is seen). EVR_GUEST_BOW_TAP_MS=<0..300>.
+inline const unsigned guestBowTapMs=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_GUEST_BOW_TAP_MS",v,sizeof v);const unsigned m=n&&n<sizeof v?unsigned(std::strtoul(v,nullptr,10)):120u;return std::min(m,300u);}();
 inline bool liveNeutralPolled(){std::lock_guard<std::mutex> lock(liveMutex);return liveObserved.load()==liveState.dwPacketNumber;}
 inline bool verticalRequested=false;inline evr::motion::VerticalStickMapping verticalMapper;inline uint64_t lastVerticalFrame=0;
 inline evr::motion::HandFrame gestureHands;
@@ -1013,6 +1044,8 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     if(leftClick&&!leftBefore)logFile->event("quick_slot_page","\"frame\":"+std::to_string(hands.frame)+",\"left_stick_click\":true,\"native_button\":128,\"screen\":"+std::to_string(unsigned(screenKind)));
                     leftBefore=leftClick;
                 }
+                {static bool jumpBefore=false;const bool jump=fresh&&mapped.valid&&screenKind==evr::motion::LiveScreen::Gameplay&&!value.active&&(pad.buttons&evr::motion::LivePadMapper::A);
+                 if(jump&&!jumpBefore&&jumpPressed)jumpPressed(now);jumpBefore=jump;}
                 if(liveMeleeRequested){
                     evr::motion::LiveMeleeWeapon weapon,offhand;uint64_t weaponFrame=0,weaponMs=0,offhandFrame=0,offhandMs=0;
                     {std::lock_guard<std::mutex> lock(gestureMutex);weapon=gestureMeleeWeapon;weaponFrame=gestureMeleeFrame;weaponMs=gestureMeleeMs;
@@ -1145,7 +1178,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                             if(fresh){std::array<HitNear,16> nearby{};const auto n=hitWatchNear(carried,2.5f,nearby.data(),nearby.size(),now);
                                 for(size_t k=0;k<n;++k){const auto& x=nearby[k];
                                     size_t at=hitWatch.count;for(size_t j=0;j<hitWatch.count;++j)if(hitWatch.items[j].entity==x.entity){at=j;break;}
-                                    if(at==hitWatch.count){if(hitWatch.count>=hitWatch.items.size())continue;at=hitWatch.count++;hitWatch.items[at].entity=x.entity;hitWatch.items[at].state=x.state;}
+                                    if(at==hitWatch.count){if(hitWatch.count>=hitWatch.items.size())continue;at=hitWatch.count++;hitWatch.items[at].entity=x.entity;hitWatch.items[at].state=x.state;hitWatch.items[at].character=x.character;}
                                     auto* it=&hitWatch.items[at];
                                     if(!it->touched){
                                         const bool inside=x.distance<=x.body;
@@ -1153,7 +1186,8 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                                         if(it->closest<0||x.distance<it->closest)it->closest=x.distance;
                                         if(inside||turned){it->touched=true;stop(*it,inside?"touch":"closest",x.distance,x.state);
                                             if(hitPredict&&x.character)hitPredict(x.entity,hitWatch.binding,now);
-                                            if(hitReport)hitReport(x.entity,x.character,now);}
+                                            if(hitReport)hitReport(x.entity,x.character,now);
+                                            if(hitThing&&!x.character)hitThing(x.entity,hitWatch.binding,now);}
                                     }
                                     it->last=x.distance;}}
                             // the game's own hit on what the blade was not seen to touch
@@ -1162,6 +1196,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                                 const int32_t is=hitWatchState(it.entity);
                                 const bool hit=(it.state>=0&&is>=0&&is<it.state)||is==-2;
                                 if(hit&&!it.touched){it.touched=true;stop(it,is==-2?"gone":"health",it.last,is);}
+                                if(hitLearn&&it.touched&&!it.learned&&it.character&&it.state>=0&&is>=0&&is<it.state){it.learned=true;hitLearn(it.entity,hitWatch.binding,it.state,is);}
                                 if(is!=-1||it.state==-1)it.state=is;}
                         }
                     }
@@ -1624,10 +1659,11 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         if(released&&!bowDraw.strongRelease())bowReleasedAt=now;   // the strong shot's arrow is not the shoot action's
                         // The tap let go as soon as the game has read it bowTapPolls times (not the strong shot's hold).
                         {static uint64_t tapBase=0,tapAt=0;static bool tapCut=true;
-                         if(released&&!bowDraw.strongRelease()){tapBase=liveRtPolls.load();tapAt=now;tapCut=false;}
+                         static bool guestTap=false;
+                         if(released&&!bowDraw.strongRelease()){tapBase=liveRtPolls.load();tapAt=now;tapCut=false;guestTap=clientNowFn&&clientNowFn(now);}
                          if(phase!=5||bowDraw.strongRelease())tapCut=true;
-                         else if(!tapCut&&bowTapPolls&&liveRtPolls.load()-tapBase>=bowTapPolls){tapCut=true;static unsigned tapLogs=0;
-                            if(tapLogs++<400)logFile->event("bow_tap_released","\"frame\":"+std::to_string(hands.frame)+",\"held_ms\":"+std::to_string(now-tapAt)+",\"polls\":"+std::to_string(liveRtPolls.load()-tapBase));}
+                         else if(!tapCut&&bowTapPolls&&liveRtPolls.load()-tapBase>=bowTapPolls&&(!guestTap||now-tapAt>=guestBowTapMs)){tapCut=true;static unsigned tapLogs=0;
+                            if(tapLogs++<400)logFile->event("bow_tap_released","\"frame\":"+std::to_string(hands.frame)+",\"held_ms\":"+std::to_string(now-tapAt)+",\"polls\":"+std::to_string(liveRtPolls.load()-tapBase)+",\"guest\":"+(guestTap?"true":"false"));}
                          if(phase==5&&!bowDraw.strongRelease()&&bowTapPolls&&tapCut&&!released)pad.rightTrigger=0;}
                         if(released&&bowDraw.strongRelease())strongShotAt=now;     // a guest's own flight of it starts at the release (no drop)
                         if(released)requestBowHaptic({.3f,.9f},{200,100});else if(full)requestBowHaptic({.3f,0},{200,0});
@@ -1699,6 +1735,12 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         const bool allowed=known&&able&&fresh&&mapped.valid&&screenKind==evr::motion::LiveScreen::Gameplay&&!value.active&&!(pad.buttons&evr::motion::LivePadMapper::RB);
                         const auto r=sneakPresser.update(roomCrouch.crouched(),sneaking,toggle,allowed,now);
                         if(r.hold)pad.buttons|=0x40;
+                        // The view lowered while sneaking (sneakView above); a stale reading keeps the last height.
+                        if(known){const float want=sneaking&&!sneakPresser.bodySneak()?sneakView::dropM:0.f;
+                            static float told=-1;static unsigned viewLines=0;
+                            if(want!=told){told=want;if(viewLines++<300)logFile->event("sneak_view_drop","\"frame\":"+std::to_string(hands.frame)+",\"drop_m\":"+std::to_string(want)+
+                                ",\"sneaking\":"+(sneaking?"true":"false")+",\"by_the_body\":"+(sneakPresser.bodySneak()?"true":"false"));}
+                            sneakView::set(want);}
                         static unsigned lines=0;
                         if((r.pressed||before!=roomCrouch.crouched())&&lines<400){++lines;
                             std::ostringstream s;s<<std::setprecision(4)<<"\"frame\":"<<hands.frame<<",\"crouched\":"<<(roomCrouch.crouched()?"true":"false")<<",\"drop_m\":"<<drop
@@ -1739,6 +1781,18 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                      <<",\"hands\":["<<swim.counted[0]<<','<<swim.counted[1]<<"],\"velocity\":["<<swim.velocity.x<<','<<swim.velocity.z<<"],\"wanted\":["<<swim.wanted.x<<','<<swim.wanted.z<<"],\"stick\":["<<swim.stickX<<','<<swim.stickY<<']';
                     logFile->event("swim_stroke",s.str());}
                  wasMoving=swim.moving;}
+                // The emote wheel (2026-10-22, user: "the emotes - opened with up on the d-pad, chosen with the right stick - cannot
+                // be given with the mapping; while the wheel is up let the left stick be the right stick and choose with it, no
+                // walking then"): keen::ecs::UiOverlayType EmoteWheel 2 in the auxiliary byte (ActionbarWheel 1 is the quick wheel;
+                // build 26082781's types). The temple gesture turns the right stick into the d-pad that opens it, so the game's
+                // right stick takes the left stick (or the right one when that is pushed further) and its left stick stays still.
+                // EVR_EMOTE_LEFT_STICK=0: off.
+                {static const bool emoteLeft=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_EMOTE_LEFT_STICK",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                 static bool was=false;const bool open=emoteLeft&&valid&&screen==1&&auxiliary==2;
+                 if(open){const int64_t l=int64_t(pad.leftX)*pad.leftX+int64_t(pad.leftY)*pad.leftY,r=int64_t(pad.rightX)*pad.rightX+int64_t(pad.rightY)*pad.rightY;
+                    if(l>=r){pad.rightX=pad.leftX;pad.rightY=pad.leftY;}pad.leftX=pad.leftY=0;}
+                 if(open!=was){was=open;static unsigned lines=0;if(lines++<300)logFile->event("emote_wheel","\"open\":"+std::string(open?"true":"false")+",\"frame\":"+std::to_string(hands.frame)+
+                    ",\"gesture\":"+(value.active?"true":"false")+",\"buttons\":"+std::to_string(pad.buttons));}}
                 publishLive(pad);
                 liveWieldBusy.store(!fresh||screenKind!=evr::motion::LiveScreen::Gameplay||value.active||bool(pad.buttons&evr::motion::LivePadMapper::RB));
                 static uint64_t lastScope=0;if(!fresh&&lastScope&&now>lastScope)liveStaleMs+=std::min<uint64_t>(now-lastScope,1000);lastScope=now;

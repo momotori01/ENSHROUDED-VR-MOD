@@ -183,8 +183,46 @@ inline void sample(uintptr_t w,uint32_t entity) noexcept {
         if(changed&&logs.fetch_add(1)<2000)logFile->event("local_jump","\"jump_type\":"+std::to_string(t)+",\"jump_count\":"+std::to_string(c)+",\"locomotion_state\":"+std::to_string(s));
     }catch(...){}
 }
-// The double jump (or more) going on: a fresh sample (a quarter second) with jumpCount 2 or more.
-inline bool doubleJump(uint64_t now){const auto ms=milliseconds.load();return ms&&now-ms<=250&&count.load()>=2;}
+// A guest (2026-10-22, the online session of 10-22, user: "in the double jump the legs still show"; the guest's log: the
+// component found, never a change of it - its World's Locomotion is not stepped on the client): the double jump is told
+// from the own presses of the jump button (controller_ui_fixture.hpp jumpPressed) and the height of the player's root:
+// a second press while still in the air after the first (the root has not stood still for 0.15 s since that press made
+// it rise) begins it; it ends when the root stands still again (landed) or after 3 s. On a host or in a game of one the
+// game's own jumpCount stays the answer, this as well. EVR_OWN_DOUBLE_JUMP=0: the game's count only.
+namespace own {
+inline std::mutex mutex;inline const bool wanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_OWN_DOUBLE_JUMP",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline uint64_t firstPress=0,doubleFrom=0,stillSince=0,lastSample=0;inline int64_t lastY=0;inline bool known=false,rose=false,landedSinceFirst=true,fellSinceFirst=false,fellSinceDouble=false;inline unsigned logs=0;
+// Landed: the root stood still for 0.15 s, or it fell (below -1.5 m/s) and then stopped falling (above -0.4 m/s) - on a slope
+// the root never stands still while running (2026-10-22 review W5).
+inline void sampleLocked(uint64_t now){   // the root's height, at most every 16 ms
+ if(lastSample&&now-lastSample<16)return;const uint64_t dt=lastSample?now-lastSample:0;lastSample=now;
+ rootCamera::Sample root;bool fresh=false;try{fresh=rootCamera::trySnapshot(root)&&root.number&&now>=root.milliseconds&&now-root.milliseconds<=500;}catch(...){fresh=false;}
+ if(!fresh)return;
+ const int64_t y=root.stable.position.y;
+ if(!known){known=true;lastY=y;stillSince=now;return;}
+ const double speed=dt?double(y-lastY)/4294967296.*1000./double(dt):0.;
+ if(std::llabs(y-lastY)>int64_t(.004*4294967296.)){stillSince=0;if(firstPress&&now-firstPress<=600)rose=true;}else if(!stillSince)stillSince=now;
+ lastY=y;
+ if(speed<-1.5){if(firstPress)fellSinceFirst=true;if(doubleFrom)fellSinceDouble=true;}
+ const bool still=stillSince&&now-stillSince>=150;
+ if(rose&&firstPress&&now-firstPress>=250&&(still||(fellSinceFirst&&speed>-.4)))landedSinceFirst=true;
+ const bool doubleLanded=now-doubleFrom>=250&&(still||(fellSinceDouble&&speed>-.4));
+ if(doubleFrom&&(doubleLanded||now-doubleFrom>3000)){
+  if(logs++<200)logFile->event("own_double_jump","\"on\":false,\"ms\":"+std::to_string(now-doubleFrom)+",\"landed\":"+(doubleLanded?"true":"false")+",\"still\":"+(still?"true":"false"));doubleFrom=0;}
+}
+inline void pressSeen(uint64_t now){
+ if(!wanted)return;std::lock_guard<std::mutex> lock(mutex);sampleLocked(now);
+ if(firstPress&&!landedSinceFirst&&now-firstPress>=120&&now-firstPress<=2500&&!doubleFrom){
+  doubleFrom=now;fellSinceDouble=false;if(logs++<200)logFile->event("own_double_jump","\"on\":true,\"after_first_ms\":"+std::to_string(now-firstPress));return;}
+ if(doubleFrom)return;   // a press in the double jump (the glider)
+ firstPress=now;rose=false;landedSinceFirst=false;fellSinceFirst=false;
+}
+inline bool active(uint64_t now){
+ if(!wanted)return false;std::lock_guard<std::mutex> lock(mutex);sampleLocked(now);return doubleFrom!=0;
+}
+}
+// The double jump (or more) going on: a fresh sample (a quarter second) with jumpCount 2 or more, or the own presses (above).
+inline bool doubleJump(uint64_t now){const auto ms=milliseconds.load();return (ms&&now-ms<=250&&count.load()>=2)||own::active(now);}
 }
 __declspec(noinline) bool __fastcall advance(void* context,void* query,uint32_t bytes){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());

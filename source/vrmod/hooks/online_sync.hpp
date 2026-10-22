@@ -89,12 +89,12 @@ inline void action(uint64_t from,const uint8_t* data,size_t size){
     std::rotate(seen.rbegin(),seen.rbegin()+1,seen.rend());seen[0]=key;++actionsHeard;
     if(a->kind==sync::castAction){fishingCharge::peerCast(from,a->strength);
         if(logs++<200)logFile->event("online_sync_cast_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"strength\":"+std::to_string(a->strength));}
-    if(a->kind==sync::hitAction&&a->shot){if(controllerUiFixture::shotHitArrived)controllerUiFixture::shotHitArrived(a->at,a->character,GetTickCount64());
+    if(a->kind==sync::hitAction&&a->shot){if(controllerUiFixture::shotHitArrived)controllerUiFixture::shotHitArrived(a->at,a->character,a->entity,GetTickCount64());
         if(logs++<200)logFile->event("online_sync_shot_hit_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"character\":"+(a->character?"true":"false"));return;}
-    if(a->kind==sync::hitAction){remoteMelee::publishHit(from,a->at,a->character,GetTickCount64());
-        if(logs++<200)logFile->event("online_sync_hit_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"character\":"+(a->character?"true":"false"));}
+    if(a->kind==sync::hitAction){remoteMelee::publishHit(from,a->at,a->character,a->entity,GetTickCount64());
+        if(logs++<200)logFile->event("online_sync_hit_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"character\":"+(a->character?"true":"false")+",\"entity\":"+std::to_string(a->entity));}
     if(a->kind==sync::parryAction){std::array<int64_t,3> enemy{};uint32_t id=0;float away=-1;bool found=false;
-        if(remoteMelee::nearestTarget)found=remoteMelee::nearestTarget(a->at,true,3.f,enemy,id,away);
+        if(remoteMelee::nearestTarget)found=remoteMelee::nearestTarget(a->at,true,0,3.f,enemy,id,away);
         controllerUiFixture::remoteParryTarget=found?id:0;controllerUiFixture::remoteSwingParryAt=GetTickCount64();
         const bool undone=found&&controllerUiFixture::undoDamage&&controllerUiFixture::undoDamage(a->at,400);
         if(logs++<200)logFile->event("online_sync_parry_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"enemy\":"+std::to_string(id)+
@@ -139,11 +139,11 @@ inline bool heldAim(uint64_t now,std::array<uint8_t,40>& out){
 // This player's hits (sync::hitAction): each new touch three frames in a row (controllerUiFixture::hitReports).
 inline uint64_t hitSent=0;struct HitOut {std::vector<uint8_t> bytes;unsigned repeats=0;};inline std::array<HitOut,8> hitsOut{};inline uint16_t hitId=0;
 inline void sendHits(){
-    {std::lock_guard<std::mutex> lock(controllerUiFixture::hitReportMutex);
-     for(const auto& r:controllerUiFixture::hitReports)if(r.serial>hitSent){
+    {std::lock_guard<std::mutex> lock(controllerUiFixture::hitReportMutex);const uint64_t sentBefore=hitSent;   // (review W3)
+     for(const auto& r:controllerUiFixture::hitReports)if(r.serial>sentBefore){
         auto* slot=&hitsOut[0];for(auto& h:hitsOut)if(!h.repeats){slot=&h;break;}
-        *slot={sync::encodeHit(++hitId,r.at,r.character,r.shot),3u};hitSent=std::max(hitSent,r.serial);
-        if(logs++<200)logFile->event("online_sync_hit_sent","\"id\":"+std::to_string(hitId)+",\"character\":"+(r.character?"true":"false"));}}
+        *slot={sync::encodeHit(++hitId,r.at,r.character,r.shot,r.entity),3u};hitSent=std::max(hitSent,r.serial);
+        if(logs++<200)logFile->event("online_sync_hit_sent","\"id\":"+std::to_string(hitId)+",\"character\":"+(r.character?"true":"false")+",\"shot\":"+(r.shot?"true":"false")+",\"entity\":"+std::to_string(r.entity));}}
     for(auto& h:hitsOut){if(!h.repeats)continue;--h.repeats;for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,h.bytes))++actionsSent;}
 }
 // This player's parries (sync::parryAction), decided here as the solo relaxed parry decides (parry_observer.hpp): a
@@ -259,7 +259,7 @@ inline void frame(uint64_t renderSerial) noexcept {
                 const auto& c=list[size_t(index)];taken[size_t(index)]=1;
                 if(p.character!=int64_t(c.entity)&&logs++<200)logFile->event("online_sync_character","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(c.entity)+",\"own_character\":"+(c.own?"true":"false")+
                     ",\"metres_from_the_sent_place\":"+std::to_string(sync::distance(sync::metres(p.place),c.at))+",\"characters_seen\":"+std::to_string(list.size()));
-                p.character=c.entity;
+                p.character=c.entity;if(!c.own)remoteMelee::notePeerEntity(p.id,c.entity,GetTickCount64());
                 const bool drove=remoteBody::drive(c.entity,c.handles,c.own,*body,renderSerial);
                 if(!drove&&unboundLogs<300){++unboundLogs;logFile->event("online_sync_unbound","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(c.entity)+",\"reason\":\"drive_failed\",\"metres_from_the_sent_place\":"+std::to_string(sync::distance(sync::metres(p.place),c.at)));}
                 if(drove){++drivenFrames;

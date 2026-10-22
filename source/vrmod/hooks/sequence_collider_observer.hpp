@@ -39,14 +39,21 @@ inline void publishWeapon(uint32_t character,const WorldPositionQ32& root,const 
 // While that player's attack collider runs here, it is laid on the host's thing nearest to that place (a creature for a
 // creature, within 2.5 m; liveTargets::nearestTo), a few sweeps long, so that the game's own hit is made on it; the
 // sweep with the sent weapon (below) stays for what no hit came for. EVR_REMOTE_HITS=0: only the sweep.
-struct Hit {uint64_t from=0,ms=0;std::array<int64_t,3> at{};bool character=false;unsigned sweeps=0;bool used=true;};
+struct Hit {uint64_t from=0,ms=0;std::array<int64_t,3> at{};bool character=false;unsigned sweeps=0;bool used=true;uint32_t entity=0;};
 inline std::array<Hit,8> hits{};inline unsigned confirmedLogs=0;
 inline const bool hitsWanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_HITS",v,sizeof v);return !(n==1&&v[0]=='0');}();
-inline bool (*nearestTarget)(const std::array<int64_t,3>&,bool,float,std::array<int64_t,3>&,uint32_t&,float&)=nullptr;
+// The entity the guest touched when the host's list holds it (the ids are the same on both; 2026-10-22), else the
+// nearest: a creature within 2.5 m, a thing within 1 m (a guest's touch of a wall or a rock - its things are not told
+// apart - would break a pot 2 m away). Never a player (10-22, host log of the friend: 4 of 15 hits laid on players).
+inline bool (*nearestTarget)(const std::array<int64_t,3>&,bool,uint32_t,float,std::array<int64_t,3>&,uint32_t&,float&)=nullptr;
 inline constexpr uint64_t hitMs=800;inline constexpr unsigned hitSweeps=4;
-inline void publishHit(uint64_t from,const std::array<int64_t,3>& at,bool character,uint64_t now){
+// Which character each other player's mod drives here (online_sync.hpp, the body's binding): a hit is laid on the collider of
+// the player who sent it only (2026-10-22 review M6: with two guests attacking within 8 m, one's hit could go to the other's).
+inline std::map<uint64_t,std::pair<uint32_t,uint64_t>> peerEntities;   // Steam id -> {entity, when}
+inline void notePeerEntity(uint64_t peer,uint32_t entity,uint64_t now){std::lock_guard<std::mutex> lock(mutex);if(peerEntities.size()<64||peerEntities.count(peer))peerEntities[peer]={entity,now};}
+inline void publishHit(uint64_t from,const std::array<int64_t,3>& at,bool character,uint32_t entity,uint64_t now){
  if(!enabled||!hitsWanted)return;std::lock_guard<std::mutex> lock(mutex);
- Hit* slot=&hits[0];for(auto& h:hits)if(h.ms<slot->ms)slot=&h;*slot={from,now,at,character,0,false};
+ Hit* slot=&hits[0];for(auto& h:hits)if(h.ms<slot->ms)slot=&h;*slot={from,now,at,character,0,false,entity};
 }
 inline void publishPlayers(const std::vector<Player>& list){
  std::lock_guard<std::mutex> lock(mutex);players={};for(size_t i=0;i<list.size()&&i<players.size();++i)players[i]=list[i];
@@ -77,10 +84,11 @@ inline void collider(uintptr_t state,uint32_t entity,void* query,uint32_t sequen
    if(nearestTarget){Hit hit;bool have=false;
     {std::lock_guard<std::mutex> lock(mutex);Hit* oldest=nullptr;
      for(auto& h:hits){if(h.used)continue;if(now<h.ms||now-h.ms>hitMs){h.used=true;continue;}
+      if(const auto known=peerEntities.find(h.from);known!=peerEntities.end()&&now>=known->second.second&&now-known->second.second<=3000&&known->second.first!=p.entity)continue;
       if(metres(WorldPositionQ32{h.at[0],h.at[1],h.at[2]},p.at)>8)continue;if(!oldest||h.ms<oldest->ms)oldest=&h;}
      if(oldest){if(++oldest->sweeps>=hitSweeps)oldest->used=true;hit=*oldest;have=true;}}
     std::array<int64_t,3> target{};uint32_t thing=0;float away=-1;
-    if(have&&nearestTarget(hit.at,hit.character,2.5f,target,thing,away)){
+    if(have&&nearestTarget(hit.at,hit.character,hit.entity,hit.character?2.5f:1.f,target,thing,away)){
      // the collider's grip at the thing's middle (a creature about 0.9 m up, a thing 0.4 m), along the sent weapon
      const int64_t up=int64_t((hit.character?.9:.4)*4294967296.);const WorldPositionQ32 q{target[0],target[1]+up,target[2]};
      Quat o{0,0,0,1};for(const auto& w:sent)if(w.ms&&now>=w.ms&&now-w.ms<=1000&&metres(w.root,p.at)<4){std::memcpy(&o,w.transform.data()+24,16);o=normalized(o);break;}
@@ -88,9 +96,9 @@ inline void collider(uintptr_t state,uint32_t entity,void* query,uint32_t sequen
      std::memcpy(pose.transform.data(),&q,24);std::memcpy(pose.transform.data()+24,&o,16);
      motionColliderApply::begin(world,entity,query,sample,pose,false,true);
      if(confirmedLogs++<300)logFile->event("remote_melee_confirmed","\"attacker\":"+std::to_string(p.entity)+",\"collider\":"+std::to_string(entity)+",\"sequence\":"+std::to_string(sequence)+
-      ",\"target\":"+std::to_string(thing)+",\"character\":"+(hit.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-hit.ms)+",\"guest_to_host_metres\":"+std::to_string(away)+",\"sweep\":"+std::to_string(hit.sweeps));
+      ",\"target\":"+std::to_string(thing)+",\"character\":"+(hit.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-hit.ms)+",\"guest_to_host_metres\":"+std::to_string(away)+",\"sweep\":"+std::to_string(hit.sweeps)+",\"sent_entity\":"+std::to_string(hit.entity)+",\"by_entity\":"+(hit.entity&&hit.entity==thing?"true":"false"));
      return;}
-    if(have&&confirmedLogs++<300)logFile->event("remote_melee_hit_unmatched","\"attacker\":"+std::to_string(p.entity)+",\"character\":"+(hit.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-hit.ms));}
+    if(have&&confirmedLogs++<300)logFile->event("remote_melee_hit_unmatched","\"attacker\":"+std::to_string(p.entity)+",\"character\":"+(hit.character?"true":"false")+",\"hit_age_ms\":"+std::to_string(now-hit.ms)+",\"sent_entity\":"+std::to_string(hit.entity));}
    ++checked;const Weapon* best=nullptr;double bestMetres=4;uint64_t nearestAge=UINT64_MAX;double nearestMetres=-1;
    for(const auto& w:sent){if(!w.ms||now<w.ms)continue;const double m=metres(w.root,p.at);
     if(nearestMetres<0||m<nearestMetres){nearestMetres=m;nearestAge=now-w.ms;}

@@ -41,6 +41,9 @@
 #include <evr/status_rim.hpp>
 #include <evr/pose_smoothing.hpp>
 #include <evr/hit_stop.hpp>
+#include <evr/breakable_models.hpp>
+#include <evr/damage_calc.hpp>
+#include <evr/damage_tables.hpp>
 #include <evr/gpu_info.hpp>
 #include <evr/vfx_decal_rebase.hpp>
 #include <evr/live_secondary.hpp>
@@ -762,6 +765,8 @@ void configureControllerFixture(const std::filesystem::path& path,unsigned durat
                     motionBodyIk::swimming=[](uint64_t now){
                         inputHeadIdle::State state;{std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);state=inputHeadIdle::latest;}
                         return state.actorKnown&&state.milliseconds&&now>=state.milliseconds&&now-state.milliseconds<=500&&(state.actorState&game::swimmingStates)!=0;};
+                    controllerUiFixture::jumpPressed=&inputActor::localJump::own::pressSeen;   // a guest's double jump (2026-10-22)
+                    controllerUiFixture::clientNowFn=&nativeImpactComponents::clientNow;
                     logFile->event("motion_body_ik_enabled","\"experiment\":true,\"native_pose_written\":false,\"rebinds_local_body_parts\":true,\"solver\":\"evr/body_ik.hpp\"");
                     onlineSync::configure();
                 }
@@ -1107,6 +1112,15 @@ void dispose(uintptr_t scene,uintptr_t &view,std::array<PrivateSsr,2>& ssr) {
     }
     reinterpret_cast<Destroy>(baseAddress+0x1076f0)(reinterpret_cast<void *>(view));
     view=0;
+}
+// The eyes' render features: the original View's (keen::RenderOldFeatureFlag bits - with the user's settings Dlss 19 is on and
+// Xess 20, Ssao 9 and the contact shadows 12 are off) without the singleton VFX (bit 2). 2026-10-22: EVR_EYE_SSR=0 also leaves
+// out StochasticScreenSpaceReflections (bit 17) - a test of the water reflection that shows in the right eye only (the game's
+// settings cannot turn the reflections off: their lowest step is Performance, still SSR). (Bit 16 is the BrickRenderer: left
+// out, the terrain was not drawn in the eyes - Mock game-20261022-041547.)
+inline uint32_t eyeFeatures(uint32_t original){
+    static const bool ssrOff=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_EYE_SSR",v,sizeof v);return n==1&&v[0]=='0';}();
+    return (original&~4u)&~(ssrOff?(1u<<17):0u);
 }
 void setupFeatures(uintptr_t scene,uintptr_t wrapper,uintptr_t view,uint32_t features,uint32_t pool,uint32_t &group,
                    std::array<PrivateSsr,2>& ssr,const std::array<std::array<PrivateSsr,2>,2>& allSsr) {
@@ -1604,6 +1618,48 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
     waterFeedback::Scope waterScope(pair.water.get());
     pair.frameReady=true;
     if(worldNativeDiagnostic)worldSharedDiagnostic::snapshot("pair_begin",pair.scene);
+    // Does a change of the game's settings (the reflections) reach the eyes? Their Views copy the original View's features
+    // and take SSR objects of their own once, when they are made (setupFeatures) - 2026-10-22, the user: "with the
+    // reflections off, the reflection still differs". Told when the original View's features (+0x10) or the Renderer's
+    // two SSR objects change from what they were then, and what the eyes' Views hold (settings_change_seen).
+    {static uintptr_t view0=0;static uint32_t features0=0;static std::array<uintptr_t,2> ssr0{};static unsigned told=0;
+     try{const auto renderer=read<uintptr_t>(pair.scene+layout::sceneRenderer);const auto features=read<uint32_t>(pair.originalView+0x10);
+      const std::array<uintptr_t,2> ssr{read<uintptr_t>(renderer+layout::rendererSsr),read<uintptr_t>(renderer+layout::rendererSsr+8)};
+      if(view0!=pair.originalView){view0=pair.originalView;features0=features;ssr0=ssr;}
+      else if((features!=features0||ssr!=ssr0)&&told<50){++told;
+       logFile->event("settings_change_seen","\"original_features\":["+std::to_string(features0)+","+std::to_string(features)+"],\"renderer_ssr_before\":["+hex(ssr0[0])+","+hex(ssr0[1])+
+        "],\"renderer_ssr\":["+hex(ssr[0])+","+hex(ssr[1])+"],\"eye_features\":["+std::to_string(pair.created[0]?read<uint32_t>(pair.created[0]+0x10):0)+","+
+        std::to_string(pair.created[1]?read<uint32_t>(pair.created[1]+0x10):0)+"],\"eye_ssr\":["+hex(pair.created[0]?read<uintptr_t>(pair.created[0]+layout::viewSsr):0)+","+
+        hex(pair.created[1]?read<uintptr_t>(pair.created[1]+layout::viewSsr):0)+"],\"original_ssr\":["+hex(read<uintptr_t>(pair.originalView+layout::viewSsr))+","+hex(read<uintptr_t>(pair.originalView+layout::viewSsr+8))+"]");
+       features0=features;ssr0=ssr;}}catch(...){}}
+    // The eyes' own SSR objects against the Renderer's (2026-10-22, the user: "the water blurs, like a mosaic, the more the
+    // nearer the view comes to the water's level; with VR off nothing of it"): the factory 0x17a3c0 makes 0x4b8 bytes and sets
+    // no quality there, so whatever the game puts in later may reach only the Renderer's pair. EVR_SSR_COMPARE=1 (diagnostic):
+    // at pairs 600 and 1800 the 32-bit words that differ, pointers on both sides left out (ssr_object_compare).
+    {static const bool compare=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_SSR_COMPARE",v,sizeof v);return n==1&&v[0]=='1';}();
+     static uint64_t pairs=0;const auto n=++pairs;
+     if(compare&&(n==600||n==1800))try{
+        const auto renderer=read<uintptr_t>(pair.scene+layout::sceneRenderer);
+        const auto pointer=[](uint64_t v){return v>=0x10000&&v<0x800000000000ull;};
+        for(unsigned eye=0;eye<2;eye++)for(unsigned i=0;i<2;i++){
+            const auto original=read<uintptr_t>(renderer+layout::rendererSsr+i*8);
+            const auto own=pair.created[eye]?read<uintptr_t>(pair.created[eye]+layout::viewSsr+i*8):0;
+            std::ostringstream o;o<<"\"pair\":"<<n<<",\"eye\":"<<eye<<",\"slot\":"<<i<<",\"original\":"<<hex(original)<<",\"own\":"<<hex(own)<<",\"differ\":[";
+            unsigned shown=0,differ=0;
+            if(original&&own&&original!=own){
+                const auto a=read<std::array<uint8_t,0x4b8>>(original),b=read<std::array<uint8_t,0x4b8>>(own);
+                for(size_t at=0;at+4<=a.size();at+=4){
+                    uint32_t x=0,y=0;std::memcpy(&x,a.data()+at,4);std::memcpy(&y,b.data()+at,4);if(x==y)continue;
+                    const size_t q=at&~size_t(7);uint64_t qx=0,qy=0;std::memcpy(&qx,a.data()+q,8);std::memcpy(&qy,b.data()+q,8);
+                    if(pointer(qx)&&pointer(qy))continue;
+                    ++differ;if(shown++<120){float fx=0,fy=0;std::memcpy(&fx,&x,4);std::memcpy(&fy,&y,4);
+                        o<<(shown>1?",":"")<<"["<<hex(at)<<","<<x<<","<<y<<","<<(std::isfinite(fx)?fx:0.f)<<","<<(std::isfinite(fy)?fy:0.f)<<"]";}
+                }
+            }
+            o<<"],\"differing_words\":"<<differ;
+            logFile->event("ssr_object_compare",o.str());
+        }
+     }catch(const std::exception& e){logFile->event("ssr_object_compare_failed","\"reason\":"+jsonString(e.what()));}}
     using TextureCreate=void* (__fastcall *)(void*,void*,const void*);
     using TextureImport=void* (__fastcall *)(void*,void*,void*,uint8_t,const uint64_t*);
     const auto source=reinterpret_cast<uintptr_t>(target);
@@ -2288,7 +2344,7 @@ void probe(void *viewPointer,void* context,void* parameters,void* target) noexce
                 put<uint32_t>(owners[eye],layout::ownerPools+8,state->memoryPools[eye][0]);
                 put<uint32_t>(owners[eye],layout::ownerPools+12,state->memoryPools[eye][1]);
                 // Borrow creation-time scene data; own only feature/resolution data.
-                put<uint32_t>(owners[eye],0x10,read<uint32_t>(wrapper+0x10)&~4u);
+                put<uint32_t>(owners[eye],0x10,eyeFeatures(read<uint32_t>(wrapper+0x10)));
                 put<uintptr_t>(owners[eye],layout::ownerMarker,0);put<uint32_t>(owners[eye],layout::ownerFeatureGroup,0);
                 put<uintptr_t>(owners[eye],layout::ownerResolution,0);put<uint32_t>(owners[eye],layout::ownerResolutionGroup,0);
                 if(runtimeEyes()){put<uint32_t>(owners[eye],layout::ownerWidth,eyeWidth(eye));put<uint32_t>(owners[eye],layout::ownerHeight,eyeHeight(eye));
@@ -2317,7 +2373,7 @@ void probe(void *viewPointer,void* context,void* parameters,void* target) noexce
                     if(!set||set(1))throw std::runtime_error("eye de-alias window unavailable");}
                 ~DealiasWindow(){if(set)set(0);}
             } dealiasWindow;
-            if(initializeFeatures)setupFeatures(scene,selectedOwner,created[eye],read<uint32_t>(view+0x10)&~4u,state->memoryPools[eye][0],groups[eye],state->privateSsr[eye],state->privateSsr);
+            if(initializeFeatures)setupFeatures(scene,selectedOwner,created[eye],eyeFeatures(read<uint32_t>(view+0x10)),state->memoryPools[eye][0],groups[eye],state->privateSsr[eye],state->privateSsr);
             if(initializeResolution) {
                 put<uintptr_t>(owners[eye],layout::ownerView,created[eye]);put<uint32_t>(owners[eye],layout::ownerFeatureGroup,groups[eye]);
                 try { privateMemoryPools::TransientScope transientScope(scene,state->memoryPools[eye][2],unsigned(eye));
@@ -3351,6 +3407,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         }
         if(std::filesystem::exists(calibrationDirectory/"world-desktop-skip.txt")){
             std::ifstream policy(calibrationDirectory/"world-desktop-skip.txt");std::string magic;policy>>magic>>desktopSkipEvery>>std::ws;
+            // EVR_DESKTOP_SKIP_EVERY=<0 or 2..60> (for a test from [Environment] of EnshroudedVR.ini, 2026-10-22): another interval
+            // of the original View's refresh - 0 none (10-20: the right eye's bright water patch was mostly gone without it)
+            {char v[8]{};const auto n=GetEnvironmentVariableA("EVR_DESKTOP_SKIP_EVERY",v,sizeof v);
+             char* end=nullptr;if(n&&n<sizeof v){const auto every=unsigned(std::strtoul(v,&end,10));if(end&&end!=v&&*end==0&&(every==0||(every>=2&&every<=60))){desktopSkipEvery=every;   // (review M1)
+              logFile->event("desktop_skip_override","\"every\":"+std::to_string(every));}}}
             // On skipped frames eye 0 owns the shared updates and the water feedback consumer; borrowed VFX lights and
             // particles need eye 0 to own VFX too (world-desktop-skip-vfx.txt) so the other eye borrows from it. The
             // shared culling camera only applies to frames that still render the original View.
@@ -3563,7 +3624,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         if(std::filesystem::exists(calibrationDirectory/"world-bow-draw.txt")){
             std::ifstream df(calibrationDirectory/"world-bow-draw.txt");std::string magic;df>>magic>>std::ws;
             if(!df||!df.eof()||magic!="EVR_BOW_DRAW_1"||!controllerUiFixture::bowTrackedAimRequested)throw std::runtime_error("bow draw requires the tracked aim route");
-            controllerUiFixture::bowDrawRequested=true;
+            controllerUiFixture::bowDrawRequested=true;controllerUiFixture::clientNowFn=&nativeImpactComponents::clientNow;   // (review M2: the guest's bow tap without the body IK too)
             {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_BOW_PRE_AIM",v,sizeof v);if(m==1&&v[0]=='0')controllerUiFixture::bowDraw.preAim(0);}   // include/evr/bow_draw.hpp preAimRange
             // The nocked arrow is drawn on the string of the tracked bow (VHVR), from the game's own arrow instance.
             motionArrowVisual::requested=motionBowVisual::physicalPoseRequested;
@@ -3593,25 +3654,29 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                     for(size_t k=0;k<n;++k)out[k]={nearby[k].entity,nearby[k].distance,nearby[k].body,nearby[k].reach,nearby[k].state,nearby[k].character};
                     return n;};
                 controllerUiFixture::hitWatchState=&liveTargets::stateNow;
-                if(liveTargets::predictWanted){controllerUiFixture::hitPredict=&liveTargets::predictHit;controllerUiFixture::hitSettle=&liveTargets::settlePredictions;}
+                if(liveTargets::predictWanted){controllerUiFixture::hitPredict=&liveTargets::predictHit;controllerUiFixture::hitSettle=&liveTargets::settlePredictions;controllerUiFixture::hitLearn=&liveTargets::learnHit;
+                 // the running action of the local player, for the stroke's attack modifier (live_melee_targets.hpp estimateStroke)
+                 liveTargets::runningSequence=[]{actionSequenceObserver::Status a;{std::lock_guard<std::mutex> lock(actionSequenceObserver::mutex);a=actionSequenceObserver::latest;}
+                  const auto now=GetTickCount64();return a.entity&&a.milliseconds&&now>=a.milliseconds&&now-a.milliseconds<=300&&a.active?a.sequence:0u;};
+                 if(!actionSequenceObserver::requested){actionSequenceObserver::requested=true;actionSequenceObserver::recording=false;}}
                 // A client's touches go to the host as hits (online_sync.hpp sendHits); the host lays the collider on them.
                 controllerUiFixture::hitReport=[](uint32_t entity,bool character,uint64_t now){
                     if(!onlineSync::requested||!nativeImpactComponents::clientNow(now))return;std::array<int64_t,3> at{};
                     if(!liveTargets::entityPosition(entity,at,now))return;
                     std::lock_guard<std::mutex> lock(controllerUiFixture::hitReportMutex);auto* slot=&controllerUiFixture::hitReports[0];
                     for(auto& r:controllerUiFixture::hitReports)if(r.serial<slot->serial)slot=&r;
-                    *slot={++controllerUiFixture::hitReportSerial,now,at,character};};
-                remoteMelee::nearestTarget=&liveTargets::nearestTo;
+                    *slot={++controllerUiFixture::hitReportSerial,now,at,character,false,entity};};
+                remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::hitThing=&liveTargets::thingTouched;
                 controllerUiFixture::creatureNear=&liveTargets::creatureNear;controllerUiFixture::undoDamage=&liveTargets::undoDamage;
                 controllerUiFixture::localParryDecided=&parryObserver::localDecided;
                 motionArrowVisual::flightHit=&liveTargets::segmentHit;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
                 motionArrowVisual::flightReach=[](WorldPositionQ32 origin,Vec3 direction,uint64_t now){int by=0;const float r=liveTargets::aimReach(origin,direction,now,by);return by==1?r:1e9f;};
-                motionArrowVisual::flightReport=[](const std::array<int64_t,3>& at,bool character){
+                motionArrowVisual::flightReport=[](const std::array<int64_t,3>& at,bool character,uint32_t entity){
                     // the hit of this guest's own arrow, to the host (online_sync.hpp sendHits, as a stroke's touch)
                     if(!onlineSync::requested)return;
                     std::lock_guard<std::mutex> lock(controllerUiFixture::hitReportMutex);auto* slot=&controllerUiFixture::hitReports[0];
                     for(auto& r:controllerUiFixture::hitReports)if(r.serial<slot->serial)slot=&r;
-                    *slot={++controllerUiFixture::hitReportSerial,GetTickCount64(),at,character,true};};
+                    *slot={++controllerUiFixture::hitReportSerial,GetTickCount64(),at,character,true,entity};};
                 controllerUiFixture::targetNear=[](const evr::motion::LiveMeleeWeapon& weapon,uint64_t now){const auto n=liveTargets::contact(weapon,now);return controllerUiFixture::TargetNear{n.reached,n.gated,n.entity,n.distance,n.cached,n.ahead,n.nearest};};
                 // The actor's Grounded bit (0) off within the last half second: a stroke in the air attacks without a target.
                 controllerUiFixture::actorAirborne=[](uint64_t now){std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;
@@ -3764,6 +3829,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                     sneaking=(s.actorState>>21)&1;allowed=(s.actorState&blocked)==0;
                     toggle=!inputHeadIdle::toggleConfigKnown.load()||((inputHeadIdle::toggleConfig.load()>>55)&1);
                     return true;};
+                if(controllerUiFixture::sneakView::dropM>0)rootCamera::viewDrop=[]{return controllerUiFixture::sneakView::current();};
                 motion::RoomCrouchSettings c;c.enter=evr::vrpanel::enterRatio(controllerUiFixture::crouchDrop.load());const motion::RecenterPoseSettings r;
                 std::ostringstream o;o<<std::setprecision(4)<<"\"room_sneak\":"<<(controllerUiFixture::roomSneakOn.load()?"true":"false")<<",\"crouch_drop_percent\":"<<controllerUiFixture::crouchDrop.load()
                     <<",\"swing_speed_percent\":"<<controllerUiFixture::swingPercent.load()<<",\"arm_swim\":"<<(controllerUiFixture::armSwimOn.load()?"true":"false")<<",\"hit_stop\":"<<(controllerUiFixture::hitStopOn.load()?"true":"false")<<",\"changeable_in_start_menu\":true,\"enter_ratio\":"<<c.enter<<",\"leave_ratio\":"<<c.enter*c.leave
