@@ -167,6 +167,9 @@ class StereoTransfer
     std::function<void(VkCommandBuffer, size_t, const TransferImage &)> keepEye;
     // The bug report's last seconds (eye_history.hpp, 2026-10-18): the same moment as keepEye.
     std::function<void(VkCommandBuffer, size_t, const TransferImage &)> history;
+    // The picture as the headset gets it - the copy and what afterCopy drew over it - for the mod's own frames for every
+    // refresh (afw_pacing.hpp, pacing 2; 2026-10-23): called with the destination in TRANSFER_SRC_OPTIMAL.
+    std::function<void(VkCommandBuffer, size_t, const TransferImage &)> keepDrawn;
     // The last copy's GPU work done (before something else reads what it wrote).
     void finish()
     {
@@ -290,7 +293,17 @@ class StereoTransfer
                 v.vkCmdCopyImageToBuffer(cmd, d.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                                         readbacks[eye].buffer, 1, &capture);
             }
-            barrier(d.image, readbacks[eye].buffer ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : current,
+            bool asSource = readbacks[eye].buffer != VK_NULL_HANDLE;
+            if (keepDrawn)
+            {
+                if (!asSource)
+                    barrier(d.image, current, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, currentAccess, VK_ACCESS_TRANSFER_READ_BIT,
+                            currentStage, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                asSource = true;
+                TransferImage drawnImage = d; drawnImage.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                keepDrawn(cmd, eye, drawnImage);
+            }
+            barrier(d.image, asSource ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : current,
                     VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                     VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_TRANSFER_READ_BIT | currentAccess,
                     VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,

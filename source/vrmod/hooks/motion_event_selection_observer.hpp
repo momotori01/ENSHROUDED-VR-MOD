@@ -485,6 +485,7 @@ inline void liveEvents(void* output,const void* actor,void* registry,const std::
    // EnableAbilityEvent with the ability to attack after the start, 600 ms for the normal attack) - the time from one shot to
    // the next is the game's own, the shots only come 350 ms sooner.
    wandAction.key=key;wandAction.until=now+uint64_t(length/1000000)+3000;++wandShotsEarly;
+   if(motion::catalogThrowable(key.item))controllerUiFixture::throwEarlySpawnUntil=now+100;   // the throw's spawn comes within this tick, before the game's thrown state
    controllerUiFixture::wandNextShotMs=now+uint64_t((traits.attackAt>0&&traits.attackAt<length?traits.attackAt:length)/1000000);
   }else if(skill){
    // The weapon hits live from this first tick until the next attack may begin (the action's first EnableAbilityEvent
@@ -666,7 +667,7 @@ inline void stillReplica(void* output,const void* actor,void* registry,const voi
 // liveEvents) and its movement and turn withheld at every call site (movesCharacter). Skills keep the game's. The guest's
 // client holds the same action likewise (stillReplica, guestOwned). A swing of the wand (user: "the magic's shot lags"):
 // its shots, 350 and 400 ms into the wand's normal attack, on the first tick (as liveEvents' wandSwing), its motion the
-// game's. EVR_REMOTE_STILL=0: off.
+// game's; a throw likewise (2026-10-23). EVR_REMOTE_STILL=0: off.
 namespace remoteActions {
 inline const bool wanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_STILL",v,sizeof v);return !(n==1&&v[0]=='0');}();
 inline std::atomic<uintptr_t> serverWorld{0};   // the World the local player's Actor ticks in (select)
@@ -705,7 +706,8 @@ inline void apply(void* output,const void* actor,void* registry,bool mainSite) n
   if(!own){
    if(!mainSite||sourceStart!=0||length<=0||length>60000000000ll||!h[0])return;
    uint32_t by=0;if(actionKind(before,registry,length,key.sequence,by)!=ActionKind::Normal)return;
-   const bool wand=motion::rangedAimWand(key.item);
+   // A throwable as a wand (2026-10-23): what its throw spawns on the first tick, its motion the game's.
+   const bool wand=motion::rangedAimWand(key.item)||motion::catalogThrowable(key.item);
    uint32_t type=spawnImpactEvent;size_t found=0,lasting=0;
    earlyCount=earlyCandidates(before,registry,length,ev,type,found,lasting,false,wand?100000000:1000000);
    if(!earlyCount||type!=(wand?spawnEntityEvent:spawnImpactEvent))return;   // an action without a hit (a tool's use, an emote): the game's

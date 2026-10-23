@@ -263,10 +263,13 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_warp_vertex.h"
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_warp_fragment.h"
  COMMAND "${UI_GLSLANG}" -V --vn eyeWarpFragment -o "${CMAKE_BINARY_DIR}/generated/eye_warp_fragment.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/eye_warp.frag"
  DEPENDS shaders/eye_warp.frag)
+add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_motion_fix.h"
+ COMMAND "${UI_GLSLANG}" -V --target-env vulkan1.2 --vn eyeMotionFix -o "${CMAKE_BINARY_DIR}/generated/eye_motion_fix.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/eye_motion_fix.comp"
+ DEPENDS shaders/eye_motion_fix.comp)
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h"
  COMMAND "${UI_GLSLANG}" -V --vn eyeDepthCopyFragment -o "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/eye_depth_copy.frag"
  DEPENDS shaders/eye_depth_copy.frag)
-add_custom_target(evr_ui_transfer_shaders DEPENDS "${CMAKE_BINARY_DIR}/generated/fog_reproject.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_capture.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_apply.h" "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_vertex.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_fragment.h" "${CMAKE_BINARY_DIR}/generated/vfx_decal_writeback.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_vertex.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_fragment.h" "${CMAKE_BINARY_DIR}/generated/edge_tint_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_mark_fragment.h")
+add_custom_target(evr_ui_transfer_shaders DEPENDS "${CMAKE_BINARY_DIR}/generated/eye_motion_fix.h" "${CMAKE_BINARY_DIR}/generated/fog_reproject.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_capture.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_apply.h" "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_vertex.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_fragment.h" "${CMAKE_BINARY_DIR}/generated/vfx_decal_writeback.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_vertex.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_fragment.h" "${CMAKE_BINARY_DIR}/generated/edge_tint_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_mark_fragment.h")
 add_library(evr_ui_transfer INTERFACE)
 add_dependencies(evr_ui_transfer evr_ui_transfer_shaders)
 target_link_libraries(evr_ui_transfer INTERFACE evr_core)
@@ -629,6 +632,12 @@ add_test(NAME live_guard COMMAND evr_live_guard_tests)
 add_executable(evr_quick_slot_tests tests/quick_slot_tests.cpp)
 target_link_libraries(evr_quick_slot_tests PRIVATE evr_core)
 add_test(NAME quick_slot COMMAND evr_quick_slot_tests)
+add_executable(evr_consumable_hold_tests tests/consumable_hold_tests.cpp)
+target_link_libraries(evr_consumable_hold_tests PRIVATE evr_core)
+add_test(NAME consumable_hold COMMAND evr_consumable_hold_tests)
+add_executable(evr_consumable_model_tests tests/consumable_model_tests.cpp)
+target_link_libraries(evr_consumable_model_tests PRIVATE evr_core)
+add_test(NAME consumable_model COMMAND evr_consumable_model_tests)
 add_executable(evr_body_ik_tests tests/body_ik_tests.cpp)
 target_link_libraries(evr_body_ik_tests PRIVATE evr_core)
 add_test(NAME body_ik COMMAND evr_body_ik_tests)

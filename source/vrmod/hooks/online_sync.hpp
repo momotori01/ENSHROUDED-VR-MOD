@@ -109,6 +109,9 @@ inline void action(uint64_t from,const uint8_t* data,size_t size){
     if(std::find(seen.begin(),seen.end(),key)!=seen.end())return;
     std::rotate(seen.rbegin(),seen.rbegin()+1,seen.rend());seen[0]=key;++actionsHeard;
     if(a->kind==sync::clockAction){clockHeard(from,*a);return;}
+    if(a->kind==sync::heldItemAction){remoteConsumables::hear(from,*a);return;}
+    if(a->kind==sync::staminaAction){controllerUiFixture::hostStamina.store(uint64_t(a->stamina)|(GetTickCount64()<<16));
+        static unsigned heard=0;if(heard++<3)logFile->event("online_sync_stamina_heard","\"player\":\""+steamLink::tail(from)+"\",\"stamina\":"+std::to_string(a->stamina));return;}
     if(a->kind==sync::guardAction){const auto giveBack=controllerUiFixture::guardGiveBack?controllerUiFixture::guardGiveBack:controllerUiFixture::undoDamage;const bool back=a->character&&giveBack&&giveBack(a->at,900);
         if(logs++<200)logFile->event("online_sync_guard_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"blocked\":"+(a->character?"true":"false")+",\"damage_given_back\":"+(back?"true":"false"));return;}
     if(a->kind==sync::castAction){fishingCharge::peerCast(from,a->strength);
@@ -195,6 +198,30 @@ inline void sendParries(){
 // This player's guards (sync::guardAction), decided by hit_event_intake.hpp when an enemy's blow came while guarding:
 // three frames in a row, while this player's game is a client.
 inline uint64_t guardSeen=0;inline uint16_t guardId=0;inline unsigned guardRepeats=0;inline std::vector<uint8_t> guardBytes;
+// A guest's stamina (2026-10-23, kind 9): on the host, four times a second, each listed player whose character this PC drives
+// gets that character's stamina (controllerUiFixture::staminaOf; a guest's PC finds none on the host's character and sends
+// nothing). The guest's guard is refused with none left (hit_event_intake.hpp guard).
+inline uint16_t staminaId=0;inline int64_t staminaSentAt=0;inline uint64_t staminaSent=0;
+inline void sendStamina(){
+    const auto now=steadyUs();if(staminaSentAt&&now-staminaSentAt<250000)return;staminaSentAt=now;
+    if(!controllerUiFixture::staminaOf)return;
+    for(auto& p:peers.all())if(p.listed&&p.character>=0){const int v=controllerUiFixture::staminaOf(uint32_t(p.character));if(v<0)continue;
+        if(steamLink::send(p.id,sync::encodeStamina(++staminaId,v,0))){++actionsSent;if(staminaSent++<3)logFile->event("online_sync_stamina_sent","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(p.character)+",\"stamina\":"+std::to_string(v));}}
+}
+// The consumable held in this player's right hand (sync::heldItemAction, motion_consumable_visual.hpp): four times a second
+// while one is held and its place in the hand is known from this frame's body, three frames in a row when it changes (0
+// when it is let go), to every listed player.
+inline uint16_t heldItemId=0;inline uint32_t heldItemSent=0;inline unsigned heldItemRepeats=0,heldItemLogs=0;inline int64_t heldItemAt=0;
+inline void sendHeldItem(){
+    const auto now=steadyUs();uint32_t item=0;
+    if(motionConsumableVisual::requested&&motionConsumableVisual::inHandFrame&&liveFrame.frame>=motionConsumableVisual::inHandFrame&&liveFrame.frame-motionConsumableVisual::inHandFrame<=1)item=motionConsumableVisual::item;
+    if(item!=heldItemSent){heldItemSent=item;heldItemRepeats=3;
+        if(heldItemLogs++<200)logFile->event("online_sync_held_item_sent","\"item\":"+std::to_string(item)+",\"scale\":"+std::to_string(motionConsumableVisual::shownScale));}
+    else if(item&&now-heldItemAt>=250000)heldItemRepeats=std::max(heldItemRepeats,1u);
+    if(!heldItemRepeats)return;--heldItemRepeats;heldItemAt=now;
+    const auto bytes=sync::encodeHeldItem(++heldItemId,item,item?motionConsumableVisual::inHand:identityPose(),item?motionConsumableVisual::shownScale:1.f);
+    for(auto& p:peers.all())if(p.listed&&steamLink::send(p.id,bytes))++actionsSent;
+}
 inline void sendGuards(){
     {std::lock_guard<std::mutex> lock(controllerUiFixture::guardDecidedMutex);
      if(controllerUiFixture::guardDecidedMs&&controllerUiFixture::guardDecidedMs!=guardSeen){guardSeen=controllerUiFixture::guardDecidedMs;
@@ -237,7 +264,7 @@ inline void frame(uint64_t renderSerial) noexcept {
             const auto r=sync::decode(data,size);if(!r){++refused;return;}
             if(!peers.heard(from,*r,now,receiving()))++notCounted;
             else if(!r->roster.empty()){++rostersHeard;for(const auto id:r->roster)if(id!=steamLink::self){if(!learned.count(id)){++learnedTotal;if(logs++<200)logFile->event("online_sync_learned","\"player\":\""+steamLink::tail(id)+"\",\"from\":\""+steamLink::tail(from)+"\"");}learned[id]=now;}}});
-        sendCasts();sendShots();sendParries();sendHits();sendGuards();sendClock();
+        sendCasts();sendShots();sendParries();sendHits();sendGuards();sendClock();sendStamina();sendHeldItem();
         // Out: the body of this frame; for a second after it stopped (the view left first person, the hands are gone)
         // "the IK is paused", so that the others let go of the body at once; a hello otherwise.
         const auto& mine=motionBodyIk::published;const bool have=mine.have&&mine.serial==renderSerial;
@@ -306,8 +333,11 @@ inline void frame(uint64_t renderSerial) noexcept {
                 if(!drove&&unboundLogs<300){++unboundLogs;logFile->event("online_sync_unbound","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(c.entity)+",\"reason\":\"drive_failed\",\"metres_from_the_sent_place\":"+std::to_string(sync::distance(sync::metres(p.place),c.at)));}
                 if(drove){++drivenFrames;
                     if(c.own){++ownDrivenFrames;motionBodyIk::ready=true;motionBodyIk::serial=renderSerial;}
-                    publishItems(c.entity,*body,&p.receiver.newest());}
+                    publishItems(c.entity,*body,&p.receiver.newest());
+                    // That player's held consumable on the character's right hand (the own one only in the self test).
+                    if(!c.own||selfTest)if(const auto d=remoteBody::bodies.find(c.entity);d!=remoteBody::bodies.end())remoteConsumables::place(p.id,c.entity,*body,d->second.root,renderSerial);}
             }
+            remoteConsumables::retireUnplaced(renderSerial);
             remoteBody::releaseOthers(renderSerial,"no body for the character");
         }
         if(now-statsAt>=10){statsAt=now;unsigned heard=0,bound=0;for(const auto& p:peers.all()){if(now-p.heard<=5)++heard;if(p.character>=0)++bound;}
@@ -320,5 +350,5 @@ inline void frame(uint64_t renderSerial) noexcept {
     }catch(const std::exception& e){if(logs++<2000)try{logFile->event("online_sync_failure","\"reason\":"+jsonString(e.what()));}catch(...){}}
     catch(...){}
 }
-inline void dispose(uintptr_t scene) noexcept {remoteBody::dispose(scene);}
+inline void dispose(uintptr_t scene) noexcept {remoteConsumables::dispose(scene);remoteBody::dispose(scene);}
 }

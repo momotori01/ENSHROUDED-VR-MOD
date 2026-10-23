@@ -38,7 +38,9 @@ inline std::wstring label(Pic pic,Family f,Scene scene,Held held){
         case Pic::ShoulderLeftUpper:return tool?LB:L"LG";                       // guard; a tool's second action
         case Pic::ShoulderRightUpper:return RB;                                 // the action bar wheel (held)
         case Pic::ShoulderLeftLower:return held==Held::Bow?L"RT":held==Held::Hammer?L"LT":L"";   // the bow's draw: the trigger at the string
-        case Pic::ShoulderRightLower:return held==Held::Weapon?L"RG+RT":(held==Held::Bow||held==Held::Staff||held==Held::Nothing)?L"RT":L"";
+        // the game's RT: a weapon's and the wand's special ability (2026-10-23: a melee weapon's by a swing with the right grip
+        // held since 10-21, the wand's by the right grip and the trigger), the bow's and the staff's shot
+        case Pic::ShoulderRightLower:return held==Held::Weapon?gripSwingLabel:held==Held::Wand?L"RG+RT":(held==Held::Bow||held==Held::Staff||held==Held::Nothing)?L"RT":L"";
         case Pic::LeftStickPress:return L"RS▲";                            // sprint / sneak: the right stick up
         default:return L"";
         }

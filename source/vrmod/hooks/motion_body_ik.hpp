@@ -108,6 +108,10 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
             Quat o=first;
             if(length(a)>.05f&&length(b)>.05f)o=normalized(multiply(motion::alignDirections(a*(1/length(a)),b*(1/length(b))),first));
             const Vec3 tailScaled{tail[0]*scale.x,tail[1]*scale.y,tail[2]*scale.z};
+            // The caught fish's size as the game draws it (2026-10-23, user: "the fish in the hand as large as the caught one" -
+            // the consumable's model is the same and its template's scale is 1; this puts the scale seen while fishing on record).
+            {static uint32_t told=0;if(told!=fish){told=fish;std::ostringstream o;o<<std::setprecision(5)<<"\"fish\":"<<fish<<",\"scale\":["<<scale.x<<','<<scale.y<<','<<scale.z
+                <<"],\"extent\":["<<extent.x<<','<<extent.y<<','<<extent.z<<"],\"length_m\":"<<e[axis]*(axis==0?scale.x:axis==1?scale.y:scale.z);logFile->event("fishing_fish_size",o.str());}}
             const auto origin=palm-rotate(o,tailScaled);
             if(finite(origin)&&length(origin)<4.f){
                 WorldPositionQ32 q{modelPosition.x+int64_t(double(origin.x)*4294967296.),modelPosition.y+int64_t(double(origin.y)*4294967296.),modelPosition.z+int64_t(double(origin.z)*4294967296.)};
@@ -343,6 +347,14 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
         const auto rel=sync::inHand(published.body.hand[h],Pose{normalized(o),p});
         if(!finite(rel.position)||length(rel.position)>2.f)continue;
         if(h){published.body.item=true;published.body.itemInHand=rel;}else{published.body.offhandItem=true;published.body.offhandInHand=rel;}}
+    // The consumable held in the right hand (motion_consumable_visual.hpp): where its model lies in that hand's socket, for
+    // the others (online_sync.hpp sendHeldItem, sync::heldItemAction).
+    if(motionConsumableVisual::shownFrame&&liveFrame.frame>=motionConsumableVisual::shownFrame&&liveFrame.frame-motionConsumableVisual::shownFrame<=1){
+        WorldPositionQ32 q;Quat o;std::memcpy(&q,motionConsumableVisual::worldTransform.data(),24);std::memcpy(&o,motionConsumableVisual::worldTransform.data()+24,16);
+        const Vec3 p{float(relativeQ32(q.x,modelPosition.x)),float(relativeQ32(q.y,modelPosition.y)),float(relativeQ32(q.z,modelPosition.z))};
+        const float norm=o.x*o.x+o.y*o.y+o.z*o.z+o.w*o.w;
+        if(finite(p)&&length(p)<=4.f&&std::isfinite(norm)&&std::abs(norm-1)<=.02f){const auto rel=sync::inHand(published.body.hand[1],Pose{normalized(o),p});
+            if(finite(rel.position)&&length(rel.position)<=.5f){motionConsumableVisual::inHand=rel;motionConsumableVisual::inHandFrame=liveFrame.frame;}}}
     published.place=sync::place({double(modelPosition.x)/4294967296.,double(modelPosition.y)/4294967296.,double(modelPosition.z)/4294967296.});
     published.serial=renderSerial;published.have=true;
     if(remoteDrivesOwn)return;

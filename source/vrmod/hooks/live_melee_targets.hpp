@@ -139,6 +139,47 @@ inline void thingOutcomes(uint64_t now);
 inline void estimateProbe(uintptr_t world,uint32_t local,uint64_t now);
 inline void forgetWorldRecords(uintptr_t world);
 inline void weaponProbe(uintptr_t world,uint32_t local,const char* why);
+// The guest's stamina (2026-10-23; friend's session 10-22: the guest's guard read stamina -1 - keen::ecs::NetworkStamina
+// not found on its player, hit_event_intake.hpp networkStamina): once, when this PC turns out a guest, the World's component
+// types whose name holds "Stamina", their sizes, whether the player has them and their first bytes (guest_stamina_types).
+// EVR_GUEST_STAMINA_TRACE=1: every 250 ms (200 lines at most) the player's keen::ecs::ClientPlayerStaminaHints (24 bytes), to
+// read its layout against the stamina bar (guest_stamina_hints).
+inline void staminaHints(uintptr_t world,uint32_t local) noexcept {
+    static const bool wanted=[]{char v[4]{};return GetEnvironmentVariableA("EVR_GUEST_STAMINA_TRACE",v,sizeof v)==1&&v[0]=='1';}();
+    static uint64_t last=0;static unsigned lines=0;static int id=-2;static uintptr_t idWorld=0;
+    if(!wanted||lines>=200)return;const auto now=GetTickCount64();if(now<last+250)return;last=now;
+    try{if(idWorld!=world){idWorld=world;id=-1;for(unsigned i=0;i<nativeImpactComponents::componentCapacity;++i){nativeImpactComponents::ComponentType t;
+            try{t=nativeImpactComponents::componentType(world,i);}catch(...){break;}if(t.qualifiedName=="keen::ecs::ClientPlayerStaminaHints"){id=int(i);break;}}}
+        if(id<0)return;const auto c=nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(world,local),unsigned(id),24);if(!c)return;
+        std::ostringstream o;o<<"\"ms\":"<<now<<",\"i64\":["<<read<int64_t>(c)<<','<<read<int64_t>(c+8)<<','<<read<int64_t>(c+16)<<"],\"u32\":[";
+        for(int k=0;k<6;++k)o<<(k?",":"")<<read<uint32_t>(c+k*4);o<<"],\"f32\":[";for(int k=0;k<6;++k)o<<(k?",":"")<<read<float>(c+k*4);o<<"]";
+        // every entity of the World that carries keen::ecs::NetworkStamina (stamina, max: two u16) or keen::ecs::Stamina (40 bytes)
+        {static int net=-2,full=-2;static uintptr_t typesWorld=0;if(typesWorld!=world){typesWorld=world;net=full=-1;
+            for(unsigned i=0;i<nativeImpactComponents::componentCapacity;++i){nativeImpactComponents::ComponentType t;try{t=nativeImpactComponents::componentType(world,i);}catch(...){break;}
+                if(t.qualifiedName=="keen::ecs::NetworkStamina")net=int(i);else if(t.qualifiedName=="keen::ecs::Stamina")full=int(i);}}
+         const auto map=world+0x148;const auto bitmap=read<uintptr_t>(map+8),capacity=read<uint64_t>(map+0x10),keys=read<uintptr_t>(map+0x28);
+         if(bitmap&&keys&&capacity&&capacity<=0x100000){o<<",\"carriers\":[";unsigned n=0,carriers=0;
+          for(uint64_t b=0;b<capacity&&n<8;++b){if(!(read<uint64_t>(bitmap+8*(b/64))&(1ull<<(b%64))))continue;const auto id=read<uint32_t>(keys+b*4);
+            try{const auto e=nativeImpactComponents::entityAtWorld(world,id);const auto a=net>=0?nativeImpactComponents::component(e,unsigned(net),4):0;const auto f=full>=0?nativeImpactComponents::component(e,unsigned(full),40):0;
+              if(!a&&!f)continue;++carriers;if(a&&read<uint16_t>(a+2)<30&&!f)continue;o<<(n++?",":"")<<"{\"entity\":"<<id<<",\"net\":["<<(a?int(read<uint16_t>(a)):-1)<<','<<(a?int(read<uint16_t>(a+2)):-1)<<"],\"stamina_f32\":[";
+              for(int k=0;k<10;++k)o<<(k?",":"")<<(f?read<float>(f+k*4):0.f);o<<"]}";}catch(...){}}
+          o<<"],\"carrier_count\":"<<carriers;}}
+        ++lines;logFile->event("guest_stamina_hints",o.str());}catch(...){}
+}
+inline void staminaProbe(uintptr_t world,uint32_t local) noexcept {
+    static unsigned said=0;if(said>=3)return;++said;
+    try{std::string out;unsigned count=0;nativeImpactComponents::Entity e{};bool entity=false;
+        try{e=nativeImpactComponents::entityAtWorld(world,local);entity=true;}catch(...){}
+        for(unsigned i=0;i<nativeImpactComponents::componentCapacity;++i){nativeImpactComponents::ComponentType t;
+            try{t=nativeImpactComponents::componentType(world,i);}catch(...){break;}
+            if(t.qualifiedName.find("Stamina")==std::string::npos&&t.qualifiedName.find("stamina")==std::string::npos)continue;
+            std::string bytes="\"\"";bool has=false;
+            if(entity)try{const auto c=nativeImpactComponents::component(e,i,t.bytes);if(c){has=true;const auto n=std::min<unsigned>(t.bytes,16);std::string h;
+                for(unsigned k=0;k<n;++k){const auto b=read<uint8_t>(c+k);h+="0123456789abcdef"[b>>4];h+="0123456789abcdef"[b&15];}bytes="\""+h+"\"";}}catch(...){}
+            out+=std::string(count++?",":"")+"{\"id\":"+std::to_string(i)+",\"name\":"+jsonString(t.qualifiedName)+",\"bytes\":"+std::to_string(t.bytes)+",\"player_has\":"+(has?"true":"false")+",\"first\":"+bytes+"}";}
+        logFile->event("guest_stamina_types","\"world\":"+hex(world)+",\"player\":"+std::to_string(local)+",\"entity_found\":"+(entity?"true":"false")+",\"types\":["+out+"]");
+    }catch(...){}
+}
 inline Layout layout(uintptr_t address);
 inline int32_t healthNow(uint32_t entity){
  std::lock_guard<std::mutex> lock(mutex);
@@ -298,7 +339,8 @@ inline void tick(uintptr_t world,uint32_t local){
     const bool nowGuest=guestThingsWanted&&census.all>=64&&!census.allHealth&&(census.allNetworkHealth>0||guestWorld);
     if(nowGuest!=guestWorld&&guestLogs++<50)logFile->event("live_targets_guest_world","\"world\":"+hex(world)+",\"guest\":"+(nowGuest?"true":"false")+",\"network_health\":"+std::to_string(census.allNetworkHealth)+
      ",\"client_colliders_are_things\":"+(nowGuest&&types.clientCollider>=0&&types.feedbackMaterial>=0?"true":"false"));
-    if(nowGuest&&!guestWorld)weaponProbe(world,local,"guest_world");
+    if(nowGuest&&!guestWorld){weaponProbe(world,local,"guest_world");staminaProbe(world,local);}
+    if(nowGuest)staminaHints(world,local);
     guestWorld=nowGuest;}
    otherPlayers.clear();for(const auto& p:playersSeen)if(p.entity!=local)otherPlayers.push_back({p.entity,{p.at.x,p.at.y,p.at.z}});
    census={};remoteMelee::publishPlayers(playersSeen);playersSeen.clear();
@@ -933,6 +975,10 @@ inline uintptr_t storageValueAt(uint32_t entity,int type,unsigned bytes){   // u
  try{const auto c=nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(types.world,entity),unsigned(type),bytes);if(!c)return 0;
   std::array<uint8_t,8> head{};if(!block(c,head.data(),head.size())||!head[4]||head[4]>8)return 0;return c+8;}catch(...){return 0;}
 }
+// The stamina of a character (keen::ecs::Stamina's value; the host's mod tells it to the guest who drives it, online_sync.hpp
+// sendStamina). -1: not known.
+inline int staminaOf(uint32_t entity){std::lock_guard<std::mutex> lock(mutex);if(types.stamina<0)return -1;const auto st=storageValueAt(entity,types.stamina,40);
+ int32_t v=-1;if(!st||!block(st,&v,4)||v<0||v>65535)return -1;return v;}
 inline bool guardGiveBack(const std::array<int64_t,3>& guest,uint64_t windowMs){
  std::lock_guard<std::mutex> lock(mutex);if(!giveBackWanted)return false;const auto now=GetTickCount64();
  PlayerHealth* who=nullptr;double best=8;

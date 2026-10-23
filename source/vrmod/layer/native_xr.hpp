@@ -30,7 +30,7 @@ struct LiveNativeXr
     // Alternate-eye warping (eye_warp.hpp; EVR_EYE_WARP=1 with EVR_ALTERNATE_EYES=1): one per eye, as the eyes' extents
     // differ. Declared before the transfer: the transfer's keep copies retire first.
     std::unique_ptr<EyeWarp> warp;   // one for both eyes (the third stage draws one eye from the other's picture)
-    bool warpWanted=false,warpFailed=false,warpFromOther=false,warpCheck=false;uint64_t warpFrames=0,warpCaptures=0,warpCheckCaptures=0,warpKeepMisses=0,warpChecks=0,warpCheckFrames=0,warpCheckEvery=120;
+    bool warpWanted=false,warpFailed=false,warpFromOther=false,warpCheck=false;uint64_t warpFrames=0,warpFollowed=0,warpCaptures=0,warpCheckCaptures=0,warpKeepMisses=0,warpChecks=0,warpCheckFrames=0,warpCheckEvery=120;
     std::array<uint64_t,2> depthNoteUsed{};   // the depth note each eye last kept (its sequence number)
     // The bug report's last 10 seconds of both eyes (eye_history.hpp; EVR_BUG_HISTORY=0 leaves it out). Declared before the
     // transfer: its blits retire with the transfer's fence first.
@@ -40,6 +40,23 @@ struct LiveNativeXr
     uint64_t desktopUiFrames=0;
     bool uiDisabled=false;
     bool alternateRefused=false;   // the runtime refused a frame with one eye's earlier picture: both eyes from then on
+    // The mod's own queue (layer/diagnostic_layer.cpp evrCreateDevice, EVR_AFW_PACING=2 at the start; 2026-10-23): the XR
+    // binding's queue beside the game's, for the refresh thread's warps (include/evr/afw_pacing.hpp pacing 2). What the game
+    // drew is then read on another queue than it was drawn on: each frame's copy waits for the game's queue (fromGame), and
+    // the game's queue for the copy (toGame) - semaphores, each wait followed by a barrier (ownQueueIn / ownQueueOut).
+    struct OwnQueue {VkQueue game{};VkSemaphore fromGame{},toGame{};VkCommandPool pool{};VkCommandBuffer xrBarrier{},gameBarrier{};
+        PFN_vkCreateSemaphore createSemaphore=nullptr;PFN_vkDestroySemaphore destroySemaphore=nullptr;} own;bool ownQueue=false;
+    // A game frame while the refresh thread shows the eyes: its eyes are copied (with what is drawn over them) into these
+    // instead of the runtime's images, and kept from them for the warps (StereoTransfer keepDrawn).
+    struct Slot {VkImage image{};VkDeviceMemory memory{};uint32_t width=0,height=0;} slots[2];
+    // The world's motion under the tracking space per game frame (the hooks' evrSetNativeXrWorldMotion), for carrying the
+    // kept pictures on to each refresh (drawRefresh); written by the game's thread and read by the refresh thread under
+    // the queue lock.
+    struct Motion {uint64_t frame=0;XrPosef perFrame{{0,0,0,1},{0,0,0}};int64_t dt=0;XrTime time=0;bool valid=false;};
+    Motion pendingMotion{};std::array<Motion,8> motions{};
+    XrTime lastHandTime=0;   // the time of the hands' last sample (evrBeginNativeXr)
+    bool refreshGaveUp=false,shotsDone=false;uint64_t refreshCaptures=0,refreshLogs=0;
+    ~LiveNativeXr(){if(xr)xr->stopRefreshing();}   // before the warp and the transfers go
     // HUD auto-hide (hud_fade.hpp): what changed in the UI, and the opacity of the HUD outside the pins.
     HudChangeDetector hudChanges;HudFade hudFade;uint64_t hudProbeSeen=0;int hudLoggedMode=-1;bool hudLoggedHidden=false;unsigned hudLogs=0;
     uint64_t uiOverlaySerial=0;unsigned uiOverlayLogs=0;   // the overlay picture last given to the UI transfer (evrSetUiOverlay)
@@ -108,6 +125,16 @@ extern "C" __declspec(dllexport) int evrSetUiHud(int mode) noexcept {
     if(mode<0||mode>2)return 2;
     uiHudMode=mode;uiHudAt=GetTickCount64();return 0;
 }
+// The alternate eyes' pacing (include/evr/afw_pacing.hpp), from the game's VR settings (hooks/bug_report.hpp): 0 every
+// refresh the frame can make, 1 a steady two refreshes a frame, 2 the mod's own frame for every refresh - only in a session
+// started with it (afwFillPrepared: the queue of its own, made with the device). 0 taken, 1 refused (2 not prepared), 2 bad.
+std::atomic<bool> afwFillPrepared{false};
+extern "C" __declspec(dllexport) int evrSetAfwPacing(int pacing) noexcept {
+    if(pacing<0||pacing>2)return 2;
+    if(pacing==2&&!afwFillPrepared.load())return 1;
+    afw::pacing=pacing;note("afw_pacing_set","\"pacing\":"+std::to_string(pacing));return 0;
+}
+extern "C" __declspec(dllexport) int evrAfwPacing() noexcept {return afw::pacing.load()|(afwFillPrepared.load()?4:0);}
 // The menu pointer (hooks/menu_pointer.hpp): where the hand's ray meets the UI image, as parts of its width and of its
 // height from the top left, and what to show (0 nothing, 1 the dot, 2 the dot of a held button). The dot is drawn for
 // a quarter of a second after the last call.
@@ -288,6 +315,7 @@ int closeLiveNativeXr(bool keepForScreen=false,bool deviceEnds=false) noexcept
         auto &state=*liveNativeXr;
         if(!deviceEnds&&state.thread!=GetCurrentThreadId())throw std::runtime_error("native XR teardown thread changed");
         QueueCallScope context("openxr_native_teardown");
+        if(state.xr)state.xr->stopRefreshing();   // its warps use what goes below
         if(keepForScreen&&state.xr&&state.xr->vk.device&&state.xr->active()){
             desktopMirrorSource(state.device,VK_NULL_HANDLE); // the desktop shows the game's own picture again
             vkCheck(state.xr->vk.vkDeviceWaitIdle(state.xr->vk.device),"native XR world end idle");
@@ -306,6 +334,10 @@ int closeLiveNativeXr(bool keepForScreen=false,bool deviceEnds=false) noexcept
             if(state.uiTransfer){state.uiTransfer.reset();state.log->event("native_ui_transfer_destroyed");}
             if(state.hands){const bool closed=state.hands->close();state.hands.reset();state.log->event("native_motion_closed","\"success\":"+std::string(closed?"true":"false"));}
             state.transfer.reset();
+            {auto& vk=state.xr->vk;auto& o=state.own;   // the device is idle (above)
+             for(auto& sl:state.slots){if(sl.image)vk.vkDestroyImage(vk.device,sl.image,nullptr);if(sl.memory)vk.vkFreeMemory(vk.device,sl.memory,nullptr);sl={};}
+             if(o.destroySemaphore){if(o.fromGame)o.destroySemaphore(vk.device,o.fromGame,nullptr);if(o.toGame)o.destroySemaphore(vk.device,o.toGame,nullptr);}
+             if(o.pool)vk.vkDestroyCommandPool(vk.device,o.pool,nullptr);o={};}
             if(state.edgeTint){state.edgeTint.reset();state.log->event("edge_tint_destroyed","\"frames\":"+std::to_string(edgeTintFrames.load()));}
             if(state.eyeMark){state.eyeMark.reset();state.log->event("aim_mark_destroyed","\"frames\":"+std::to_string(aimMarkFrames.load()));}
             state.xr->abortFrame("native_diagnostic_stopped");state.xr->shutdown();
@@ -354,6 +386,150 @@ extern "C" __declspec(dllexport) int evrSkipNativeXrEarly(uint64_t frame) noexce
         return 0;
     }catch(const std::exception& e){note("native_xr_skip_failed","\"reason\":"+jsonString(e.what()));return 1;}
 }
+// The mod's own queue: the game's queue's work so far before the binding queue's next (ownQueueIn), and the binding queue's
+// so far before the game's next (ownQueueOut) - around everything that reads what the game drew or that the game reads
+// back (the eyes' copy, the UI's, the plate). The caller holds the client's queue lock.
+inline void ownQueueIn(LiveNativeXr& st){
+    if(!st.ownQueue)return;
+    auto& vk=st.xr->vk;auto& o=st.own;
+    VkSubmitInfo signal{VK_STRUCTURE_TYPE_SUBMIT_INFO};signal.signalSemaphoreCount=1;signal.pSignalSemaphores=&o.fromGame;
+    vkCheck(vk.vkQueueSubmit(o.game,1,&signal,VK_NULL_HANDLE),"own queue: the game's queue signals");
+    const VkPipelineStageFlags stage=VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkSubmitInfo wait{VK_STRUCTURE_TYPE_SUBMIT_INFO};wait.waitSemaphoreCount=1;wait.pWaitSemaphores=&o.fromGame;wait.pWaitDstStageMask=&stage;wait.commandBufferCount=1;wait.pCommandBuffers=&o.xrBarrier;
+    vkCheck(vk.vkQueueSubmit(vk.queue,1,&wait,VK_NULL_HANDLE),"own queue: waits for the game's");
+}
+inline void ownQueueOut(LiveNativeXr& st){
+    if(!st.ownQueue)return;
+    auto& vk=st.xr->vk;auto& o=st.own;
+    VkSubmitInfo signal{VK_STRUCTURE_TYPE_SUBMIT_INFO};signal.signalSemaphoreCount=1;signal.pSignalSemaphores=&o.toGame;
+    vkCheck(vk.vkQueueSubmit(vk.queue,1,&signal,VK_NULL_HANDLE),"own queue: signals the game's");
+    const VkPipelineStageFlags stage=VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    VkSubmitInfo wait{VK_STRUCTURE_TYPE_SUBMIT_INFO};wait.waitSemaphoreCount=1;wait.pWaitSemaphores=&o.toGame;wait.pWaitDstStageMask=&stage;wait.commandBufferCount=1;wait.pCommandBuffers=&o.gameBarrier;
+    vkCheck(vk.vkQueueSubmit(o.game,1,&wait,VK_NULL_HANDLE),"own queue: the game's queue waits");
+}
+// In at its start, out at its end (also when it throws; a failure there is only logged).
+struct OwnQueueScope {
+    LiveNativeXr& st;bool in=false;
+    explicit OwnQueueScope(LiveNativeXr& s):st(s){ownQueueIn(st);in=st.ownQueue;}
+    ~OwnQueueScope(){if(in)try{ownQueueOut(st);}catch(const std::exception& e){try{st.log->event("own_queue_out_failed","\"reason\":"+jsonString(e.what()));}catch(...){}}}
+};
+// The slot of an eye (Slot above), made at the eyes' size on first use.
+inline TransferImage slotFor(LiveNativeXr& st,uint32_t eye,uint32_t width,uint32_t height){
+    auto& vk=st.xr->vk;auto& sl=st.slots[eye];
+    if(sl.image&&(sl.width!=width||sl.height!=height)){vkCheck(vk.vkDeviceWaitIdle(vk.device),"slot resize");vk.vkDestroyImage(vk.device,sl.image,nullptr);vk.vkFreeMemory(vk.device,sl.memory,nullptr);sl={};}
+    const VkImageUsageFlags usage=VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_SAMPLED_BIT;
+    if(!sl.image){
+        VkImageCreateInfo i{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};i.imageType=VK_IMAGE_TYPE_2D;i.format=st.xr->format;i.extent={width,height,1};i.mipLevels=i.arrayLayers=1;
+        i.samples=VK_SAMPLE_COUNT_1_BIT;i.tiling=VK_IMAGE_TILING_OPTIMAL;i.usage=usage;i.sharingMode=VK_SHARING_MODE_EXCLUSIVE;i.initialLayout=VK_IMAGE_LAYOUT_UNDEFINED;
+        vkCheck(vk.vkCreateImage(vk.device,&i,nullptr,&sl.image),"eye slot image");VkMemoryRequirements req{};vk.vkGetImageMemoryRequirements(vk.device,sl.image,&req);
+        try{sl.memory=vk.allocate(req,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);vkCheck(vk.vkBindImageMemory(vk.device,sl.image,sl.memory,0),"eye slot memory");}
+        catch(...){vk.vkDestroyImage(vk.device,sl.image,nullptr);sl={};throw;}
+        sl.width=width;sl.height=height;
+        st.log->event("afw_fill_slot","\"eye\":"+std::to_string(eye)+",\"size\":["+std::to_string(width)+','+std::to_string(height)+"],\"format\":"+std::to_string(st.xr->format));
+    }
+    return {sl.image,width,height,st.xr->format,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,usage,vk.family};
+}
+// A part s of a rigid motion (its rotation's angle and its move times s): the motion carried on for a part of a frame.
+inline XrPosef motionPart(const XrPosef& m,float s){
+    auto q=normalized(m.orientation);if(q.w<0)q={-q.x,-q.y,-q.z,-q.w};
+    const float half=std::acos(std::clamp(q.w,-1.f,1.f)),sinHalf=std::sin(half);
+    XrPosef out{{0,0,0,1},{m.position.x*s,m.position.y*s,m.position.z*s}};
+    if(sinHalf>1e-6f){const float k=std::sin(half*s)/sinHalf;out.orientation=normalized(Quat{q.x*k,q.y*k,q.z*k,std::cos(half*s)});}
+    return out;
+}
+inline const LiveNativeXr::Motion* motionOf(const LiveNativeXr& st,uint64_t frame){
+    const auto& m=st.motions[frame%st.motions.size()];return m.frame==frame?&m:nullptr;
+}
+// The refresh thread's pictures (OpenXrClient refreshLoop, the queue lock held): each eye from the kept pictures - the
+// other eye's when it is the newer (with this eye's own in its holes), else this eye's own - each from where the world now
+// has it: the world's motion of the frames since it was drawn, and of the last frame carried on to this refresh's time
+// (EVR_AFW_FILL_CARRY=0: from the poses they were drawn at, the head's pose alone).
+bool drawRefresh(LiveNativeXr& st,const std::array<XrView,2>& views,XrTime time,const std::array<uint32_t,2>& indices,uint64_t refresh){
+    if(!st.warp||st.warpFailed||!st.warp->canWarp(0)||!st.warp->canWarp(1))return false;
+    auto& w=*st.warp;auto& xr=*st.xr;
+    static const bool carry=[]{const auto f=std::getenv("EVR_AFW_FILL_CARRY");return !(f&&!std::strcmp(f,"0"));}();
+    // EVR_AFW_FILL_OBJECTS=0: the things' own motion left out (the hands and the weapon then go with the world's motion)
+    static const bool objects=[]{const auto f=std::getenv("EVR_AFW_FILL_OBJECTS");return !(f&&!std::strcmp(f,"0"));}();
+    const uint64_t latest=std::max(w.keptFrame(0),w.keptFrame(1));
+    const auto* last=motionOf(st,latest);
+    float part=0;if(last&&last->valid&&last->dt>0)part=std::clamp(float(double(time-last->time)/double(last->dt)),-1.f,1.5f);
+    const XrPosef ahead=last&&last->valid?motionPart(last->perFrame,part):XrPosef{{0,0,0,1},{0,0,0}};
+    // where a kept picture is now, and by how many game frames its world was carried on (the frames since it, and the part)
+    auto carried=[&](uint32_t eye,float& frames){
+        XrPosef p=w.keptView(eye).pose;frames=last&&last->valid?part:0.f;
+        for(uint64_t f=w.keptFrame(eye)+1;f<=latest&&f<w.keptFrame(eye)+8;++f)if(const auto* m=motionOf(st,f);m&&m->valid){p=compose(m->perFrame,p);frames+=1;}
+        return compose(ahead,p);
+    };
+    // A kept picture's things are carried on by their own motion (one game frame's) as many frames as its world: a thing that
+    // moves with the player (the hands, the weapon) then keeps its place - two different spans moved the staff in the hand by
+    // up to 50 pixels between refreshes (Mock 2026-10-23).
+    auto framesSince=[&](uint32_t eye){float frames=0;carried(eye,frames);return objects?std::max(frames,0.f):0.f;};
+    std::array<EyeWarp::PairEye,2> eyes{};
+    for(uint32_t eye=0;eye<2;++eye){
+        auto& e=eyes[eye];const auto& target=xr.targets[eye];
+        e.runtime={target.images[indices[eye]].image,target.width,target.height,xr.format,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT,xr.vk.family};
+        e.now=views[eye];e.fromOther=w.keptFrame(1-eye)>w.keptFrame(eye);
+        e.moved=carry;if(carry){float unused=0;e.keptAt=carried(eye,unused);e.otherAt=carried(1-eye,unused);}
+        e.keptMotion=framesSince(eye);e.otherMotion=framesSince(1-eye);
+    }
+    // EVR_AFW_FILL_CAPTURE=N: N refreshes' pictures of one eye (EVR_AFW_FILL_CAPTURE_EYE, 0) as native-xr/refresh-<n>-eye-<e>.ppm,
+    // from the refresh EVR_AFW_FILL_CAPTURE_FROM on.
+    static const unsigned captureWanted=[]{const auto f=std::getenv("EVR_AFW_FILL_CAPTURE");return f?unsigned(std::strtoul(f,nullptr,10)):0u;}();
+    static const uint64_t captureFrom=[]{const auto f=std::getenv("EVR_AFW_FILL_CAPTURE_FROM");return f?uint64_t(std::strtoull(f,nullptr,10)):0ull;}();
+    static const int captureEye=[]{const auto f=std::getenv("EVR_AFW_FILL_CAPTURE_EYE");return f&&f[0]=='1'?1:0;}();
+    const bool capture=st.refreshCaptures<captureWanted&&refresh>=captureFrom;
+    // EVR_AFW_FILL_SHOTS=N: N refreshes in a row from EVR_AFW_FILL_CAPTURE_FROM, a quarter of the eye's size each way (EVR_AFW_FILL_CAPTURE_EYE),
+    // copied on the GPU without waiting and written afterwards as native-xr/shot-<refresh>.ppm (the refreshes are not held up)
+    static const unsigned shotsWanted=[]{const auto f=std::getenv("EVR_AFW_FILL_SHOTS");return f?unsigned(std::min(std::strtoul(f,nullptr,10),400ul)):0u;}();
+    w.shotEye=-1;
+    if(shotsWanted&&refresh>=captureFrom&&!st.shotsDone){w.prepareShots(shotsWanted);if(!w.shotsFull()){w.shotEye=captureEye;w.shotTag=refresh;}}
+    const bool shot=w.shotEye>=0;
+    const auto bytes=w.drawPair(eyes,capture?captureEye:-1);
+    w.shotEye=-1;
+    if(shotsWanted&&!st.shotsDone&&w.shotsFull()){
+        st.shotsDone=true;auto shots=w.collectShots();const uint32_t sw=w.shotWidth(),sh=w.shotHeight();
+        std::error_code ec;std::filesystem::create_directories(std::filesystem::path(output)/"native-xr",ec);
+        st.log->event("afw_fill_shots","\"refresh\":"+std::to_string(refresh)+",\"shots\":"+std::to_string(shots.size())+",\"size\":["+std::to_string(sw)+','+std::to_string(sh)+"]");
+        std::thread([shots=std::move(shots),sw,sh,dir=output+"/native-xr/"]{try{for(const auto& [tag,px]:shots){std::ofstream out(dir+"shot-"+std::to_string(tag)+".ppm",std::ios::binary);
+            out<<"P6\n"<<sw<<' '<<sh<<"\n255\n";std::vector<char> row(size_t(sw)*3);
+            for(uint32_t y=0;y<sh;++y){const auto* p=px.data()+size_t(y)*sw*4;for(uint32_t x=0;x<sw;++x){row[x*3]=char(p[x*4]);row[x*3+1]=char(p[x*4+1]);row[x*3+2]=char(p[x*4+2]);}out.write(row.data(),std::streamsize(row.size()));}}}catch(...){}}).detach();
+    }
+    if(capture){++st.refreshCaptures;const auto path=output+"/native-xr/refresh-"+std::to_string(refresh)+"-eye-"+std::to_string(captureEye)+".ppm";
+        std::error_code ec;std::filesystem::create_directories(std::filesystem::path(output)/"native-xr",ec);
+        // written on a thread of its own: the refresh thread holds the queue lock, and the game's thread waits for it
+        const uint32_t pw=xr.targets[0].width,ph=xr.targets[0].height;
+        std::thread([path,pw,ph,pixels=bytes]{try{if(pixels.size()!=size_t(pw)*ph*4)return;std::ofstream out(path,std::ios::binary);out<<"P6\n"<<pw<<' '<<ph<<"\n255\n";
+            std::vector<char> row(size_t(pw)*3);for(uint32_t y=0;y<ph;++y){const auto* p=pixels.data()+size_t(y)*pw*4;for(uint32_t x=0;x<pw;++x){row[x*3]=char(p[x*4]);row[x*3+1]=char(p[x*4+1]);row[x*3+2]=char(p[x*4+2]);}
+            out.write(row.data(),std::streamsize(row.size()));}}catch(...){}}).detach();}
+    const auto n=++st.refreshLogs;
+    if(n<=3||n%900==0||capture||shot){std::ostringstream o;o<<std::setprecision(6)<<"\"refresh\":"<<refresh<<",\"time\":"<<time<<",\"kept_frames\":["<<w.keptFrame(0)<<','<<w.keptFrame(1)<<"],\"from_other\":["
+        <<(eyes[0].fromOther?"true":"false")<<','<<(eyes[1].fromOther?"true":"false")<<"],\"carry\":"<<(carry?"true":"false")<<",\"part\":"<<part<<",\"motion_valid\":"<<(last&&last->valid?"true":"false")
+        <<",\"motion_move\":["<<(last?last->perFrame.position.x:0.f)<<','<<(last?last->perFrame.position.y:0.f)<<','<<(last?last->perFrame.position.z:0.f)<<"],\"motion_dt\":"<<(last?last->dt:0)
+        <<",\"object_frames\":["<<eyes[0].keptMotion<<','<<eyes[1].keptMotion<<"],\"object_kept\":["<<(w.keptMotion(0)?"true":"false")<<','<<(w.keptMotion(1)?"true":"false")<<"],\"pairs\":"<<w.pairs<<",\"previous_wait_ms\":"<<w.waitMs<<",\"previous_wait_max_ms\":"<<w.waitMaxMs<<",\"waits_held\":"<<w.waitsHeld<<",\"gpu_ms\":"<<w.gpuMs<<",\"gpu_mean_ms\":"<<(w.gpuCount?w.gpuSum/double(w.gpuCount):-1.0)<<",\"gpu_max_ms\":"<<w.gpuMax<<",\"captured\":"<<(capture||shot?"true":"false")<<",\"shot\":"<<(shot?"true":"false");
+        st.log->event("afw_fill",o.str());}
+    return true;
+}
+// The warp of the alternate eyes (eye_warp.hpp), at the eyes' extent now (their runtime images' used part).
+void makeEyeWarp(LiveNativeXr& state){
+    auto* st=&state;auto& xr=*state.xr;
+    if(xr.targets[0].width!=xr.targets[1].width||xr.targets[0].height!=xr.targets[1].height)throw std::runtime_error("the eyes differ in size");
+    state.warp.reset();
+    state.warp=std::make_unique<EyeWarp>(xr.vk,xr.format,xr.targets[0].width,xr.targets[0].height);
+    if(state.warpFromOther)state.warp->cells=320;   // fine cells: the holes at the depth steps are a cell wide (6 px here; 144 cells left a jagged 14 px band along the sword)
+    if(const auto c=std::getenv("EVR_EYE_WARP_CELLS")){const auto n=std::strtoul(c,nullptr,10);if(n>=8&&n<=512)state.warp->cells=unsigned(n);}
+    if(const auto n=std::getenv("EVR_EYE_WARP_NEAR")){const auto f=std::strtof(n,nullptr);if(f>0&&f<10)state.warp->nearPlane=f;}
+    state.log->event("eye_warp_enabled","\"cells\":"+std::to_string(state.warp->cells)+",\"near\":"+std::to_string(state.warp->nearPlane)+",\"far\":"+std::to_string(state.warp->farDistance)+
+        ",\"from_other_eye\":"+std::string(state.warpFromOther?"true":"false")+",\"self_check\":"+(state.warpCheck?"true":"false")+
+        ",\"sweep_env\":["+std::string(std::getenv("EVR_EYE_WARP_PARALLAX_SWEEP")?"1":"0")+","+[]{char v[8]{};return GetEnvironmentVariableA("EVR_EYE_WARP_PARALLAX_SWEEP",v,sizeof v)?"1":"0";}()+"]"+
+        ",\"format\":"+std::to_string(xr.format)+",\"extent\":["+std::to_string(xr.targets[0].width)+','+std::to_string(xr.targets[0].height)+"]");
+    // The eye left out gets the edge tint too, after its warped picture (the copy's afterCopy gives it to a drawn eye).
+    state.warp->afterWarp=[st](VkCommandBuffer cmd,uint32_t eye,const TransferImage& dst)->bool{
+        EdgeTintParams p;{std::lock_guard<std::mutex> l(edgeTintLock);p=edgeTintCurrent;}
+        if(p.a<0.002f||edgeTintFailed.load())return false;
+        try{if(!st->edgeTint){st->edgeTint=std::make_unique<EdgeTint>(st->xr->vk,st->xr->format);st->log->event("edge_tint_enabled","\"format\":"+std::to_string(st->xr->format)+",\"by\":\"warp\"");}
+            st->edgeTint->record(cmd,dst,eye,p);return true;}catch(const std::exception& e){edgeTintFailed=true;st->log->event("edge_tint_failed","\"stage\":\"warp\",\"reason\":"+jsonString(e.what()));return false;}
+    };
+}
 // The session of the eyes: made on the hooks' first world frame, or - with EVR_SCREEN_XR=1 - by the game's first
 // presents for the plate (layer/screen_xr.hpp), on the same render thread. 0 = made, 2 = not possible here; throws.
 int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice device,uint32_t family,float scale,uint32_t frames)
@@ -381,6 +557,27 @@ int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice de
             state->xr->init(scale,&binding,&shared,XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT);
             if(!rgba8(state->xr->format))throw std::runtime_error("native GPU copy requires RGBA8 runtime format");
             state->transfer=std::make_unique<StereoTransfer>(state->xr->vk);
+            // The mod's own queue (the binding's, added by evrCreateDevice for pacing 2): the game's queue, the semaphores between
+            // them and a barrier for after each wait (ownQueueIn / ownQueueOut); the frames for every refresh may run then.
+            if(binding.ownQueue)try{
+                auto& vk=state->xr->vk;auto& o=state->own;
+                o.createSemaphore=reinterpret_cast<PFN_vkCreateSemaphore>(vk.vkGetDeviceProcAddr(vk.device,"vkCreateSemaphore"));
+                o.destroySemaphore=reinterpret_cast<PFN_vkDestroySemaphore>(vk.vkGetDeviceProcAddr(vk.device,"vkDestroySemaphore"));
+                if(!o.createSemaphore||!o.destroySemaphore)throw std::runtime_error("no semaphore functions");
+                vk.vkGetDeviceQueue(vk.device,binding.queueFamily,0,&o.game);
+                if(!o.game||o.game==vk.queue)throw std::runtime_error("the game's queue is the binding's");
+                VkSemaphoreCreateInfo si{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
+                vkCheck(o.createSemaphore(vk.device,&si,nullptr,&o.fromGame),"own queue semaphore");vkCheck(o.createSemaphore(vk.device,&si,nullptr,&o.toGame),"own queue semaphore");
+                VkCommandPoolCreateInfo pi{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};pi.queueFamilyIndex=vk.family;vkCheck(vk.vkCreateCommandPool(vk.device,&pi,nullptr,&o.pool),"own queue pool");
+                VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};ai.commandPool=o.pool;ai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;ai.commandBufferCount=2;
+                std::array<VkCommandBuffer,2> barriers{};vkCheck(vk.vkAllocateCommandBuffers(vk.device,&ai,barriers.data()),"own queue barriers");o.xrBarrier=barriers[0];o.gameBarrier=barriers[1];
+                for(const auto c:barriers){VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bi.flags=VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;vkCheck(vk.vkBeginCommandBuffer(c,&bi),"own queue barrier begin");
+                    VkMemoryBarrier m{VK_STRUCTURE_TYPE_MEMORY_BARRIER};m.srcAccessMask=VK_ACCESS_MEMORY_WRITE_BIT;m.dstAccessMask=VK_ACCESS_MEMORY_READ_BIT|VK_ACCESS_MEMORY_WRITE_BIT;
+                    vk.vkCmdPipelineBarrier(c,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,1,&m,0,nullptr,0,nullptr);vkCheck(vk.vkEndCommandBuffer(c),"own queue barrier end");}
+                state->ownQueue=true;afwFillPrepared=true;uiGlyph::modOwnQueue=vk.queue;eyeMotion::keepObjectMotion=true;
+                state->log->event("afw_own_queue","\"queue_index\":"+std::to_string(binding.queueIndex)+",\"family\":"+std::to_string(binding.queueFamily)+",\"created_queue_count\":"+std::to_string(binding.createdQueueCount)+
+                    ",\"game_queue\":"+handleText(o.game)+",\"xr_queue\":"+handleText(vk.queue));
+            }catch(const std::exception& e){state->log->event("afw_own_queue_failed","\"reason\":"+jsonString(e.what()));throw;}
             {static const bool historyWanted=[]{const auto f=std::getenv("EVR_BUG_HISTORY");return !(f&&!std::strcmp(f,"0"));}();
              if(historyWanted)try{
                 state->history=std::make_unique<EyeHistory>(state->xr->vk);
@@ -396,22 +593,10 @@ int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice de
             {const auto w=std::getenv("EVR_EYE_WARP");state->warpWanted=w&&(!std::strcmp(w,"1")||!std::strcmp(w,"2"));state->warpFromOther=w&&!std::strcmp(w,"2");
              const auto c=std::getenv("EVR_EYE_WARP_CHECK");const auto every=c?std::strtoul(c,nullptr,10):0;state->warpCheck=state->warpWanted&&every>=1;state->warpCheckEvery=every>=1?every:120;}   // EVR_EYE_WARP_CHECK=n: every n-th frame that draws both eyes
             if(state->warpWanted)try{
-                if(state->xr->targets[0].width!=state->xr->targets[1].width||state->xr->targets[0].height!=state->xr->targets[1].height)throw std::runtime_error("the eyes differ in size");
-                state->warp=std::make_unique<EyeWarp>(state->xr->vk,state->xr->format,state->xr->targets[0].width,state->xr->targets[0].height);
-                if(state->warpFromOther)state->warp->cells=320;   // fine cells: the holes at the depth steps are a cell wide (6 px here; 144 cells left a jagged 14 px band along the sword)
-                if(const auto c=std::getenv("EVR_EYE_WARP_CELLS")){const auto n=std::strtoul(c,nullptr,10);if(n>=8&&n<=512)state->warp->cells=unsigned(n);}
-                if(const auto n=std::getenv("EVR_EYE_WARP_NEAR")){const auto f=std::strtof(n,nullptr);if(f>0&&f<10)state->warp->nearPlane=f;}
-                state->log->event("eye_warp_enabled","\"cells\":"+std::to_string(state->warp->cells)+",\"near\":"+std::to_string(state->warp->nearPlane)+",\"far\":"+std::to_string(state->warp->farDistance)+
-                    ",\"from_other_eye\":"+std::string(state->warpFromOther?"true":"false")+",\"self_check\":"+(state->warpCheck?"true":"false")+
-                    ",\"format\":"+std::to_string(state->xr->format)+",\"extent\":["+std::to_string(state->xr->targets[0].width)+','+std::to_string(state->xr->targets[0].height)+"]");
-                // The eye left out gets the edge tint too, after its warped picture (the copy's afterCopy gives it to a drawn eye).
-                state->warp->afterWarp=[st=state.get()](VkCommandBuffer cmd,uint32_t eye,const TransferImage& dst)->bool{
-                    EdgeTintParams p;{std::lock_guard<std::mutex> l(edgeTintLock);p=edgeTintCurrent;}
-                    if(p.a<0.002f||edgeTintFailed.load()||!st->edgeTint)return false;
-                    try{st->edgeTint->record(cmd,dst,eye,p);return true;}catch(const std::exception& e){edgeTintFailed=true;st->log->event("edge_tint_failed","\"stage\":\"warp\",\"reason\":"+jsonString(e.what()));return false;}
-                };
-                // Every eye copied keeps its colour and the game's depth of that frame for the warp.
-                state->transfer->keepEye=[st=state.get()](VkCommandBuffer cmd,size_t eye,const TransferImage& src){
+                makeEyeWarp(*state);
+                // Every eye copied keeps its colour and the game's depth of that frame for the warp: the game's picture (keepEye),
+                // or - a game frame of the refresh thread's time - the picture with what was drawn over it (keepDrawn).
+                auto keepPicture=[st=state.get()](VkCommandBuffer cmd,size_t eye,const TransferImage& src){
                     if(st->warpFailed||eye>=2||!st->warp)return;
                     try{
                         EyeDepthNote note;const uint32_t drawnEyes=st->xr->pendingFrame().eyeMask;
@@ -423,17 +608,22 @@ int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice de
                         const auto& snapshot=st->xr->pendingFrame();
                         {const int m=eyeWarpUnjitter(snapshot.frame);eyeWarpUnjitterUsed=m;const float sx=(m==1||m==3)?1.f:(m==2||m==4)?-1.f:0.f,sy=(m==1||m==4)?1.f:(m==2||m==3)?-1.f:0.f;
                          st->warp->depthShift={sx*note.jitterX,sy*note.jitterY};}
-                        st->warp->keep(cmd,uint32_t(eye),src,note.depth,e.layout,note.width,note.height,note.format,snapshot.views[eye],snapshot.frame);
+                        VkImage objectImage{};uint32_t objectWidth=0,objectHeight=0;
+                        const bool object=eyeMotion::takeObjectMotion(uint32_t(eye),objectImage,objectWidth,objectHeight);
+                        st->warp->keep(cmd,uint32_t(eye),src,note.depth,e.layout,note.width,note.height,note.format,snapshot.views[eye],snapshot.frame,
+                            object?objectImage:VK_NULL_HANDLE,objectWidth,objectHeight);
                         const auto n=st->warp->keeps;
                         if(n<=2||n%1200==0)st->log->event("eye_warp_kept","\"frame\":"+std::to_string(snapshot.frame)+",\"eye\":"+std::to_string(eye)+",\"keeps\":"+std::to_string(n)+",\"depth\":"+handleText(note.depth)+
                             ",\"depth_size\":["+std::to_string(note.width)+','+std::to_string(note.height)+"],\"depth_format\":"+std::to_string(note.format)+",\"depth_layout\":"+std::to_string(e.layout)+",\"depth_usage\":"+std::to_string(e.usage));
                     }catch(const std::exception& x){st->warpFailed=true;st->log->event("eye_warp_failed","\"stage\":\"keep\",\"eye\":"+std::to_string(eye)+",\"reason\":"+jsonString(x.what()));}
                 };
+                state->transfer->keepEye=[st=state.get(),keepPicture](VkCommandBuffer cmd,size_t eye,const TransferImage& src){if(!st->xr->pendingAsync())keepPicture(cmd,eye,src);};
+                state->transfer->keepDrawn=[st=state.get(),keepPicture](VkCommandBuffer cmd,size_t eye,const TransferImage& drawn){if(st->xr->pendingAsync())keepPicture(cmd,eye,drawn);};
             }catch(const std::exception& e){state->warpWanted=false;state->warp.reset();state->log->event("eye_warp_unavailable","\"reason\":"+jsonString(e.what()));}
             state->transfer->afterCopy=[st=state.get()](VkCommandBuffer cmd,size_t eye,const TransferImage& dst){
                 bool drawn=false; // true once something left the image in COLOR_ATTACHMENT_OPTIMAL
                 EdgeTintParams p;{std::lock_guard<std::mutex> l(edgeTintLock);p=edgeTintCurrent;}
-                if(p.a>=0.002f&&!edgeTintFailed.load()){
+                if(p.a>=0.002f&&!edgeTintFailed.load()&&!st->xr->pendingAsync()){
                     try{
                         if(!st->edgeTint){st->edgeTint=std::make_unique<EdgeTint>(st->xr->vk,st->xr->format);st->log->event("edge_tint_enabled","\"format\":"+std::to_string(st->xr->format));}
                         st->edgeTint->record(cmd,dst,eye,p);drawn=true;
@@ -510,11 +700,11 @@ int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice de
             {
                 const auto asyncFlag=std::getenv("EVR_XR_ASYNC_COMPLETION");
                 const bool requested=asyncFlag&&!std::strcmp(asyncFlag,"1");
-                state->asyncCompletion=requested&&binding.createdQueueCount==1&&state->xr->vk.family==binding.queueFamily;
+                state->asyncCompletion=requested&&(binding.createdQueueCount==1||state->ownQueue)&&state->xr->vk.family==binding.queueFamily;
                 state->log->event("native_xr_completion_policy","\"async\":"+std::string(state->asyncCompletion?"true":"false")+
                     ",\"requested\":"+(requested?"true":"false")+",\"queue_family\":"+std::to_string(binding.queueFamily)+
                     ",\"created_queue_count\":"+std::to_string(binding.createdQueueCount)+",\"binding_queue_family\":"+std::to_string(state->xr->vk.family)+
-                    ",\"reason\":"+jsonString(!requested?"strict_default":state->asyncCompletion?"single_queue_family_ordered":"family_queue_identity_unproven"));
+                    ",\"reason\":"+jsonString(!requested?"strict_default":state->asyncCompletion?(state->ownQueue?"own_queue_semaphores":"single_queue_family_ordered"):"family_queue_identity_unproven"));
             }
             const auto motionFlag=std::getenv("EVR_NATIVE_MOTION_HANDS");
             if(motionFlag&&!std::strcmp(motionFlag,"1")){
@@ -571,6 +761,18 @@ extern "C" __declspec(dllexport) int evrBeginNativeXr(VkInstance instance,VkPhys
                    (state.submittedPairs%15==0&&(std::filesystem::exists(std::filesystem::path(output)/"xr-capture.request",ec)||std::filesystem::exists(std::filesystem::path(output)/"xr-burst.request",ec))))
                     eyes=3;
             }
+            // The mod's own frame for every refresh (afw_pacing.hpp, pacing 2): started once both eyes have kept pictures,
+            // stopped when another pacing is chosen; after a failure of its thread the game's thread ends the frames for the
+            // rest of the session.
+            {
+                if(state.xr->refreshFailed()&&!state.refreshGaveUp){state.refreshGaveUp=true;afw::pacing=0;state.log->event("afw_fill_gave_up","\"frame\":"+std::to_string(state.xr->frames));}
+                const bool want=afw::pacing.load()==2&&state.ownQueue&&!state.refreshGaveUp&&state.warp&&!state.warpFailed&&state.warpFromOther&&!state.alternateRefused&&
+                    state.warp->canWarp(0)&&state.warp->canWarp(1);
+                if(want&&!state.xr->refreshing()){
+                    try{state.xr->startRefreshing([st=&state](const std::array<XrView,2>& views,XrTime time,const std::array<uint32_t,2>& indices,uint64_t refresh){return drawRefresh(*st,views,time,indices,refresh);});}
+                    catch(const std::exception& e){state.refreshGaveUp=true;state.log->event("afw_fill_start_failed","\"reason\":"+jsonString(e.what()));}
+                }else if(!want&&state.xr->refreshing())state.xr->stopRefreshing();
+            }
             state.xr->requestEyes(eyes);
             // The eye left out gets an image for its warped picture when its last drawn one is kept with its depth.
             uint32_t warpMask=0;
@@ -578,8 +780,15 @@ extern "C" __declspec(dllexport) int evrBeginNativeXr(VkInstance instance,VkPhys
             state.xr->requestWarp(warpMask);
             if(!state.xr->beginFrame())throw std::runtime_error("native XR session stopped");
             const auto snapshot=state.xr->pendingFrame();
+            {static int loggedPacing=-1;static uint64_t loggedAt=0;const int pacing=afw::pacing.load();
+             if(pacing!=loggedPacing||snapshot.frame>=loggedAt+900){loggedPacing=pacing;loggedAt=snapshot.frame;
+                state.log->event("afw_pacing","\"frame\":"+std::to_string(snapshot.frame)+",\"pacing\":"+std::to_string(pacing)+",\"begun_again\":"+std::to_string(afw::steadyBegunAgain.load())+
+                    ",\"predicted_time\":"+std::to_string(snapshot.predictedDisplayTime)+",\"eyes\":"+std::to_string(snapshot.eyeMask)+",\"fill_prepared\":"+(afwFillPrepared.load()?"true":"false"));}}
             const auto flags=state.xr->headLocation.locationFlags;
-            if(state.hands)frame->hands=state.hands->sample(state.xr->local,snapshot.predictedDisplayTime,snapshot.frame,1);
+            // the hands' sample needs a time after the last one; a game frame begun right after the refresh thread's own frames,
+            // or the runtime's time after them, may not be (2026-10-23: that ended the session on the headset)
+            if(state.hands){const XrTime handTime=std::max<XrTime>(snapshot.predictedDisplayTime,state.lastHandTime+1);state.lastHandTime=handTime;
+                frame->hands=state.hands->sample(state.xr->local,handTime,snapshot.frame,1);}
             frame->frame=snapshot.frame;frame->time=snapshot.predictedDisplayTime;
             frame->headFlags=flags;frame->sessionGeneration=state.generation;
             if(snapshot.shouldRender&&(flags&3)==3){
@@ -643,6 +852,14 @@ extern "C" __declspec(dllexport) int evrSetNativeXrStalePose(uint64_t frame,uint
         return state.xr->showStaleEyeAt(eye,*pose)?0:1;
     }catch(const std::exception& e){note("native_xr_stale_pose_failed","\"reason\":"+jsonString(e.what()));return 1;}
 }
+// The world's motion under the tracking space from the last game frame to this one (hooks: alternateEyes::worldMotion),
+// for the refresh thread (drawRefresh). 0 taken, 1 refused, 2 no session.
+extern "C" __declspec(dllexport) int evrSetNativeXrWorldMotion(uint64_t frame,const XrPosef* motion,int64_t dt) noexcept
+{
+    if(!liveNativeXr||!motion)return 2;auto& state=*liveNativeXr;
+    if(state.thread!=GetCurrentThreadId()||!finite(motion->position)||dt<=0)return 1;
+    state.pendingMotion={frame,*motion,dt,0,true};return 0;
+}
 extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkImage* images) noexcept
 {
     try {
@@ -658,6 +875,24 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
         const uint32_t eyes=snapshot.eyeMask;
         static const bool singleCapture=[]{const auto f=std::getenv("EVR_CAPTURE_SINGLE");return f&&!std::strcmp(f,"1");}();
         const bool both=eyes==3||singleCapture;   // with EVR_CAPTURE_SINGLE the picture of the eye drawn is taken alone
+        // A game frame of the refresh thread's time (afw_pacing.hpp, pacing 2): its eyes go into the slots and are kept from
+        // there; the refresh thread shows them. With the mod's own queue the queue lock is held to the end, and the copy waits
+        // for the game's queue and the game's queue for it (OwnQueueScope).
+        const bool asyncFrame=xr.pendingAsync();
+        std::unique_lock<std::recursive_mutex> queueHold(xr.queueLock,std::defer_lock);if(state.ownQueue)queueHold.lock();
+        OwnQueueScope ownQueue(state);
+        const VkQueue gameQueue=state.ownQueue?state.own.game:xr.vk.queue;
+        // The eyes' extent shrinks after the session's start (the lens' visible area: openxr_client.hpp decideFovCrop, the canted
+        // frustums). The warp made at the full extent refused every picture after it ("eye warp colour source": 2243 x 2243 against
+        // the game's 2002 x 2148 on the user's headset) and stopped - every AFW start on the headset since at least 10-22 showed
+        // the eye left out a frame late (2026-10-23 10:50, user: "a delayed frame drawn with the normal one, chasing after it").
+        // It is made again at the extent the eyes have now (not while the refresh thread draws with it).
+        if(state.warp&&!state.warpFailed&&!xr.refreshing()&&(state.warp->extentWidth()!=xr.targets[0].width||state.warp->extentHeight()!=xr.targets[0].height)){
+            const auto oldWidth=state.warp->extentWidth(),oldHeight=state.warp->extentHeight();
+            try{makeEyeWarp(state);state.log->event("eye_warp_resized","\"frame\":"+std::to_string(frame)+",\"from\":["+std::to_string(oldWidth)+','+std::to_string(oldHeight)+
+                "],\"to\":["+std::to_string(xr.targets[0].width)+','+std::to_string(xr.targets[0].height)+"]");}
+            catch(const std::exception& e){state.warpFailed=true;state.warp.reset();state.log->event("eye_warp_failed","\"stage\":\"resize\",\"reason\":"+jsonString(e.what()));}
+        }
         auto fixtureCapture=both?nativeFixtureCapture.exchange(0):0u;auto burstCapture=both?nativeCaptureBurst.take():decltype(nativeCaptureBurst.take()){};bool bugBurst=false;if(both&&!burstCapture){burstCapture=bugCaptureBurst.take();bugBurst=bool(burstCapture);}
         // F8: pictures of both eyes where the player stands (EVR_CAPTURE_KEY=1; for Mock sessions that the user moves by
         // the keyboard - 2026-10-14: "I move with the keyboard; take the fog and brightness differences"). A beep says
@@ -720,7 +955,8 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                 throw std::runtime_error("native eye image layout/submission unproven");
             src[eye]={images[eye],evidence.width,evidence.height,evidence.format,evidence.layout,evidence.usage,evidence.family};
             const auto &target=xr.targets[eye];
-            dst[eye]={target.images[snapshot.imageIndices[eye]].image,target.width,target.height,xr.format,
+            if(asyncFrame)dst[eye]=slotFor(state,uint32_t(eye),target.width,target.height);
+            else dst[eye]={target.images[snapshot.imageIndices[eye]].image,target.width,target.height,xr.format,
                 VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,xr.vk.family};
             if(fixtureCapture||burstCapture||evidencePair)
                 captures[eye]=output+"/native-xr/frame-"+std::to_string(frame)+"-eye-"+std::to_string(eye)+".ppm";
@@ -731,10 +967,10 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                 ",\"width\":"+std::to_string(src[eye].width)+",\"height\":"+std::to_string(src[eye].height)+
                 ",\"submission\":"+std::to_string(evidence.submission)+",\"xr_image\":"+handleText(dst[eye].image));
         }
-        if(uiDraw::enabled())state.log->event("native_ui_frame_evidence","\"frame\":"+std::to_string(frame)+","+uiDraw::frameEvidence(state.device,state.beginPresent,xr.vk.queue));
+        if(uiDraw::enabled())state.log->event("native_ui_frame_evidence","\"frame\":"+std::to_string(frame)+","+uiDraw::frameEvidence(state.device,state.beginPresent,gameQueue));
         uiDraw::FrameSource uiSource;
         const auto uiFlag=std::getenv("EVR_UI_QUAD");
-        bool submitUi=uiFlag && !std::strcmp(uiFlag,"1") && !state.uiDisabled && uiDraw::sourceForFrame(state.device,state.beginPresent,xr.vk.queue,uiSource);
+        bool submitUi=uiFlag && !std::strcmp(uiFlag,"1") && !state.uiDisabled && uiDraw::sourceForFrame(state.device,state.beginPresent,gameQueue,uiSource);
         if(submitUi){
             // Resource/format setup can fail before acquisition without poisoning the world frame.
             try{
@@ -1101,13 +1337,19 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                 const bool capture=state.warpCaptures<captureWanted&&frame>=captureFrom;
                 TransferImage runtime;runtime.image=xr.targets[eye].images[snapshot.imageIndices[eye]].image;runtime.width=xr.targets[eye].width;runtime.height=xr.targets[eye].height;
                 runtime.format=xr.format;runtime.layout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;runtime.usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-                const auto bytes=state.warp->draw(eye,runtime,snapshot.views[eye],frame,state.warpFromOther,capture,!async);
+                // The eye's own last picture (the holes' fill) starts from where the world now has it (the hooks' stale
+                // pose: a step or a turn by the stick moved the world under the tracking space); EVR_EYE_WARP_FOLLOW=0:
+                // from the pose it was drawn at, as before 2026-10-23.
+                static const bool follow=[]{const auto f=std::getenv("EVR_EYE_WARP_FOLLOW");return !(f&&!std::strcmp(f,"0"));}();
+                const XrPosef* keptAt=follow?xr.staleEyePose(eye):nullptr;
+                const auto bytes=state.warp->draw(eye,runtime,snapshot.views[eye],frame,state.warpFromOther,capture,!async,keptAt);
+                if(keptAt)++state.warpFollowed;
                 xr.markEyeWarped(eye,frame);
                 const auto n=++state.warpFrames;
                 if(capture){++state.warpCaptures;const auto path=output+"/native-xr/warp-"+std::to_string(frame)+"-eye-"+std::to_string(eye)+".ppm";
                     std::filesystem::create_directories(std::filesystem::path(output)/"native-xr");state.warp->writePpm(path,bytes);}
                 if(n<=3||n%600==0||capture){const auto& k=state.warp->keptView(eye);std::ostringstream o;o<<std::setprecision(6)<<"\"frame\":"<<frame<<",\"eye\":"<<eye<<",\"warped_frames\":"<<n
-                    <<",\"from_self\":"<<(state.warp->lastFromSelf?"true":"false")<<",\"from_other\":"<<(state.warp->lastFromOther?"true":"false")<<",\"other_frame\":"<<state.warp->lastOtherFrame<<",\"draws_from_other\":"<<state.warp->drawsFromOther<<",\"fills\":"<<state.warp->fills
+                    <<",\"from_self\":"<<(state.warp->lastFromSelf?"true":"false")<<",\"from_other\":"<<(state.warp->lastFromOther?"true":"false")<<",\"other_frame\":"<<state.warp->lastOtherFrame<<",\"gpu_ms\":"<<state.warp->gpuMs<<",\"gpu_mean_ms\":"<<(state.warp->gpuCount?state.warp->gpuSum/state.warp->gpuCount:-1.0)<<",\"gpu_max_ms\":"<<state.warp->gpuMax<<",\"kept_followed\":"<<state.warpFollowed<<",\"draws_from_other\":"<<state.warp->drawsFromOther<<",\"fills\":"<<state.warp->fills
                     <<",\"kept_frame\":"<<state.warp->keptFrame(eye)<<",\"kept_position\":["<<k.pose.position.x<<','<<k.pose.position.y<<','<<k.pose.position.z<<"],\"position\":["<<snapshot.views[eye].pose.position.x<<','<<snapshot.views[eye].pose.position.y<<','<<snapshot.views[eye].pose.position.z
                     <<"],\"captured\":"<<(capture?"true":"false");state.log->event("eye_warp",o.str());}
             }catch(const std::exception& e){state.warpFailed=true;state.log->event("eye_warp_failed","\"stage\":\"draw\",\"frame\":"+std::to_string(frame)+",\"eye\":"+std::to_string(eye)+",\"reason\":"+jsonString(e.what()));}
@@ -1125,11 +1367,58 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                     state.warp->writePpm(prefix+"-diff.ppm",diff);}
                 std::ostringstream o;o<<std::setprecision(5)<<"\"frame\":"<<frame<<",\"eye_made\":1,\"from_eye\":0,\"mean_abs_diff\":"<<c.meanDifference<<",\"holes\":"<<c.holes<<",\"compared\":"<<c.compared<<",\"checks\":"<<state.warpChecks<<",\"cells\":"<<state.warp->cells
                     <<",\"unjitter\":"<<eyeWarpUnjitterUsed<<",\"depth_shift\":["<<state.warp->depthShift[0]<<','<<state.warp->depthShift[1]<<']';
-                state.log->event("eye_warp_check",o.str());}
+                state.log->event("eye_warp_check",o.str());
+                // EVR_EYE_WARP_PARALLAX_SWEEP=1 (2026-10-23, the user: "max still shakes"; Mock: the made eye stood 0.3 .. 4 px to the
+                // side of the drawn one, more the nearer the thing, none on the clouds): the same check with the eyes' distance
+                // taken 0.7 .. 1.3 times, each one's mean difference - where it is least, the parallax the game drew.
+                static const bool parallaxSweep=[]{char v[8]{};return GetEnvironmentVariableA("EVR_EYE_WARP_PARALLAX_SWEEP",v,sizeof v)==1&&v[0]=='1';}();
+                if(parallaxSweep){std::ostringstream p;p<<std::setprecision(5)<<"\"frame\":"<<frame<<",\"parallax\":[";std::ostringstream d;d<<"],\"mean_abs_diff\":[";
+                    const float factors[]{.7f,.8f,.9f,.95f,1.f,1.05f,1.1f,1.2f,1.3f};bool first=true;
+                    for(const float f:factors){const auto r=state.warp->check(1,frame,nullptr,nullptr,f);p<<(first?"":",")<<f;d<<(first?"":",")<<r.meanDifference;first=false;}
+                    state.log->event("eye_warp_parallax_sweep",p.str()+d.str()+"]");}
+                // EVR_EYE_WARP_HOLE_SWEEP=1 (2026-10-23; Mock: the made eye's holes lay all over the grass, far wider than what the
+                // other eye cannot see - in the alternate eyes those are the eye's own picture of two frames before): the same
+                // check with a hole only where the walk that found nothing was at least 0.75 .. 24 pixels long (shorter: the
+                // stretched place), each one's holes and mean difference.
+                static const bool holeSweep=[]{char v[8]{};return GetEnvironmentVariableA("EVR_EYE_WARP_HOLE_SWEEP",v,sizeof v)==1&&v[0]=='1';}();
+                if(holeSweep){std::ostringstream p;p<<std::setprecision(5)<<"\"frame\":"<<frame<<",\"hole_pixels\":[";std::ostringstream d,h;d<<"],\"mean_abs_diff\":[";h<<"],\"holes\":[";
+                    const float sizes[]{.75f,1.5f,3.f,6.f,12.f,24.f};bool first=true;
+                    for(const float s:sizes){const auto r=state.warp->check(1,frame,nullptr,nullptr,1.f,s);p<<(first?"":",")<<s;d<<(first?"":",")<<r.meanDifference;h<<(first?"":",")<<r.holes;first=false;}
+                    state.log->event("eye_warp_hole_sweep",p.str()+d.str()+h.str()+"]");}
+                // EVR_EYE_WARP_THIN_SWEEP=1 (2026-10-23): the same check with the walk without and with thin things met.
+                static const bool thinSweep=[]{char v[8]{};return GetEnvironmentVariableA("EVR_EYE_WARP_THIN_SWEEP",v,sizeof v)==1&&v[0]=='1';}();
+                if(thinSweep){const auto off=state.warp->check(1,frame,nullptr,nullptr,1.f,0.f,0),on=state.warp->check(1,frame,nullptr,nullptr,1.f,0.f,1);
+                    std::ostringstream o;o<<std::setprecision(5)<<"\"frame\":"<<frame<<",\"mean_abs_diff\":["<<off.meanDifference<<','<<on.meanDifference<<"],\"holes\":["<<off.holes<<','<<on.holes<<"]";
+                    state.log->event("eye_warp_thin_sweep",o.str());}}
             catch(const std::exception& e){state.warpCheck=false;state.log->event("eye_warp_check_failed","\"frame\":"+std::to_string(frame)+",\"reason\":"+jsonString(e.what()));}
         }
+        // EVR_AFW_SHOTS=N (2026-10-23; the user after the headset: "every pacing shakes the same" - the shake is not the pacing):
+        // N frames in a row of eye 0 as it is shown - drawn, or made from the other eye - a quarter of the size each way, from the
+        // frame EVR_AFW_SHOTS_FROM, without holding the frames up; written afterwards as native-xr/afw-shot-<frame>-<d|m>.ppm.
+        {static const unsigned afwShots=[]{const auto f=std::getenv("EVR_AFW_SHOTS");return f?unsigned(std::min(std::strtoul(f,nullptr,10),400ul)):0u;}();
+         static const uint64_t afwShotsFrom=[]{const auto f=std::getenv("EVR_AFW_SHOTS_FROM");return f?uint64_t(std::strtoull(f,nullptr,10)):0ull;}();
+         static bool afwShotsDone=false;
+         if(afwShots&&!asyncFrame&&state.warp&&!afwShotsDone&&frame>=afwShotsFrom&&((eyes&1)||xr.eyeWarpable(0))){
+            try{
+                auto& w=*state.warp;w.prepareShots(afwShots);
+                const auto& target=xr.targets[0];
+                const TransferImage shown{target.images[snapshot.imageIndices[0]].image,target.width,target.height,xr.format,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,xr.vk.family};
+                w.shotOfImage(shown,frame*2+((eyes&1)?1:0));
+                if(w.shotsFull()){
+                    afwShotsDone=true;auto shots=w.collectShots();const uint32_t sw=w.shotWidth(),sh=w.shotHeight();
+                    std::error_code ec;std::filesystem::create_directories(std::filesystem::path(output)/"native-xr",ec);
+                    state.log->event("afw_shots","\"frame\":"+std::to_string(frame)+",\"shots\":"+std::to_string(shots.size()));
+                    std::thread([shots=std::move(shots),sw,sh,dir=output+"/native-xr/"]{try{for(const auto& [tag,px]:shots){
+                        std::ofstream out(dir+"afw-shot-"+std::to_string(tag/2)+((tag&1)?"-d":"-m")+".ppm",std::ios::binary);out<<"P6\n"<<sw<<' '<<sh<<"\n255\n";std::vector<char> row(size_t(sw)*3);
+                        for(uint32_t y=0;y<sh;++y){const auto* p=px.data()+size_t(y)*sw*4;for(uint32_t x=0;x<sw;++x){row[x*3]=char(p[x*4]);row[x*3+1]=char(p[x*4+1]);row[x*3+2]=char(p[x*4+2]);}out.write(row.data(),std::streamsize(row.size()));}}}catch(...){}}).detach();
+                }
+            }catch(const std::exception& e){afwShotsDone=true;state.log->event("afw_shots_failed","\"reason\":"+jsonString(e.what()));}
+         }}
         const auto transferComplete=std::chrono::steady_clock::now();
-        for(uint32_t eye=0;eye<2;++eye)if(eyes>>eye&1)xr.markEyeRendered(eye,frame);
+        // The world's motion of this frame for the refresh thread (an identity when the hooks gave none).
+        {const auto& m=state.pendingMotion;const bool ours=m.valid&&m.frame==frame;
+         state.motions[frame%state.motions.size()]={frame,ours?m.perFrame:XrPosef{{0,0,0,1},{0,0,0}},ours?m.dt:0,snapshot.predictedDisplayTime,ours};}
+        if(!asyncFrame)for(uint32_t eye=0;eye<2;++eye)if(eyes>>eye&1)xr.markEyeRendered(eye,frame);
         if(eyes==3)xr.finishFrame();
         else try{xr.finishFrame();}catch(const std::exception& e){
             // The runtime did not take a frame with one eye's earlier picture: that frame is dropped (finishFrame

@@ -304,6 +304,8 @@ inline std::atomic<uint64_t> bowReleasedAt{0};
 // Until when an arrow the mod handed early may be made while the bow is not yet in the game's shot state (3): set by
 // motion_event_selection_observer.hpp as it hands the arrow, read by bow_spawn_observer.hpp.
 inline std::atomic<uint64_t> bowEarlySpawnUntil{0};
+// A throw's spawn handed early (motion_event_selection_observer.hpp, the throw as a wand's swing): before the game's thrown state.
+inline std::atomic<uint64_t> throwEarlySpawnUntil{0};
 // The string is held with the right grip (the strong shot's draw, BowDraw::strongDraw): the game does not aim then and
 // shows no arrow of its own, so motion_arrow_visual.hpp keeps its clone on the string for the whole draw.
 inline std::atomic<bool> bowStrongDrawing{false};
@@ -344,7 +346,25 @@ inline evr::motion::LiveAttackPress livePressSnapshot(){std::lock_guard<std::mut
 // native block button (LB). The render thread publishes what is equipped with its hand frame.
 inline bool liveGuardRequested=false;inline evr::motion::LiveGuard liveGuard;
 // Quick slot by hand motion (quick_slot.hpp): right B held opens the native wheel, the right hand points, release takes.
-inline bool quickSlotRequested=false;inline evr::motion::QuickSlot quickSlot;
+inline bool quickSlotRequested=false;
+// A consumable chosen on the quick wheel is held and used at the mouth or by the right trigger (2026-10-23;
+// include/evr/consumable_hold.hpp, hooks/input_head_idle.hpp consumableHoldInput): the wheel's last choice (the input side
+// keeps back only a consume written right after it), the item held (set by the input side), the use asked for here.
+inline std::atomic<uint64_t> quickWheelChosenMs{0};
+inline std::atomic<uint32_t> consumableHeld{0};
+// A throwable in the hand (shown in it: motion_consumable_visual.hpp) and when the last one was thrown.
+inline std::atomic<uint32_t> throwableHeld{0};inline std::atomic<uint64_t> throwAtMs{0};
+inline std::atomic<bool> consumableUse{false};
+// The mouth (VHVR's mouth box: 6 cm under the eyes and 4 cm before them, docs/analysis/vhvr_spec_20261010/equipment_tools.md
+// 9.1): the hand within mouthReach of it uses the item; it has to leave past mouthLeave before it can use another.
+// EVR_CONSUMABLE_MOUTH_CM=<reach in cm>.
+inline const float mouthReach=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_CONSUMABLE_MOUTH_CM",v,sizeof v);const float cm=n&&n<sizeof v?std::strtof(v,nullptr):0.f;
+    return std::isfinite(cm)&&cm>=4.f&&cm<=40.f?cm/100.f:.12f;}();
+inline float mouthLeave(){return mouthReach*1.5f;}
+// EVR_QUICK_SLOT_HOLD_DEG (2026-10-23): how far the stick's angle may lag behind the wrist's before it follows (2 degrees of the
+// stick, 1 of the wrist; 0 = it follows at once, as before; include/evr/quick_slot.hpp rollHold).
+inline evr::motion::QuickSlot quickSlot{[]{evr::motion::QuickSlotSettings s;char v[16]{};const auto n=GetEnvironmentVariableA("EVR_QUICK_SLOT_HOLD_DEG",v,sizeof v);
+    if(n&&n<sizeof v){char* end=nullptr;const float deg=std::strtof(v,&end);if(end&&!*end&&std::isfinite(deg)&&deg>=0&&deg<=45)s.rollHold=deg*3.14159265f/180;}return s;}()};
 inline evr::motion::LiveGuardEquipment gestureGuardEquipment;inline uint64_t gestureGuardFrame=0,gestureGuardMs=0;
 // VHVR bow pulses: full draw = bow hand 0.2 s at 0.3; release = arrow hand 0.1 s at 0.9
 // and bow hand 0.2 s at 0.3. The frontend requests, the render thread sends.
@@ -569,6 +589,10 @@ inline bool (*undoDamage)(const std::array<int64_t,3>&,uint64_t)=nullptr;
 // A guest's guard (online_sync.hpp guardAction): the health given back and the block's stamina taken, as the game's own
 // block costs it (live_melee_targets.hpp guardGiveBack). Set in view_resource_probe.cpp.
 inline bool (*guardGiveBack)(const std::array<int64_t,3>&,uint64_t)=nullptr;
+// A guest's stamina (2026-10-23, player_sync.hpp kind 9): staminaOf - on the host, the stamina of the character a guest
+// drives (live_melee_targets.hpp, -1 unknown); hostStamina - on a guest, the last stamina the host's mod sent for this
+// player and when (GetTickCount64 ms): value | ms << 16 (0: none). Read by hit_event_intake.hpp guard.
+inline int (*staminaOf)(uint32_t)=nullptr;inline std::atomic<uint64_t> hostStamina{0};
 // wandNextShotMs: no swing of the wand shoots before it (motion_event_selection_observer.hpp sets it when a swing's action starts).
 inline std::atomic<uint64_t> wandNextShotMs{0};
 inline std::atomic<uint64_t> playerActorState{0},playerActorStateMs{0},blockOpportunityMs{0},blockingMs{0};   // blockOpportunityMs: the last tick the player's BlockOpportunity (5) was up (parry_observer.hpp relaxed parry)   // the block button is held by the live guard (input_actor_observer.hpp records the actor's look then)
@@ -1008,6 +1032,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     const bool revive=fallenPlayerNear&&fallenPlayerNear(now);
                     const auto slot=quickSlot.update(hands,quickHead.pose,allowed,now,revive);
                     pad.buttons|=slot.buttons;
+                    if(slot.chosen)quickWheelChosenMs.store(now);
                     // Only while the game's wheel is up (auxiliary 1): fishing does not open it, and the hand's way went to the
                     // camera's turn instead (headset run 20261019-160912, user: "pressing to pull up while fishing turns me round" -
                     // the right B held, RB with the right stick at 0.92 / -0.40 sent for seconds, the view turning).
@@ -1455,6 +1480,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     // for the guide and the direction - the press then is that item's own attack.
                     static const bool throwTestAny=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_THROW_TEST_ANY_ITEM",v,sizeof v);return n==1&&v[0]=='1';}();
                     const bool throwable=gameplay&&((held.valid&&held.category==2&&held.typeKnown&&held.weaponType==12&&evr::motion::catalogThrowable(held.item))||throwTestAny);
+                    throwableHeld.store(gameplay&&held.valid&&held.category==2&&held.typeKnown&&held.weaponType==12&&evr::motion::catalogThrowable(held.item)?held.item:0u);
                     // The guide: the left hand held forward while the throw is got ready shows where it goes and decides it
                     // (user 2026-10-18; ThrowGuide). Asked before the throw's own update, with the wind-up as it stood.
                     evr::motion::ThrowGuideResult guide;
@@ -1475,7 +1501,14 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         // along the guide when the left hand gave one in this wind-up, otherwise along the swing
                         const bool byGuide=guide.kept;const auto direction=byGuide?guide.direction:thrown.direction;throwGuide.reset();
                         ThrowRequest r;{std::lock_guard<std::mutex> lock(throwMutex);r.serial=throwRequest.serial+1;r.milliseconds=now;r.frame=hands.frame;r.origin=thrown.origin;r.direction=direction;r.speed=thrown.speed;throwRequest=r;}
-                        requestBowHaptic({0,.5f},{0,200});
+                        requestBowHaptic({0,.5f},{0,200});throwAtMs.store(now);
+                        // The throwable leaves at the throw (2026-10-23, user: "the throwables lag before they fly - shorten it as the
+                        // bow's and the magic's"): headset run 20261023-172945 - the game's throw began 59 ms after the release and
+                        // spawned the bomb 230 ms into it. As a wand's swing (LiveAttackPress::spawnsOnly): what the throw's action
+                        // spawns comes on its first tick, the rest of it stays the game's. EVR_THROW_EARLY=0: off.
+                        static const bool throwEarly=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_THROW_EARLY",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                        if(throwEarly&&observeMeleeNative){const auto running=observeMeleeNative();std::lock_guard<std::mutex> lock(livePressMutex);
+                            liveAttackPress={running.valid?running.entity:0u,held.item,running.triggerTime,now,liveAttackPress.serial+1,true};}
                         std::ostringstream s;s<<std::setprecision(8)<<"\"frame\":"<<hands.frame<<",\"serial\":"<<r.serial<<",\"item\":"<<held.item<<",\"count\":"<<held.count<<",\"origin\":["<<r.origin.x<<','<<r.origin.y<<','<<r.origin.z
                          <<"],\"direction\":["<<r.direction.x<<','<<r.direction.y<<','<<r.direction.z<<"],\"by_guide\":"<<(byGuide?"true":"false")<<",\"swing_direction\":["<<thrown.direction.x<<','<<thrown.direction.y<<','<<thrown.direction.z
                          <<"],\"hand_speed\":"<<thrown.speed<<",\"travel\":"<<thrown.travel<<",\"throws\":"<<liveThrow.throws()<<",\"native_button\":16384";
@@ -1573,9 +1606,21 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     const bool wandHeld=evr::motion::rangedAimWand(rangedItem)&&rangedMs&&now>=rangedMs&&now-rangedMs<=200&&fresh&&mapped.valid&&
                         evr::motion::bowTrialHud(valid,normalHud,screen,auxiliary,nativeBlocked)&&!value.active;
                     const bool wand=wandHeld&&hands.hands[1].triggerActive;
-                    if(!wand)wandPressed=false;
-                    else{const float t=hands.hands[1].trigger;if(t>=.8f)wandPressed=true;else if(t<=.2f)wandPressed=false;
-                        pad.rightTrigger=0;if(wandPressed)pad.buttons|=evr::motion::LivePadMapper::X;}
+                    // The wand's special ability (2026-10-23, a player on Discord: "how do you do the ult? I do right trigger while
+                    // holding the controller next to my head but it fires at the ceiling"): the trigger - or a swing - with the right
+                    // grip held sends the game's RT (SpecialAbility on PresetA: the wand's Magnetic Projectile) for liveSpecialRtMs
+                    // instead of the attack button, aimed where the wand points like its normal shot. The melee special's rule
+                    // (liveSpecialByGrip, EVR_SPECIAL_BY_GRIP=0: off). Before, only the head gesture let the raw RT through, with
+                    // the hand at the head - so the shot went up.
+                    const bool wandGrip=liveSpecialByGrip&&wandHeld&&hands.hands[1].grabActive&&hands.hands[1].grab;
+                    static uint64_t wandSpecialUntil=0;static bool wandSpecialTrigger=false,wandSpecialSwing=false;
+                    if(!wand){wandPressed=false;wandSpecialTrigger=false;}
+                    else{const float t=hands.hands[1].trigger;const bool was=wandPressed;if(t>=.8f)wandPressed=true;else if(t<=.2f)wandPressed=false;
+                        pad.rightTrigger=0;
+                        if(wandPressed&&!was&&wandGrip){wandSpecialUntil=now+liveSpecialRtMs;wandSpecialTrigger=true;
+                            logFile->event("wand_special","\"frame\":"+std::to_string(hands.frame)+",\"by\":\"trigger\",\"item\":"+std::to_string(rangedItem)+",\"rt_ms\":"+std::to_string(liveSpecialRtMs));}
+                        if(!wandPressed)wandSpecialTrigger=false;
+                        if(wandPressed&&!wandSpecialTrigger)pad.buttons|=evr::motion::LivePadMapper::X;}
                     // The wand's attack by a swing as well (user 2026-10-19: "the wand's normal attack also by a swing - the
                     // trigger or a swing; locked on, it flies to the target anyway"): the melee rule for one hand (VHVR's
                     // 3 m/s, the wand's turn counted 12.5 cm ahead of the hand, one tap of the attack button a stroke, the
@@ -1604,13 +1649,18 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                      if(swingAllowed){stroke.binding=rangedGeometry.binding;stroke.needsTarget=false;stroke.hand=1;
                         stroke.forward=evr::rotate(rangedGeometry.model.orientation,{0,1,0});stroke.reach=.5228f;}
                      const auto swing=wandStrokes.update(hands,stroke,swingAllowed,now);
-                     if(swing.press)pad.buttons|=evr::motion::LivePadMapper::X;
+                     if(swing.fired&&wandGrip){wandSpecialUntil=now+liveSpecialRtMs;wandSpecialSwing=true;
+                        logFile->event("wand_special","\"frame\":"+std::to_string(hands.frame)+",\"by\":\"swing\",\"item\":"+std::to_string(rangedItem)+",\"speed\":"+std::to_string(swing.speed));}
+                     if(!swing.press&&!wandSpecialUntil)wandSpecialSwing=false;
+                     if(swing.press&&!wandSpecialSwing)pad.buttons|=evr::motion::LivePadMapper::X;
                      if(swing.fired){
                         wandNextShotMs=now+600;   // until the action tells its own time (the normal attack's is 600 ms)
                         if(observeMeleeNative){const auto running=observeMeleeNative();std::lock_guard<std::mutex> lock(livePressMutex);
                             liveAttackPress={running.valid?running.entity:0u,rangedItem,running.triggerTime,now,liveAttackPress.serial+1,true};}}
                      if(swing.fired)logFile->event("wand_swing_attack","\"frame\":"+std::to_string(hands.frame)+",\"speed\":"+std::to_string(swing.speed)+
                         ",\"required\":"+std::to_string(swing.required)+",\"presses\":"+std::to_string(wandStrokes.presses())+",\"item\":"+std::to_string(rangedItem)+",\"trigger_held\":"+(wandPressed?"true":"false"));}
+                    // the special's RT press, the attack button kept off meanwhile
+                    if(wandSpecialUntil){if(now<wandSpecialUntil){pad.rightTrigger=255;pad.buttons&=~evr::motion::LivePadMapper::X;}else wandSpecialUntil=0;}
                 }
                 if(bowInputTrialRequested){
                     const auto before=bowInputTrial.phase();
@@ -1804,6 +1854,27 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     if(l>=r){pad.rightX=pad.leftX;pad.rightY=pad.leftY;}pad.leftX=pad.leftY=0;}
                  if(open!=was){was=open;static unsigned lines=0;if(lines++<300)logFile->event("emote_wheel","\"open\":"+std::string(open?"true":"false")+",\"frame\":"+std::to_string(hands.frame)+
                     ",\"gesture\":"+(value.active?"true":"false")+",\"buttons\":"+std::to_string(pad.buttons));}}
+                // A consumable held from the quick wheel (consumableHeld above): brought to the mouth, or the right trigger, uses it
+                // (consumableUse, sent by the input side); meanwhile the right trigger is the item's, not the weapon's.
+                {static bool atMouth=false,triggerWas=false;static uint32_t heldBefore=0;
+                 const auto& right=hands.hands[1];
+                 // a short pulse when an item comes to the hand (its model is not shown yet)
+                 if(const uint32_t now=consumableHeld.load();now!=heldBefore){if(now)requestBowHaptic({0,.25f},{0,40});heldBefore=now;}
+                 const bool trigger=right.triggerActive&&right.trigger>=.8f;
+                 if(const uint32_t held=consumableHeld.load();held&&fresh&&mapped.valid&&screenKind==evr::motion::LiveScreen::Gameplay&&!value.active){
+                    evr::motion::GestureHead head;{std::lock_guard<std::mutex> lock(gestureMutex);head=gestureHead;}
+                    bool use=trigger&&!triggerWas;const char* by=use?"trigger":"";float distance=-1;
+                    if((head.flags&15)==15&&right.gripActive){
+                        using evr::operator+;using evr::operator-;
+                        const evr::Vec3 mouth=head.pose.position+evr::rotate(head.pose.orientation,evr::Vec3{0,-.06f,-.04f});
+                        distance=evr::length(right.grip.position-mouth);
+                        if(!atMouth&&distance<mouthReach){atMouth=true;if(!use){use=true;by="mouth";}}else if(atMouth&&distance>mouthLeave())atMouth=false;
+                    }
+                    if(use&&!consumableUse.exchange(true)){requestBowHaptic({0,.4f},{0,60});static unsigned lines=0;
+                        if(lines++<400)logFile->event("consumable_use_asked","\"frame\":"+std::to_string(hands.frame)+",\"item\":"+std::to_string(held)+",\"by\":\""+by+"\",\"mouth_distance_m\":"+std::to_string(distance));}
+                    if(right.triggerActive){pad.rightTrigger=0;pad.buttons&=~evr::motion::LivePadMapper::X;}
+                 }else atMouth=false;
+                 triggerWas=trigger;}
                 publishLive(pad);
                 liveWieldBusy.store(!fresh||screenKind!=evr::motion::LiveScreen::Gameplay||value.active||bool(pad.buttons&evr::motion::LivePadMapper::RB));
                 static uint64_t lastScope=0;if(!fresh&&lastScope&&now>lastScope)liveStaleMs+=std::min<uint64_t>(now-lastScope,1000);lastScope=now;

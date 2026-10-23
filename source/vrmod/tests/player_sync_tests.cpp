@@ -234,5 +234,18 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(g.size()==surfaceShotActionBytes&&g[2]==surfaceShotAction);const auto a=decodeAction(g.data(),g.size());
   ck(a&&a->kind==surfaceShotAction&&a->id==9&&a->at==at&&a->shot&&std::abs(length(a->dir)-1)<1e-4f&&std::abs(a->dir.y+.3511f)<1e-3f&&std::abs(a->dir.z-.9363f)<1e-3f&&std::abs(a->dir.x)<1e-4f);
   ck(!decodeAction(g.data(),g.size()-1));const auto zero=encodeSurfaceShot(9,at,{0,0,0});ck(!decodeAction(zero.data(),zero.size()));}
+ // kind 9, a guest's stamina from the host (2026-10-23): now and the most, two u16; now above the most refused.
+ {const auto g=encodeStamina(12,37,120);ck(g.size()==staminaActionBytes&&g[2]==staminaAction);const auto a=decodeAction(g.data(),g.size());
+  ck(a&&a->kind==staminaAction&&a->id==12&&a->stamina==37&&a->staminaMost==120);ck(!decodeAction(g.data(),g.size()-1));
+  const auto over=encodeStamina(13,130,120);ck(!decodeAction(over.data(),over.size()));const auto neg=encodeStamina(14,-5,120);const auto b=decodeAction(neg.data(),neg.size());ck(b&&b->stamina==0);}
+ // kind 10, the consumable held in the right hand: its item, its pose in the hand's socket, its scale; 0 - none any more
+ {const Pose in{normalized(Quat{.2f,-.1f,.3f,.9f}),Vec3{.02f,-.05f,.08f}};const auto g=encodeHeldItem(15,1539486909u,in,.31f);ck(g.size()==heldItemActionBytes&&g[2]==heldItemAction);
+  const auto a=decodeAction(g.data(),g.size());
+  ck(a&&a->kind==heldItemAction&&a->id==15&&a->item==1539486909u&&length(a->inHand.position-in.position)<1e-6f&&std::abs(a->inHand.orientation.w-in.orientation.w)<1e-6f&&std::abs(a->scale-.31f)<1e-6f);
+  ck(!decodeAction(g.data(),g.size()-1));
+  const auto none=encodeHeldItem(16,0,Pose{Quat{0,0,0,0},Vec3{9,9,9}},0);const auto n=decodeAction(none.data(),none.size());ck(n&&n->item==0);   // a let-go needs no pose
+  const auto far=encodeHeldItem(17,5,Pose{Quat{0,0,0,1},Vec3{0,2,0}},.5f);ck(!decodeAction(far.data(),far.size()));     // a model far from the hand is refused
+  const auto big=encodeHeldItem(18,5,Pose{Quat{0,0,0,1},Vec3{0,0,0}},3.f);ck(!decodeAction(big.data(),big.size()));     // and one grown larger than its own size
+  const auto bent=encodeHeldItem(19,5,Pose{Quat{0,0,0,2},Vec3{0,0,0}},.5f);ck(!decodeAction(bent.data(),bent.size()));}  // and one not a rotation
  std::cout<<"player_sync "<<n<<" PASS\n";return 0;}
  catch(const std::exception& e){std::cerr<<"player_sync FAIL "<<e.what()<<"\n";return 1;}}

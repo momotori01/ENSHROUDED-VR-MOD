@@ -97,8 +97,18 @@ inline std::vector<std::pair<std::string,std::string>> entries(const std::string
 // ([Body] ArmSwim; 2026-10-20, user: "add swimming by hand - VHVR had it; switchable in the settings"). On unless set.
 // hitStop: the hit stop of a melee stroke (include/evr/hit_stop.hpp; [Melee] HitStop; 2026-10-20, user: "make the hit stop
 // switchable in the game's settings"). On unless set.
-struct Values {bool vr=false,online=true;double renderScale=.8;std::string dlss="Quality";double sharpness=.2;int keepLogs=8;bool alternateEyes=false;std::string giQuality="High";int eyeWarp=0;
-    bool realCrouch=true;int crouchDrop=30;int swingSpeed=100;bool armSwim=true;bool hitStop=true;};
+// uiAutoHide: the HUD fades out five seconds after its last change (hooks: uiHudBridge, layer hud_fade.hpp; [Picture]
+// UiAutoHide; 2026-10-23, user: "make the always-shown UI switchable in the settings" - a player found the HUD coming and
+// going hard to play with). On unless set; 0 = the HUD always shown.
+// afwRenderScale / afwDlss / afwPacing (2026-10-23; user, after the headset's frames.csv: "the AFW shakes" - at 75 Hz the
+// alternate eyes took 19 ms, the runtime going between 75 and 37.5 frames a second): with alternateEyes, the picture size
+// and the DLSS mode of the VR start ([Picture] AfwRenderScale, AfwDlss; 0 / empty = RenderScale, the game's own mode) and how the
+// frames are paced ([Picture] AfwPacing): 0 every refresh the frame can make (the runtime fills the misses), 1 a steady
+// two refreshes a frame (half the headset's rate, no switching - room for a larger picture), 2 the mod's own warp of the
+// last pictures for every refresh the game misses (include/evr/afw_pacing.hpp).
+struct Values {bool vr=false,online=true;double renderScale=.8;std::string dlss;double sharpness=.2;int keepLogs=8;bool alternateEyes=false;std::string giQuality="High";int eyeWarp=0;
+    bool realCrouch=true;int crouchDrop=30;int swingSpeed=100;bool armSwim=true;bool hitStop=true;bool uiAutoHide=true;
+    double afwRenderScale=0;std::string afwDlss;int afwPacing=0;};
 constexpr int swingSpeedLow=50,swingSpeedHigh=150,swingSpeedStep=5;
 inline int clampSwingSpeed(int percent){
     const int stepped=int(std::lround(double(percent)/swingSpeedStep))*swingSpeedStep;return std::clamp(stepped,swingSpeedLow,swingSpeedHigh);
@@ -114,10 +124,16 @@ inline Values read(const std::string& ini){
     out.renderScale=number("Picture","RenderScale",d.renderScale,.25,2.);out.sharpness=number("Picture","Sharpness",d.sharpness,0.,1.);
     out.keepLogs=int(number("Log","Keep",d.keepLogs,0.,100.));
     out.realCrouch=flag("Body","RealCrouch",d.realCrouch);out.crouchDrop=int(number("Body","CrouchDrop",d.crouchDrop,10.,50.));
-    out.armSwim=flag("Body","ArmSwim",d.armSwim);out.hitStop=flag("Melee","HitStop",d.hitStop);out.swingSpeed=clampSwingSpeed(int(number("Melee","SwingSpeed",d.swingSpeed,swingSpeedLow,swingSpeedHigh)));
-    const auto mode=get(ini,"Picture","Dlss");for(const auto& known:dlssModes())if(sameText(known,mode))out.dlss=known;
+    out.armSwim=flag("Body","ArmSwim",d.armSwim);out.uiAutoHide=flag("Picture","UiAutoHide",d.uiAutoHide);out.hitStop=flag("Melee","HitStop",d.hitStop);out.swingSpeed=clampSwingSpeed(int(number("Melee","SwingSpeed",d.swingSpeed,swingSpeedLow,swingSpeedHigh)));
+    // [Picture] Dlss is no longer read (2026-10-23, user: "the setting exe's DLSS is the same as the game's - remove it"):
+    // dlss stays empty, a VR start keeps the game's own DLSS / FSR 3 mode; only AFW's own mode (AfwDlss) is still set.
     const auto gi=get(ini,"Picture","GiQuality");for(const auto& known:giModes())if(sameText(known,gi))out.giQuality=known;
+    out.afwRenderScale=number("Picture","AfwRenderScale",0.,.25,2.);if(get(ini,"Picture","AfwRenderScale")=="0")out.afwRenderScale=0;
+    {const auto m=get(ini,"Picture","AfwDlss");for(const auto& known:dlssModes())if(sameText(known,m))out.afwDlss=known;}
+    out.afwPacing=int(number("Picture","AfwPacing",d.afwPacing,0.,2.));
     return out;
 }
+// The values a VR start uses: with the alternate eyes their own picture size and DLSS mode, when set.
+inline Values forStart(Values v){if(v.alternateEyes){if(v.afwRenderScale>0)v.renderScale=v.afwRenderScale;if(!v.afwDlss.empty())v.dlss=v.afwDlss;}return v;}
 inline std::string text(double v){char b[32];std::snprintf(b,sizeof b,"%.2f",v);std::string s=b;while(s.size()>3&&s.back()=='0')s.pop_back();return s;}
 } // namespace evr::settings

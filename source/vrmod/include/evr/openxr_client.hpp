@@ -10,10 +10,13 @@
 #include <evr/symmetric_fov.hpp>
 #include <evr/openxr_dispatch.hpp>
 #include <evr/process_exit.hpp>
+#include <evr/afw_pacing.hpp>
 #include <evr/vulkan.hpp>
 #include <functional>
 #include <openxr/openxr_platform.h>
 #include <thread>
+#include <condition_variable>
+#include <mutex>
 namespace evr
 {
 inline void xrCheck(XrResult r, const char *operation)
@@ -103,6 +106,7 @@ class OpenXrClient : private OpenXrDispatch
         // picture was drawn, so the eye is shown at this frame's pose like a drawn one.
         std::array<bool, 2> warpable{}, warped{};
         bool active = false, endAttempted = false, uiAttempted = false;
+        bool async = false;   // a game frame while the refresh thread ends the frames: no frame of the runtime's is begun for it
     } pending;
     uint32_t warpMask = 0;   // the eyes to acquire for a warped picture in the next frame, when left out
     // Per eye: the view (pose and fov) its swapchain's latest released image was drawn with. Valid only while that
@@ -114,6 +118,44 @@ class OpenXrClient : private OpenXrDispatch
     // drawn at (the world moved under the tracking space: a turn by the stick, a step).
     std::array<bool, 2> staleOverride{};
     std::array<XrPosef, 2> stalePose{};
+    XrTime lastShownTime = 0;   // the display time of the last frame begun (afw_pacing.hpp)
+    XrDuration headsetPeriod = 0;   // the shortest display period the runtime has given: the headset's own refresh
+    // A runtime call that took long (2026-10-23, the user's headset run: with SteamVR's motion smoothing on, opening the
+    // dashboard left the game at a frame every 3 seconds or so, and nothing on record said where): the call, how long, the
+    // frame and the session's state. 150 ms and longer, 300 at most.
+    std::atomic<unsigned> slowCalls{0};
+    template <class Call> XrResult timed(const char *what, Call &&call)
+    {
+        const auto start = std::chrono::steady_clock::now();
+        const XrResult r = call();
+        const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        if (ms >= 150 && slowCalls.fetch_add(1) < 300)
+        {
+            std::ostringstream o;o << std::setprecision(4) << "\"call\":" << jsonString(what) << ",\"ms\":" << ms << ",\"frame\":" << frames << ",\"result\":" << int(r) << ",\"session_state\":" << int(state);
+            log.event("xr_slow_call", o.str());
+        }
+        return r;
+    }
+    XrTime lastBegunTime = 0;   // the display time of the last frame begun, of the game's thread's either kind (beginGameFrame)
+    // The mod's own frame for every refresh (afw_pacing.hpp, pacing 2; 2026-10-23): a thread of its own waits for each
+    // refresh, has the layer warp the last kept pictures of both eyes to the head's pose of that refresh (draw) and ends
+    // the frame, with the last UI image the game's thread released; the game's frames then only locate their views (for a
+    // time a little ahead of the last refresh) and give their pictures to be kept (async in PendingFrame).
+    struct Refresh {
+        std::thread thread;std::atomic<bool> running{false},stop{false},failed{false};
+        std::function<bool(const std::array<XrView,2>&,XrTime,const std::array<uint32_t,2>&,uint64_t)> draw;
+        std::atomic<int64_t> predicted{0},period{0};std::atomic<uint64_t> count{0},drawn{0},empty{0},gameFrames{0};
+        std::mutex wakeLock;std::condition_variable wake;
+        uint64_t countAtGameBegin=0;
+        // The display time against the steady clock (ns), from each refresh's wait: a game frame's time is its begin's on the
+        // steady clock carried over, so the game frames' times are as far apart as the game's own frames (each refresh's
+        // predicted time would round them to whole refreshes: 11 and 22 ms where the game took 16, and the world's motion
+        // per second taken from them jumped between half and double).
+        std::atomic<int64_t> clockOffset{0};std::atomic<bool> clockKnown{false};
+        // under queueLock: the placement of the UI image the game's thread released last (also in the frames it ends itself)
+        bool uiValid=false;UiQuadPlacement ui{};uint64_t uiFrame=0;
+        double lockWaitMaxMs=0,drawMaxMs=0;
+    } refresh;
     EyeTarget uiTarget;
     VkFormat uiFormat = VK_FORMAT_UNDEFINED;
     // Visibility-mask field of view crop (fov_crop.hpp). Decided once on the first rendered frame; the eye
@@ -495,7 +537,14 @@ class OpenXrClient : private OpenXrDispatch
     {
         const auto symmetricFlag=std::getenv("EVR_SYMMETRIC_FOV");
         symmetricFov=symmetricFlag&&!std::strcmp(symmetricFlag,"1");
-        {const auto cantFlag=std::getenv("EVR_CANTED_FOV");cantedFov=!(cantFlag&&!std::strcmp(cantFlag,"0"));}
+        {const auto cantFlag=std::getenv("EVR_CANTED_FOV");cantedFov=!(cantFlag&&!std::strcmp(cantFlag,"0"));
+         // The alternate eyes (EVR_ALTERNATE_EYES=1; 2026-10-23): parallel frustums, not turned toward the middle. An eye made from
+         // the other eye's picture needs that picture to cover it; the turned frustums of the user's headset left a band of a
+         // fifth of the made eye uncovered (Mock with the headset's fov: 21..25 % holes, parallel 4..5 %), filled from that eye's
+         // picture of two frames before - the band blinked every frame (user 11:10: "blinking, a left-right shake"). The cost:
+         // the frustums' symmetric envelope, about 17 % more pixels. EVR_CANTED_FOV=1 turns them anyway.
+         const auto alternate=std::getenv("EVR_ALTERNATE_EYES");
+         if(alternate&&!std::strcmp(alternate,"1")&&!(cantFlag&&!std::strcmp(cantFlag,"1")))cantedFov=false;}
         if (instance || vk.instance)
             throw std::runtime_error("OpenXrClient init is single-use; create a new client for recreation");
         if (borrowedXr && (!borrowed || !borrowedXr->instance || !borrowedXr->vulkanEnable1Enabled))
@@ -855,7 +904,7 @@ class OpenXrClient : private OpenXrDispatch
             XrSwapchainImageAcquireInfo a{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
             xrCheck(xrAcquireSwapchainImage(uiTarget.handle,&a,&uiPending.index),"UI acquire image");uiPending.acquired=true;
             XrSwapchainImageWaitInfo w{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};w.timeout=1000000000;
-            const auto result=xrWaitSwapchainImage(uiTarget.handle,&w);
+            const auto result=timed("xrWaitSwapchainImage (UI)",[&]{return xrWaitSwapchainImage(uiTarget.handle,&w);});
             if(result!=XR_SUCCESS)throw std::runtime_error("UI wait timeout/error "+std::to_string(result));
             uiPending.ready=true;
             if(uiPending.index>=uiTarget.images.size())throw std::runtime_error("UI Runtime returned invalid image index");
@@ -912,6 +961,7 @@ class OpenXrClient : private OpenXrDispatch
                     }
                     if (state == XR_SESSION_STATE_STOPPING && running)
                     {
+                        stopRefreshing();   // its frames end before the session does
                         xrCheck(xrEndSession(session), "xrEndSession");
                         running = false;
                     }
@@ -972,6 +1022,8 @@ class OpenXrClient : private OpenXrDispatch
         return pending.snapshot;
     }
     bool hasPendingFrame() const { return pending.active; }
+    // The pending frame is a game frame of the refresh thread's time (afw_pacing.hpp, pacing 2): no runtime image is acquired for it.
+    bool pendingAsync() const { return pending.active && pending.async; }
     // The eyes to draw in the next world frame (1, 2 or 3). An eye whose last picture is not a drawn one is drawn
     // anyway; pendingFrame().eyeMask says what was decided.
     void requestEyes(uint32_t mask) { nextEyeMask = (mask & 3) ? (mask & 3) : 3; }
@@ -993,22 +1045,138 @@ class OpenXrClient : private OpenXrDispatch
         if (!std::isfinite(n) || std::abs(n - 1.f) > 1e-3f || !std::isfinite(pose.position.x) || !std::isfinite(pose.position.y) || !std::isfinite(pose.position.z)) return false;
         staleOverride[eye] = true;stalePose[eye] = pose;return true;
     }
+    // The pose showStaleEyeAt gave an eye left out of the pending frame (nullptr: none): where its last drawn picture is in
+    // this frame's tracking space. The warp of that picture starts from it (eye_warp.hpp draw keptAt).
+    const XrPosef *staleEyePose(uint32_t eye) const { return pending.active && eye < 2 && staleOverride[eye] ? &stalePose[eye] : nullptr; }
+    // ---- The mod's own frame for every refresh (afw_pacing.hpp, pacing 2) ----
+    // The binding queue, and the frame and swapchain calls that may use it, between the game's thread and the refresh
+    // thread: the refresh thread holds it from xrBeginFrame to xrEndFrame, the layer while it copies a game frame.
+    std::recursive_mutex queueLock;
+    // Draws both eyes' pictures for a refresh into the acquired images (indices) at these views (the queue lock held, on
+    // the refresh thread); false: nothing to show (the frame is ended without layers).
+    using DrawRefresh = std::function<bool(const std::array<XrView,2>&,XrTime,const std::array<uint32_t,2>&,uint64_t)>;
+    bool refreshing() const { return refresh.running.load(); }
+    bool refreshFailed() const { return refresh.failed.load(); }
+    uint64_t refreshCount() const { return refresh.count.load(); }
+    XrTime refreshTime() const { return refresh.predicted.load(); }
+    XrDuration refreshPeriod() const { return refresh.period.load(); }
+    // From the game's thread, between its frames: the refresh thread ends every frame from now on.
+    void startRefreshing(DrawRefresh draw)
+    {
+        if (refresh.thread.joinable()) stopRefreshing();
+        if (pending.active || uiPending.acquired || !session || !running) throw std::logic_error("refresh thread start while a frame is pending or the session is not running");
+        refresh.draw = std::move(draw);refresh.stop = false;refresh.failed = false;refresh.running = true;
+        refresh.countAtGameBegin = refresh.count.load();refresh.lockWaitMaxMs = refresh.drawMaxMs = 0;
+        refresh.thread = std::thread([this] { refreshLoop(); });
+        log.event("refresh_thread_started", "\"frame\":" + std::to_string(frames) + ",\"ui\":" + (refresh.uiValid ? "true" : "false"));
+    }
+    // From the game's thread, never with queueLock held: waits until the refresh thread has ended its frame (at most a
+    // refresh); the game's thread begins and ends the frames again.
+    void stopRefreshing() noexcept
+    {
+        if (!refresh.thread.joinable()) { refresh.running = false; return; }
+        refresh.stop = true;
+        refresh.wake.notify_all();
+        if (processExiting()) { try { refresh.thread.detach(); } catch (...) {} refresh.running = false; return; }
+        try { refresh.thread.join(); } catch (...) { try { refresh.thread.detach(); } catch (...) {} }
+        refresh.running = false;
+        // The swapchains' last released images are the refresh thread's: no eye may be left out until both are drawn again.
+        lastDrawnValid = {};
+        try { log.event("refresh_thread_stopped", "\"frame\":" + std::to_string(frames) + ",\"refreshes\":" + std::to_string(refresh.count.load()) +
+            ",\"drawn\":" + std::to_string(refresh.drawn.load()) + ",\"empty\":" + std::to_string(refresh.empty.load()) + ",\"failed\":" + (refresh.failed.load() ? "true" : "false")); } catch (...) {}
+    }
     bool beginFrame(const Prepare &prepare = {}) { return beginFrameContent(prepare,false); }
     // Upstream must explicitly identify a flat presentation. No missing eye or
     // render failure automatically changes a world frame into this mode.
     bool beginScreenFrame() { return beginFrameContent({},true); }
   private:
+    // The fov the game's frames are drawn with and the frames are submitted with (the visibility crop, the symmetric and
+    // turned frustums, one field for both eyes) - for the game's frames (gameFrame: the crop is decided, the lens mask
+    // looked for and the choice logged) and for the refresh thread's (2026-10-23), which shows the same pictures.
+    void shapeViews(std::array<XrView, 2> &views, bool gameFrame)
+    {
+        if (gameFrame && !crop.decided) decideFovCrop(views);
+        if (gameFrame && symmetricFov && cantedFov && cant.decided && !cant.masked && !cant.cacheWritten && !cant.lateGaveUp && xrGetVisibilityMaskKHR &&
+            fovCropRequested() && frames % 30 == 0)
+        {
+            if (frames <= 3000) lateMask(views);
+            else { cant.lateGaveUp = true; log.event("canted_fov_mask_never", "\"frames\":" + std::to_string(frames) + ",\"why\":" + jsonString(cant.lateWhy)); }
+        }
+        if (crop.active)
+            for (uint32_t eye = 0; eye < 2; ++eye) views[eye].fov = fovcrop::apply(views[eye].fov, crop.rect[eye]);
+        if (symmetricFov) {
+         std::array<XrFovf,2> runtimes{views[0].fov,views[1].fov},renders{};
+         for(uint32_t eye=0;eye<2;++eye) {
+            const auto runtime=views[eye].fov;
+            XrFovf render{};
+            if(cantedFov){   // turned toward the middle of the runtime's field (cantedEnvelope); pose and fov together
+                const auto& first=cant.runtime[eye];
+                const bool same=cant.masked&&std::abs(runtime.angleLeft-first.angleLeft)<1e-5f&&std::abs(runtime.angleRight-first.angleRight)<1e-5f&&
+                    std::abs(runtime.angleUp-first.angleUp)<1e-5f&&std::abs(runtime.angleDown-first.angleDown)<1e-5f;
+                const auto turned=same?cant.turned[eye]:cantedEnvelope(runtime);
+                views[eye].pose.orientation=normalized(multiply(views[eye].pose.orientation,turned.turn));
+                render=turned.fov;
+            }else render=symmetricEnvelope(runtime);
+            renders[eye]=render;
+         }
+         // One field for both eyes (2026-10-20, the user's 10-19 report "the trees change their detail a step apart in the
+         // two eyes"): each eye's symmetric field differs a little (the user's headset: 0.8920 / 0.9037 and 0.8955 / 0.8992 rad
+         // across / up, the Mock 0.9585 / 0.9251 and 0.9503 / 0.9332), and what the game sizes by the picture - the detail of
+         // a model by its size on the screen (guess) - then changes at another distance in each eye. Both eyes take the
+         // larger angle of each direction: the lenses' areas stay inside, a little under 1 % more field in one direction.
+         // EVR_EQUAL_EYE_FOV=0: each eye its own as before.
+         static const bool equalFov=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_EQUAL_EYE_FOV",v,sizeof v);return !(n==1&&v[0]=='0');}();
+         if(equalFov){
+            const float side=std::max({std::abs(renders[0].angleLeft),renders[0].angleRight,std::abs(renders[1].angleLeft),renders[1].angleRight});
+            const float up=std::max({renders[0].angleUp,std::abs(renders[0].angleDown),renders[1].angleUp,std::abs(renders[1].angleDown)});
+            for(auto& r:renders){r.angleLeft=-side;r.angleRight=side;r.angleUp=up;r.angleDown=-up;}
+         }
+         for(uint32_t eye=0;eye<2;++eye) {
+            const auto runtime=runtimes[eye];const auto render=renders[eye];
+            views[eye].fov=render; // same snapshot reaches game cameras and xrEndFrame
+            if(gameFrame&&(frames<=3||frames%300==0)){
+                const auto a=fovcrop::fromFov(runtime),b=fovcrop::fromFov(render);
+                std::ostringstream f;f<<std::setprecision(10)<<"\"frame\":"<<frames<<",\"eye\":"<<eye
+                 <<",\"runtime_fov\":["<<runtime.angleLeft<<','<<runtime.angleRight<<','<<runtime.angleUp<<','<<runtime.angleDown<<']'
+                 <<",\"render_fov\":["<<render.angleLeft<<','<<render.angleRight<<','<<render.angleUp<<','<<render.angleDown<<']'
+                 <<",\"pixel_density_ratio\":["<<a.width()/b.width()<<','<<a.height()/b.height()
+                 <<"],\"pose_unchanged\":"<<(cantedFov?"false":"true")<<",\"extent\":["<<targets[eye].width<<','<<targets[eye].height<<']';
+                log.event("symmetric_render_fov",f.str()+",\"equal_fov\":"+(equalFov?"true":"false"));
+            }
+         }
+        }
+    }
     bool beginFrameContent(const Prepare &prepare,bool screenOnly)
     {
         if (pending.active) throw std::logic_error("previous OpenXR frame is still pending");
         if (uiPending.acquired) throw std::logic_error("unresolved UI acquisition requires session teardown");
+        // The refresh thread ended (a failure) or a flat frame comes: the game's thread ends the frames again.
+        if (refresh.thread.joinable() && (screenOnly || !refresh.running.load())) stopRefreshing();
         if (!poll() || !running)
             return false;
+        if (refresh.running.load()) return beginGameFrame(prepare);
         XrFrameWaitInfo wi{XR_TYPE_FRAME_WAIT_INFO};
         XrFrameState fs{XR_TYPE_FRAME_STATE};
-        xrCheck(xrWaitFrame(session, &wi, &fs), "xrWaitFrame");
+        xrCheck(timed("xrWaitFrame", [&] { return xrWaitFrame(session, &wi, &fs); }), "xrWaitFrame");
         XrFrameBeginInfo bi{XR_TYPE_FRAME_BEGIN_INFO};
-        xrCheck(xrBeginFrame(session, &bi), "xrBeginFrame");
+        xrCheck(timed("xrBeginFrame", [&] { return xrBeginFrame(session, &bi); }), "xrBeginFrame");
+        // A steady two refreshes a frame (afw_pacing.hpp, pacing 1): a world frame that would be shown one refresh after
+        // the last frame is begun again for the refresh after it; the runtime drops the frame begun first (XR_FRAME_DISCARDED).
+        // Measured against the headset's own refresh, and once at most (2026-10-23, the user's headset run with SteamVR's
+        // motion smoothing: "half stutters and shakes" - the frames came 76 .. 111 ms apart; the runtime, halving the rate
+        // itself, gave a period of its own and the frame was begun again on top of it, up to three times).
+        if (fs.predictedDisplayPeriod > 0 && (!headsetPeriod || fs.predictedDisplayPeriod < headsetPeriod)) headsetPeriod = fs.predictedDisplayPeriod;
+        if (!screenOnly && afw::pacing.load() == 1 && lastShownTime && headsetPeriod > 0)
+            for (int again = 0; again < 1 && fs.predictedDisplayTime - lastShownTime < headsetPeriod * 3 / 2; ++again)
+            {
+                XrFrameState next{XR_TYPE_FRAME_STATE};
+                xrCheck(timed("xrWaitFrame (steady pacing)", [&] { return xrWaitFrame(session, &wi, &next); }), "xrWaitFrame (steady pacing)");
+                xrCheck(xrBeginFrame(session, &bi), "xrBeginFrame (steady pacing)");
+                fs = next;
+                afw::steadyBegunAgain.fetch_add(1);
+            }
+        lastShownTime = fs.predictedDisplayTime;
+        lastBegunTime = std::max<XrTime>(lastBegunTime, fs.predictedDisplayTime);
         frames++;
         pending = {};staleOverride = {};
         pending.active = true;
@@ -1055,56 +1223,7 @@ class OpenXrClient : private OpenXrDispatch
                 return true;
             }
             pending.snapshot.shouldRender = true;
-            if (!crop.decided) decideFovCrop(views);
-            if (symmetricFov && cantedFov && cant.decided && !cant.masked && !cant.cacheWritten && !cant.lateGaveUp && xrGetVisibilityMaskKHR &&
-                fovCropRequested() && frames % 30 == 0)
-            {
-                if (frames <= 3000) lateMask(views);
-                else { cant.lateGaveUp = true; log.event("canted_fov_mask_never", "\"frames\":" + std::to_string(frames) + ",\"why\":" + jsonString(cant.lateWhy)); }
-            }
-            if (crop.active)
-                for (uint32_t eye = 0; eye < 2; ++eye) views[eye].fov = fovcrop::apply(views[eye].fov, crop.rect[eye]);
-            if (symmetricFov) {
-             std::array<XrFovf,2> runtimes{views[0].fov,views[1].fov},renders{};
-             for(uint32_t eye=0;eye<2;++eye) {
-                const auto runtime=views[eye].fov;
-                XrFovf render{};
-                if(cantedFov){   // turned toward the middle of the runtime's field (cantedEnvelope); pose and fov together
-                    const auto& first=cant.runtime[eye];
-                    const bool same=cant.masked&&std::abs(runtime.angleLeft-first.angleLeft)<1e-5f&&std::abs(runtime.angleRight-first.angleRight)<1e-5f&&
-                        std::abs(runtime.angleUp-first.angleUp)<1e-5f&&std::abs(runtime.angleDown-first.angleDown)<1e-5f;
-                    const auto turned=same?cant.turned[eye]:cantedEnvelope(runtime);
-                    views[eye].pose.orientation=normalized(multiply(views[eye].pose.orientation,turned.turn));
-                    render=turned.fov;
-                }else render=symmetricEnvelope(runtime);
-                renders[eye]=render;
-             }
-             // One field for both eyes (2026-10-20, the user's 10-19 report "the trees change their detail a step apart in the
-             // two eyes"): each eye's symmetric field differs a little (the user's headset: 0.8920 / 0.9037 and 0.8955 / 0.8992 rad
-             // across / up, the Mock 0.9585 / 0.9251 and 0.9503 / 0.9332), and what the game sizes by the picture - the detail of
-             // a model by its size on the screen (guess) - then changes at another distance in each eye. Both eyes take the
-             // larger angle of each direction: the lenses' areas stay inside, a little under 1 % more field in one direction.
-             // EVR_EQUAL_EYE_FOV=0: each eye its own as before.
-             static const bool equalFov=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_EQUAL_EYE_FOV",v,sizeof v);return !(n==1&&v[0]=='0');}();
-             if(equalFov){
-                const float side=std::max({std::abs(renders[0].angleLeft),renders[0].angleRight,std::abs(renders[1].angleLeft),renders[1].angleRight});
-                const float up=std::max({renders[0].angleUp,std::abs(renders[0].angleDown),renders[1].angleUp,std::abs(renders[1].angleDown)});
-                for(auto& r:renders){r.angleLeft=-side;r.angleRight=side;r.angleUp=up;r.angleDown=-up;}
-             }
-             for(uint32_t eye=0;eye<2;++eye) {
-                const auto runtime=runtimes[eye];const auto render=renders[eye];
-                views[eye].fov=render; // same snapshot reaches game cameras and xrEndFrame
-                if(frames<=3||frames%300==0){
-                    const auto a=fovcrop::fromFov(runtime),b=fovcrop::fromFov(render);
-                    std::ostringstream f;f<<std::setprecision(10)<<"\"frame\":"<<frames<<",\"eye\":"<<eye
-                     <<",\"runtime_fov\":["<<runtime.angleLeft<<','<<runtime.angleRight<<','<<runtime.angleUp<<','<<runtime.angleDown<<']'
-                     <<",\"render_fov\":["<<render.angleLeft<<','<<render.angleRight<<','<<render.angleUp<<','<<render.angleDown<<']'
-                     <<",\"pixel_density_ratio\":["<<a.width()/b.width()<<','<<a.height()/b.height()
-                     <<"],\"pose_unchanged\":"<<(cantedFov?"false":"true")<<",\"extent\":["<<targets[eye].width<<','<<targets[eye].height<<']';
-                    log.event("symmetric_render_fov",f.str()+",\"equal_fov\":"+(equalFov?"true":"false"));
-                }
-             }
-            }
+            shapeViews(views, true);
             if (prepare)
                 prepare(views, vs, headLocation, fs.predictedDisplayTime, frames);
             if (screenOnly)return true;
@@ -1122,12 +1241,12 @@ class OpenXrClient : private OpenXrDispatch
                 pending.warpable[eye] = !drawn && (warp >> eye & 1);
                 if (!drawn && !pending.warpable[eye]) continue;
                 XrSwapchainImageAcquireInfo a{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-                xrCheck(xrAcquireSwapchainImage(targets[eye].handle, &a, &indices[eye]),
+                xrCheck(timed("xrAcquireSwapchainImage", [&] { return xrAcquireSwapchainImage(targets[eye].handle, &a, &indices[eye]); }),
                         "xrAcquireSwapchainImage");
                 acquired[eye] = true;
                 XrSwapchainImageWaitInfo w{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
                 w.timeout = 1000000000;
-                auto result = xrWaitSwapchainImage(targets[eye].handle, &w);
+                auto result = timed("xrWaitSwapchainImage", [&] { return xrWaitSwapchainImage(targets[eye].handle, &w); });
                 if (result != XR_SUCCESS)
                     throw std::runtime_error("xrWaitSwapchainImage timeout/error " + std::to_string(result));
                 ready[eye] = true;
@@ -1139,6 +1258,229 @@ class OpenXrClient : private OpenXrDispatch
             abortFrame();
             throw;
         }
+    }
+    // A game frame while the refresh thread ends the frames: at most one a refresh (the game's thread waits for a refresh
+    // after the last game frame began, a tenth of a second at the most), its views for the time EVR_AFW_FILL_LEAD (2)
+    // refreshes after the last refresh's - about when its picture is first shown - and no image of the runtime's.
+    bool beginGameFrame(const Prepare &prepare)
+    {
+        {
+            std::unique_lock<std::mutex> l(refresh.wakeLock);
+            refresh.wake.wait_for(l, std::chrono::milliseconds(100), [&] { return refresh.count.load() > refresh.countAtGameBegin || !refresh.running.load(); });
+        }
+        if (!refresh.running.load()) { stopRefreshing(); return beginFrameContent(prepare, false); }
+        refresh.countAtGameBegin = refresh.count.load();
+        static const int lead = [] { const char *v = std::getenv("EVR_AFW_FILL_LEAD"); const int n = v ? std::atoi(v) : 2; return n >= 0 && n <= 6 ? n : 2; }();
+        const int64_t period = refresh.period.load() > 0 ? refresh.period.load() : 11111111;
+        const int64_t steadyNow = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        XrTime time = refresh.clockKnown.load() ? XrTime(steadyNow + refresh.clockOffset.load() + period * (lead - 1)) : refresh.predicted.load() + period * lead;
+        // never before the last frame's (2026-10-23, headset: the steady clock's offset moved back after a hitch, the time went
+        // back, the hands' sample refused it and the session ended - the headset showed the flat plate)
+        time = std::max<XrTime>(time, lastBegunTime + 1000000);
+        lastBegunTime = time;
+        frames++;
+        ++refresh.gameFrames;
+        pending = {};staleOverride = {};
+        pending.active = true;pending.async = true;
+        pending.snapshot.frame = frames;
+        pending.snapshot.predictedDisplayTime = time;
+        auto &views = pending.snapshot.views;
+        try
+        {
+            XrViewState vs{XR_TYPE_VIEW_STATE};
+            XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
+            li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+            li.displayTime = time;
+            li.space = local;
+            uint32_t n = 0;
+            xrCheck(xrLocateViews(session, &li, &vs, 2, &n, views.data()), "xrLocateViews (game frame)");
+            headLocation = {XR_TYPE_SPACE_LOCATION};
+            xrCheck(xrLocateSpace(headSpace, local, time, &headLocation), "xrLocateSpace HMD (game frame)");
+            if ((headLocation.locationFlags & (XR_SPACE_LOCATION_ORIENTATION_VALID_BIT | XR_SPACE_LOCATION_POSITION_VALID_BIT)) == 3)
+            {
+                auto h = headLocation.pose;
+                movementYaw = heading(h.orientation, movementYaw);
+                auto aim = rotate(h.orientation, {0, 0, -1});
+                std::ostringstream hd;
+                hd << std::setprecision(10) << "\"frame\":" << frames << ",\"pose_float_digits\":10,\"position\":[" << h.position.x << ',' << h.position.y
+                   << ',' << h.position.z << "],\"orientation\":[" << h.orientation.x << ',' << h.orientation.y << ',' << h.orientation.z << ',' << h.orientation.w
+                   << "],\"head_forward\":[" << aim.x << ',' << aim.y << ',' << aim.z
+                   << "],\"movement_yaw\":" << movementYaw << ",\"mode\":" << jsonString(diagnosticCameraMode) << ",\"game_frame\":true";
+                log.event("hmd", hd.str(), true);
+            }
+            const XrViewStateFlags valid = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT;
+            if (n != 2 || (vs.viewStateFlags & valid) != valid)
+            {
+                emptyFrames++;
+                log.event("empty_frame", "\"frame\":" + std::to_string(frames) + ",\"reason\":\"tracking_invalid\",\"game_frame\":true");
+                return true;
+            }
+            pending.snapshot.shouldRender = true;
+            {
+                std::lock_guard<std::recursive_mutex> hold(queueLock);   // the refresh thread shapes its views from the same state
+                shapeViews(views, true);
+            }
+            if (prepare)
+                prepare(views, vs, headLocation, time, frames);
+            pending.snapshot.eyeMask = nextEyeMask;
+            nextEyeMask = 3;warpMask = 0;
+            return true;
+        }
+        catch (...)
+        {
+            abortFrame();
+            throw;
+        }
+    }
+    // The refresh thread: every refresh of the headset a frame - its views, the layer's warped pictures of both eyes in
+    // the acquired images, the UI image the game's thread released last - until stopRefreshing (or a failure: the game's
+    // thread then ends the frames again, beginFrameContent).
+    void refreshLoop() noexcept
+    {
+        try
+        {
+            while (!refresh.stop.load())
+            {
+                XrFrameWaitInfo wi{XR_TYPE_FRAME_WAIT_INFO};
+                XrFrameState fs{XR_TYPE_FRAME_STATE};
+                xrCheck(xrWaitFrame(session, &wi, &fs), "xrWaitFrame (refresh)");
+                const auto lockAsked = std::chrono::steady_clock::now();
+                {
+                    const int64_t offset = int64_t(fs.predictedDisplayTime) - std::chrono::duration_cast<std::chrono::nanoseconds>(lockAsked.time_since_epoch()).count();
+                    const int64_t before = refresh.clockOffset.load();
+                    refresh.clockOffset = refresh.clockKnown.load() ? before + (offset - before) / 8 : offset;refresh.clockKnown = true;
+                }
+                std::lock_guard<std::recursive_mutex> hold(queueLock);
+                const auto lockHeld = std::chrono::steady_clock::now();
+                XrFrameBeginInfo bi{XR_TYPE_FRAME_BEGIN_INFO};
+                xrCheck(xrBeginFrame(session, &bi), "xrBeginFrame (refresh)");
+                XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
+                end.displayTime = fs.predictedDisplayTime;
+                end.environmentBlendMode = blend;
+                const auto n = refresh.count.load() + 1;
+                std::array<XrView, 2> views{{{XR_TYPE_VIEW}, {XR_TYPE_VIEW}}};
+                std::array<XrCompositionLayerProjectionView, 2> pv{{{XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}}};
+                XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+                XrCompositionLayerQuad quad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+                std::array<XrCompositionLayerQuad, 12> partQuads{};
+                std::array<const XrCompositionLayerBaseHeader *, 14> layers{reinterpret_cast<const XrCompositionLayerBaseHeader *>(&layer)};
+                bool shown = false;double drawMs = 0;
+                if (fs.shouldRender)
+                {
+                    XrViewState vs{XR_TYPE_VIEW_STATE};
+                    XrViewLocateInfo li{XR_TYPE_VIEW_LOCATE_INFO};
+                    li.viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+                    li.displayTime = fs.predictedDisplayTime;
+                    li.space = local;
+                    uint32_t c = 0;
+                    xrCheck(xrLocateViews(session, &li, &vs, 2, &c, views.data()), "xrLocateViews (refresh)");
+                    const XrViewStateFlags valid = XR_VIEW_STATE_ORIENTATION_VALID_BIT | XR_VIEW_STATE_POSITION_VALID_BIT;
+                    if (c == 2 && (vs.viewStateFlags & valid) == valid && refresh.draw)
+                    {
+                        shapeViews(views, false);
+                        std::array<uint32_t, 2> indices{};
+                        std::array<bool, 2> acquired{};
+                        try
+                        {
+                            for (uint32_t eye = 0; eye < 2; ++eye)
+                            {
+                                XrSwapchainImageAcquireInfo a{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+                                xrCheck(xrAcquireSwapchainImage(targets[eye].handle, &a, &indices[eye]), "xrAcquireSwapchainImage (refresh)");
+                                acquired[eye] = true;
+                                XrSwapchainImageWaitInfo w{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+                                w.timeout = 1000000000;
+                                const auto result = xrWaitSwapchainImage(targets[eye].handle, &w);
+                                if (result != XR_SUCCESS) throw std::runtime_error("xrWaitSwapchainImage (refresh) " + std::to_string(result));
+                            }
+                            const auto drawStart = std::chrono::steady_clock::now();
+                            shown = refresh.draw(views, fs.predictedDisplayTime, indices, n);
+                            drawMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - drawStart).count();
+                        }
+                        catch (...)
+                        {
+                            for (uint32_t eye = 0; eye < 2; ++eye)
+                                if (acquired[eye]) { XrSwapchainImageReleaseInfo r{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO}; xrReleaseSwapchainImage(targets[eye].handle, &r); }
+                            XrFrameEndInfo empty{XR_TYPE_FRAME_END_INFO};empty.displayTime = fs.predictedDisplayTime;empty.environmentBlendMode = blend;
+                            xrEndFrame(session, &empty);
+                            throw;
+                        }
+                        for (uint32_t eye = 0; eye < 2; ++eye)
+                        {
+                            XrSwapchainImageReleaseInfo r{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+                            xrCheck(xrReleaseSwapchainImage(targets[eye].handle, &r), "xrReleaseSwapchainImage (refresh)");
+                            pv[eye].pose = views[eye].pose;pv[eye].fov = views[eye].fov;
+                            pv[eye].subImage.swapchain = targets[eye].handle;
+                            pv[eye].subImage.imageRect.extent = {int32_t(targets[eye].width), int32_t(targets[eye].height)};
+                        }
+                    }
+                }
+                if (shown)
+                {
+                    layer.space = local;layer.viewCount = 2;layer.views = pv.data();
+                    end.layerCount = 1;end.layers = layers.data();
+                    // The UI image the game's thread released last, as it placed it (finishFrame's layers).
+                    if (refresh.uiValid && uiTarget.handle)
+                    {
+                        const auto &ui = refresh.ui;
+                        if (ui.partCount)
+                        {
+                            for (uint32_t i = 0; i < ui.partCount && i < partQuads.size(); ++i)
+                            {
+                                const auto &part = ui.parts[i];auto &q = partQuads[i];
+                                q = XrCompositionLayerQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+                                q.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                                q.space = part.localSpace ? local : headSpace;q.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                                q.subImage.swapchain = uiTarget.handle;
+                                q.subImage.imageRect.offset = {part.x, part.y};q.subImage.imageRect.extent = {part.pixelsX, part.pixelsY};
+                                q.pose = part.pose;q.size = {part.width, part.height};
+                                layers[end.layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&q);
+                            }
+                        }
+                        else
+                        {
+                            quad.layerFlags = ui.opaque ? 0 : XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                            quad.space = ui.localSpace ? local : headSpace;quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                            quad.subImage.swapchain = uiTarget.handle;
+                            quad.subImage.imageRect.extent = {int32_t(uiTarget.width), int32_t(uiTarget.height)};
+                            quad.pose = identityPose();quad.pose.position.z = -ui.distance;
+                            if (ui.localSpace) quad.pose = compose(ui.origin, quad.pose);
+                            quad.size = {ui.width, ui.width * float(uiTarget.height) / float(uiTarget.width)};
+                            layers[end.layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader *>(&quad);
+                        }
+                    }
+                }
+                xrCheck(xrEndFrame(session, &end), "xrEndFrame (refresh)");
+                refresh.predicted = fs.predictedDisplayTime;refresh.period = fs.predictedDisplayPeriod;
+                refresh.count = n;
+                if (shown) ++refresh.drawn; else ++refresh.empty;
+                const double lockMs = std::chrono::duration<double, std::milli>(lockHeld - lockAsked).count();
+                refresh.lockWaitMaxMs = std::max(refresh.lockWaitMaxMs, lockMs);refresh.drawMaxMs = std::max(refresh.drawMaxMs, drawMs);
+                if (n <= 3 || n % 900 == 0)
+                {
+                    std::ostringstream o;
+                    o << std::setprecision(5) << "\"refresh\":" << n << ",\"predicted_time\":" << fs.predictedDisplayTime << ",\"period\":" << fs.predictedDisplayPeriod
+                      << ",\"shown\":" << (shown ? "true" : "false") << ",\"layers\":" << end.layerCount << ",\"drawn\":" << refresh.drawn.load() << ",\"empty\":" << refresh.empty.load()
+                      << ",\"game_frames\":" << refresh.gameFrames.load() << ",\"lock_wait_ms\":" << lockMs << ",\"lock_wait_max_ms\":" << refresh.lockWaitMaxMs
+                      << ",\"draw_ms\":" << drawMs << ",\"draw_max_ms\":" << refresh.drawMaxMs;
+                    log.event("refresh_frame", o.str());
+                }
+                {
+                    std::lock_guard<std::mutex> l(refresh.wakeLock);
+                }
+                refresh.wake.notify_all();
+            }
+        }
+        catch (const std::exception &e)
+        {
+            refresh.failed = true;
+            try { log.event("refresh_thread_failed", "\"refreshes\":" + std::to_string(refresh.count.load()) + ",\"reason\":" + jsonString(e.what())); } catch (...) {}
+        }
+        catch (...)
+        {
+            refresh.failed = true;
+        }
+        refresh.running = false;
+        refresh.wake.notify_all();
     }
   public:
     // Call only after that eye's graphics work has been submitted with the
@@ -1154,6 +1496,33 @@ class OpenXrClient : private OpenXrDispatch
     void finishFrame()
     {
         if (!pending.active) throw std::logic_error("no pending OpenXR frame to finish");
+        if (pending.async)
+        {
+            // A game frame of the refresh thread's time: its UI image goes to the refresh thread; nothing is ended here.
+            try
+            {
+                std::lock_guard<std::recursive_mutex> hold(queueLock);
+                if (pending.uiAttempted)
+                {
+                    if (!uiPending.ready || !uiPending.rendered || uiPending.frame != pending.snapshot.frame)
+                        throw std::logic_error("cannot submit unfinished UI frame");
+                    const auto placement = uiPending.placement;
+                    releaseUi();
+                    refresh.ui = placement;refresh.uiValid = true;refresh.uiFrame = pending.snapshot.frame;
+                }
+                const auto frame = pending.snapshot.frame;const auto time = pending.snapshot.predictedDisplayTime;const auto eyes = pending.snapshot.eyeMask;
+                const bool shown = pending.snapshot.shouldRender;
+                pending = {};
+                log.event("game_frame", "\"frame\":" + std::to_string(frame) + ",\"predicted_time\":" + std::to_string(time) + ",\"eyes\":" + std::to_string(eyes) +
+                    ",\"rendered\":" + (shown ? "true" : "false") + ",\"refreshes\":" + std::to_string(refresh.count.load()), true);
+            }
+            catch (...)
+            {
+                abortFrame();
+                throw;
+            }
+            return;
+        }
         const auto &snapshot = pending.snapshot;
         XrFrameEndInfo end{XR_TYPE_FRAME_END_INFO};
         end.displayTime = snapshot.predictedDisplayTime;
@@ -1215,6 +1584,7 @@ class OpenXrClient : private OpenXrDispatch
             std::array<XrCompositionLayerQuad,12> partQuads{};
             std::array<const XrCompositionLayerBaseHeader*,14> layers{reinterpret_cast<const XrCompositionLayerBaseHeader*>(&layer)};
             end.layerCount=snapshot.screenOnly?0:1;end.layers=layers.data();
+            if (pending.uiAttempted) { refresh.ui = uiPending.placement;refresh.uiValid = true;refresh.uiFrame = snapshot.frame; }
             if (pending.uiAttempted && uiPending.placement.partCount) {
                 // The UI image as several quads (the plate around the aim cluster, and the cluster at the aimed point).
                 for (uint32_t i = 0; i < uiPending.placement.partCount; ++i) {
@@ -1242,7 +1612,7 @@ class OpenXrClient : private OpenXrDispatch
                 layers[end.layerCount++]=reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad);
             }
             pending.endAttempted = true;staleOverride = {};
-            xrCheck(xrEndFrame(session, &end), "xrEndFrame");
+            xrCheck(timed("xrEndFrame", [&] { return xrEndFrame(session, &end); }), "xrEndFrame");
             if(pending.uiAttempted)log.event("ui_quad_submitted","\"frame\":"+std::to_string(snapshot.frame)+",\"layers\":"+std::to_string(end.layerCount)+
                 ",\"premultiplied\":true,\"parts\":"+std::to_string(uiPending.placement.partCount)+",\"space\":"+jsonString(uiPending.placement.localSpace?"LOCAL":"VIEW")+
                 ",\"distance_m\":"+std::to_string(uiPending.placement.distance)+",\"width_m\":"+std::to_string(quad.size.width)+
@@ -1271,7 +1641,7 @@ class OpenXrClient : private OpenXrDispatch
     void screenInsteadOfEyes()
     {
         if (!pending.active || !pending.snapshot.shouldRender || pending.snapshot.screenOnly || pending.rendered[0] ||
-            pending.rendered[1] || pending.uiAttempted)
+            pending.rendered[1] || pending.uiAttempted || pending.async)
             throw std::logic_error("this frame cannot become a screen frame");
         try
         {
@@ -1300,6 +1670,14 @@ class OpenXrClient : private OpenXrDispatch
         const auto snapshot = pendingFrame();
         if (pending.rendered[0] || pending.rendered[1] || (pending.uiAttempted && uiPending.rendered))
             throw std::logic_error("cannot skip a frame after marking an XR eye rendered");
+        if (pending.async)
+        {
+            // the refresh thread goes on showing the last pictures
+            try { std::lock_guard<std::recursive_mutex> hold(queueLock); releaseUi(); } catch (...) { abortFrame("skip_frame_failure"); throw; }
+            pending = {};++emptyFrames;
+            log.event("empty_frame", "\"frame\":" + std::to_string(snapshot.frame) + ",\"reason\":" + jsonString(reason) + ",\"application_deferred\":true,\"game_frame\":true");
+            return;
+        }
         try
         {
             releaseUi();
@@ -1333,6 +1711,13 @@ class OpenXrClient : private OpenXrDispatch
     void abortFrame(const char *reason = "frame_failure") noexcept
     {
         if (!pending.active) return;
+        if (pending.async)
+        {
+            try { std::lock_guard<std::recursive_mutex> hold(queueLock); releaseUi(); } catch (...) {}
+            pending = {};
+            try { log.event("fallback", "\"reason\":" + jsonString(reason) + ",\"game_frame\":true"); } catch (...) {}
+            return;
+        }
         try { releaseUi(); } catch (const std::exception& e) {
             try { log.event("ui_cleanup_deferred","\"reason\":"+jsonString(e.what())); } catch (...) {}
         }
@@ -1383,6 +1768,7 @@ class OpenXrClient : private OpenXrDispatch
     {
         if (!instance)
             return;
+        stopRefreshing();
         if (processExiting()) // the runtime may be half gone (process_exit.hpp); the handles end with the process
             return;
         if (vk.device && vk.vkDeviceWaitIdle)

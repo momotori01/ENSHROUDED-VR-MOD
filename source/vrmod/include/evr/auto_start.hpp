@@ -74,7 +74,9 @@ inline bool applyVr(const std::string& text,const std::string& mode,const Render
         record.changes.push_back({name,original(name,now),value});out=out.substr(0,b)+value+out.substr(e);return true;};
     size_t b=0,e=0;if(!field(text,"dlss",b,e)){reason="the game's setting 'dlss' was not found exactly once";return false;}
     const auto dlssNow=text.substr(b,e-b);
-    if(!put("antiAliasing",mode=="Dlaa"?"Dlaa":"Dlss"))return false;
+    // No mode (2026-10-23: the setting exe's DLSS row is gone): the game's own mode stays, and the player's DLAA with it.
+    size_t ab=0,ae=0;const bool dlaaNow=field(text,"antiAliasing",ab,ae)&&text.substr(ab,ae-ab)=="Dlaa";
+    if(!put("antiAliasing",mode=="Dlaa"||(mode.empty()&&dlaaNow)?"Dlaa":"Dlss"))return false;
     // DLAA belongs to antiAliasing; the upscaling mode the player chose stays for when they go back to DLSS.
     if(!put("dlss",mode=="Dlaa"||mode.empty()?dlssNow:mode))return false;
     // A graphics card without DLSS (2026-10-20, a guest's report: AMD Radeon RX 9070 XT, "Skipping DLSS on non-Nvidia
@@ -110,7 +112,7 @@ using Environment=std::vector<std::pair<std::wstring,std::wstring>>;   // an emp
 // EVR_SCREEN_XR (user, 2026-10-14: "from the start, consistently operable in VR is a must"): the session of the eyes
 // is made at the game's first presents and the game's picture is shown on a plate in the headset until a world's eyes
 // are drawn (layer/screen_xr.hpp); it is made with the eye size of the settings, which the world's session then keeps.
-inline Environment vrEnvironment(const Paths& p,const Shaders& s,bool online,double renderScale=.8,bool alternateEyes=false,int eyeWarp=0){
+inline Environment vrEnvironment(const Paths& p,const Shaders& s,bool online,double renderScale=.8,bool alternateEyes=false,int eyeWarp=0,int afwPacing=0){
     const auto scaleText=[&]{const auto t=settings::text(renderScale);return std::wstring(t.begin(),t.end());}();
     Environment e{
         {L"EVR_SCREEN_XR",L"1"},{L"EVR_SCREEN_XR_SCALE",scaleText},
@@ -136,6 +138,8 @@ inline Environment vrEnvironment(const Paths& p,const Shaders& s,bool online,dou
         {L"EVR_ONLINE_SYNC",online?L"1":L""},
         {L"EVR_ALTERNATE_EYES",alternateEyes?L"1":L""},
         {L"EVR_EYE_WARP",alternateEyes&&eyeWarp==2?L"2":alternateEyes&&eyeWarp==1?L"1":L""},
+        // the alternate eyes' pacing (vr_settings.hpp afwPacing; include/evr/afw_pacing.hpp), changed in the game's VR settings too
+        {L"EVR_AFW_PACING",alternateEyes&&afwPacing>=1&&afwPacing<=2?std::to_wstring(afwPacing):L""},
         // Only the tests' runtime reads these; nothing of an earlier shell may reach a play session.
         {L"EVR_MOCK_HAND_SEQUENCE",L""},{L"EVR_MOCK_NAV_FILE",L""},{L"EVR_MOCK_NAV_HAND_INPUT",L""},{L"EVR_MOCK_VISIBILITY_MASK",L""},{L"EVR_FOV_CROP_MARGIN_DEG",L""},{L"EVR_CAPTURE_SHADERS",L""},
     };

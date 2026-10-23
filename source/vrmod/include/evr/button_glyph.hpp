@@ -13,6 +13,8 @@
 namespace evr::glyph {
 // The label that is drawn as a swing (no letters).
 inline const std::wstring swingLabel=L"<swing>";
+// The label drawn as a smaller swing over "RG": a swing with the right grip held (a melee weapon's special ability).
+inline const std::wstring gripSwingLabel=L"<RG+swing>";
 // round: a circle instead of the rounded square (2026-10-21, the user: "the A / B kind round, so they are told apart from
 // the square ones - the grips and the like").
 struct Style {uint8_t plate=246,ink=34;float rim=.05f,margin=.06f,radius=.24f,text=.56f;bool round=false;};
@@ -55,17 +57,25 @@ inline std::vector<uint8_t> paint(uint32_t width,uint32_t height,const std::wstr
         if(size.cx<=room)break;}
     // swingLabel: no letters but a stroke - an arc over the top with its arrow head (2026-10-21, the user: "what is done by
     // swinging alone, the wand or a weapon: an icon that looks like swinging").
+    // a swing: an arc of radius R about (cx, cy), clockwise from 160 to 28 degrees, with its arrow head (k: the size against H)
+    const auto swing=[&](float cx,float cy,float R,float k){
+        constexpr float d=3.14159265f/180;const float a0=160*d,a1=28*d;
+        const auto at=[&](float a){return POINT{LONG(cx+R*std::cos(a)),LONG(cy-R*std::sin(a))};};
+        HPEN pen=CreatePen(PS_SOLID,std::max(2,int(H*.12f*k)),RGB(255,255,255));const auto oldPen=SelectObject(dc,pen);
+        SetArcDirection(dc,AD_CLOCKWISE);const auto p0=at(a0),p1=at(a1);
+        Arc(dc,LONG(cx-R),LONG(cy-R),LONG(cx+R),LONG(cy+R),p0.x,p0.y,p1.x,p1.y);
+        SelectObject(dc,oldPen);DeleteObject(pen);
+        const float dx=std::sin(a1),dy=std::cos(a1),L=H*.22f*k,w=H*.15f*k;   // along the stroke at its end, and across it
+        const POINT head[3]{{LONG(p1.x+dx*L),LONG(p1.y+dy*L)},{LONG(p1.x-dy*w),LONG(p1.y+dx*w)},{LONG(p1.x+dy*w),LONG(p1.y-dx*w)}};
+        SelectObject(dc,GetStockObject(WHITE_BRUSH));SelectObject(dc,GetStockObject(NULL_PEN));Polygon(dc,head,3);};
     const auto ink=mask([&]{
-        if(label==swingLabel){
-            const float cx=W*.45f,cy=H*.74f,R=std::min(W*.29f,H*.4f);constexpr float d=3.14159265f/180;const float a0=160*d,a1=28*d;
-            const auto at=[&](float a){return POINT{LONG(cx+R*std::cos(a)),LONG(cy-R*std::sin(a))};};
-            HPEN pen=CreatePen(PS_SOLID,std::max(2,int(H*.12f)),RGB(255,255,255));const auto oldPen=SelectObject(dc,pen);
-            SetArcDirection(dc,AD_CLOCKWISE);const auto p0=at(a0),p1=at(a1);
-            Arc(dc,LONG(cx-R),LONG(cy-R),LONG(cx+R),LONG(cy+R),p0.x,p0.y,p1.x,p1.y);
-            SelectObject(dc,oldPen);DeleteObject(pen);
-            const float dx=std::sin(a1),dy=std::cos(a1),L=H*.22f,w=H*.15f;   // along the stroke at its end, and across it
-            const POINT head[3]{{LONG(p1.x+dx*L),LONG(p1.y+dy*L)},{LONG(p1.x-dy*w),LONG(p1.y+dx*w)},{LONG(p1.x+dy*w),LONG(p1.y-dx*w)}};
-            SelectObject(dc,GetStockObject(WHITE_BRUSH));SelectObject(dc,GetStockObject(NULL_PEN));Polygon(dc,head,3);
+        if(label==swingLabel){swing(W*.45f,H*.74f,std::min(W*.29f,H*.4f),1.f);return;}
+        // gripSwingLabel (2026-10-23, the user: "is the way to cast it shown in the UI too?"): the swing in the upper half, "RG" below
+        if(label==gripSwingLabel){
+            swing(W*.47f,H*.5f,std::min(W*.22f,H*.27f),.72f);
+            HFONT small=CreateFontW(-int(H*.34f),0,0,0,FW_BOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,OUT_TT_PRECIS,CLIP_DEFAULT_PRECIS,NONANTIALIASED_QUALITY,DEFAULT_PITCH|FF_SWISS,L"Segoe UI");
+            const auto oldFont=SelectObject(dc,small);SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(255,255,255));RECT r{0,int(H*.5f),W,int(H*.9f)};
+            DrawTextW(dc,L"RG",2,&r,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);SelectObject(dc,oldFont);DeleteObject(small);
             return;}
         SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(255,255,255));RECT r{0,0,W,H};
         DrawTextW(dc,label.c_str(),int(label.size()),&r,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);});

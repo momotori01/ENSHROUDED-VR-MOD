@@ -25,9 +25,21 @@ namespace evr::motion {
 // moment it goes down until it comes up, and the wheel does not open.
 struct QuickSlotSettings {
  bool roll=true;             // the wrist's roll as a dial (false: the hand's movement)
- float rollEngage=.2094f,rollRelease=.1396f,rollGain=2.f;   // 12 and 8 degrees; the wheel turns twice as far as the wrist
+ // 12 and 8 degrees. The stick's angle counts from the edge of the centre (rollRelease), not from the centre itself (2026-10-23,
+ // the user: "the dial sticks at the top and jumps - the top two items are hard to choose"): the centre, where nothing is
+ // chosen, lay on the top item's direction, so the top was reached only at the edge of the centre and the dial jumped across
+ // it. Now just past the centre either way is the top, a turn to the right goes clockwise from it, to the left
+ // counter-clockwise; the gain 2.2 keeps the bottom at about a quarter turn of the wrist (8 + 82 degrees).
+ float rollEngage=.2094f,rollRelease=.1396f,rollGain=2.2f;
  float rollCentre=.7854f;    // 45 degrees counter-clockwise from level: the wrist's rest on the wheel (nothing chosen)
  bool rollFromOpen=false;    // true: the centre is the wrist's roll when the wheel opened
+ // The stick's hold (2026-10-23; the user's report 014216 "the UI and the quick slots blink": while the wheel was used,
+ // the wrist at 10..12 degrees turned the pointed slot back and forth within a few frames). The stick keeps its angle until
+ // the wrist has turned it this much further, then takes the wrist's angle: a wrist shaking on the border of two items
+ // leaves the wheel on one. 2 degrees of the stick, 1 of the wrist (user, 15:00 the same day: "the dial catches with 3 degrees,
+ // make it 1"). (Until 14:50 the stick went to the middle of one of eight slots - the wheel has more items, and those
+ // between the eight could not be chosen.) 0: no hold.
+ float rollHold=.0349f;
  uint64_t holdMs=250;        // "long press": shorter is the ordinary Y tap
  uint64_t tapMs=100;         // length of that Y tap
  float select=.07f;          // VHVR: 7 cm from the centre points at an item
@@ -44,7 +56,8 @@ class QuickSlot {
  QuickSlotSettings settings_{};State state_=State::Blocked;
  uint64_t since_=0,session_=0,origin_=0;XrTime time_=0;
  Vec3 centre_{},right_{1,0,0};Quat openRoll_{0,0,0,1};float x_=0,y_=0,twist_=0;bool pointing_=false;
- void idle(State s=State::Idle){state_=s;pointing_=false;x_=y_=0;}
+ float stick_=0;bool stickHeld_=false;   // the stick's angle (from the top, clockwise) while pointing
+ void idle(State s=State::Idle){state_=s;pointing_=false;x_=y_=0;stickHeld_=false;}
 public:
  static constexpr uint16_t wheel=LivePadMapper::RB,tap=LivePadMapper::Y;
  QuickSlot()=default;explicit QuickSlot(QuickSlotSettings s):settings_(s){}
@@ -87,7 +100,7 @@ public:
    if(down&&holdInteract){state_=State::Hold;out.held=true;}
    else if(!down){state_=State::Tap;since_=now;out.tapped=true;out.buttons=tap;}
    else if(now-since_>=settings_.holdMs){
-    state_=State::Open;centre_=hand.grip.position;openRoll_=hand.grip.orientation;twist_=0;out.opened=true;
+    state_=State::Open;centre_=hand.grip.position;openRoll_=hand.grip.orientation;twist_=0;out.opened=true;stickHeld_=false;
     const auto forward=rotate(head.orientation,{0,0,-1});Vec3 flat{forward.x,0,forward.z};
     const float size=length(flat);
     // Sideways as seen by the user: level, to the right of where the head faces.
@@ -100,7 +113,12 @@ public:
     else{float t=settings_.rollCentre-levelRoll(hand.grip.orientation);while(t>pi)t-=2*pi;while(t<=-pi)t+=2*pi;twist_=t;}
     const float size=std::abs(twist_);
     if(size>settings_.rollEngage)pointing_=true;else if(size<settings_.rollRelease)pointing_=false;
-    if(pointing_){const float angle=settings_.rollGain*twist_;x_=std::sin(angle);y_=std::cos(angle);}else x_=y_=0;
+    if(!pointing_){x_=y_=0;stickHeld_=false;}
+    else{
+     const float angle=settings_.rollGain*std::copysign(std::max(0.f,size-settings_.rollRelease),twist_);float d=angle-stick_;while(d>pi)d-=2*pi;while(d<=-pi)d+=2*pi;
+     if(!stickHeld_||std::abs(d)>settings_.rollHold){stick_=angle;stickHeld_=true;}
+     x_=std::sin(stick_);y_=std::cos(stick_);
+    }
    }else{
    const auto d=hand.grip.position-centre_;const float sideways=dot(d,right_),up=d.y,distance=std::hypot(sideways,up);
    if(distance>settings_.select)pointing_=true;else if(distance<settings_.release)pointing_=false;

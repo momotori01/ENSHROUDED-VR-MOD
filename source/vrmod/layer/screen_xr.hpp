@@ -353,7 +353,15 @@ inline Mark controllers(LiveNativeXr& live,const OpenXrFrameSnapshot& snapshot){
     return mark;
 }
 // The pending frame - a screen frame of our own, or a world frame without eyes that became one - shows the plate.
+inline void frameBody(LiveNativeXr& live,bool own);
+// The plate's frame. With the mod's own queue (afw_pacing.hpp, pacing 2) the plate's copy reads the picture the game's
+// queue saved: the copy waits for the game's queue and the game's queue for it (native_xr.hpp OwnQueueScope).
 inline void frame(LiveNativeXr& live,bool own){
+    std::unique_lock<std::recursive_mutex> hold(live.xr->queueLock,std::defer_lock);if(live.ownQueue)hold.lock();
+    OwnQueueScope ownQueue(live);
+    frameBody(live,own);
+}
+inline void frameBody(LiveNativeXr& live,bool own){
     auto& xr=*live.xr;const auto snapshot=xr.pendingFrame();
     if(!snapshot.shouldRender){xr.finishFrame();return;}
     const auto now=GetTickCount64();const auto& head=xr.headLocation;const bool headValid=(head.locationFlags&3)==3;
@@ -393,6 +401,7 @@ inline void frame(LiveNativeXr& live,bool own){
 // A world frame that the hooks end without eyes: the plate instead of nothing. True = the frame is ended here.
 inline bool insteadOfEyes(LiveNativeXr& live) noexcept {
     if(!requested()||state.failed||!state.v||!state.written||!live.xr->hasPendingFrame())return false;
+    if(live.xr->pendingAsync())return false;   // the refresh thread goes on showing the eyes
     try{
         const bool warming=live.worldSession&&!live.worldPairs;               // the picture from before the session stays
         if(!warming&&presents.load()-state.savedPresent>4)return false;          // no picture of this moment
@@ -431,7 +440,7 @@ inline void present(VkQueue queue,const VkPresentInfoKHR* p,VkPresentInfoKHR& re
         }
         auto& live=*liveNativeXr;
         modUpdate::start();                                                        // once: is a newer mod out?
-        if(live.thread!=GetCurrentThreadId()||live.device!=dd.device||queue!=live.xr->vk.queue){
+        if(live.thread!=GetCurrentThreadId()||live.device!=dd.device||queue!=(live.ownQueue?live.own.game:live.xr->vk.queue)){
             if(!state.threadTold){state.threadTold=true;note("screen_xr_off","\"reason\":\"another thread, device or queue presents than the session's\",\"thread\":"+std::to_string(GetCurrentThreadId())+",\"session_thread\":"+std::to_string(live.thread));}
             return;}
         const bool worldFrame=live.xr->hasPendingFrame();

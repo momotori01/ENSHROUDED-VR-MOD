@@ -33,6 +33,64 @@ inline void noteDepth(uintptr_t p){
         if(n<=2||r)logFile->event("dlss_depth_noted","\"count\":"+std::to_string(n)+",\"result\":"+std::to_string(r)+",\"output\":"+hex(read<uintptr_t>(out+8))+",\"depth\":"+hex(read<uintptr_t>(dep+8))+",\"depth_size\":["+std::to_string(read<uint32_t>(dep+0x28))+","+std::to_string(read<uint32_t>(dep+0x2c))+"],\"depth_format\":"+std::to_string(read<uint32_t>(dep+0x24)));
     }catch(...){depthNoteFailures.fetch_add(1);}
 }
+// Alternate-eye rendering (2026-10-23): an eye drawn one frame in two has DLSS's history two frames back, the game's motion
+// vectors of moving things one (layer/eye_motion_fix.hpp). Just before such an evaluation the layer writes corrected motion
+// vectors into its own image from the game's, the depth and the matrix from this frame's clip space to the eye's last
+// drawing's - the two game cameras the mod gave the game (view_resource_probe.cpp alternateEyes::current / drawn) -, and
+// the evaluation's motion vector resource (+0x20) points at a copy naming that image for the call. EVR_AFW_MOTION_FIX=0:
+// off. EVR_AFW_MOTION_YSIGN=1: clip y and the image's rows the same way (default -1). EVR_AFW_MOTION_LAYOUT=general: the
+// game's motion and depth sampled in GENERAL (default SHADER_READ_ONLY_OPTIMAL).
+inline const bool motionFix=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_AFW_MOTION_FIX",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline std::atomic<unsigned> motionFixed{0},motionFailures{0};
+inline std::array<unsigned char,0x38> motionResource{};   // NVSDK_NGX_Resource_VK: view +0, image +8, range +0x10, format +0x24, size +0x28/+0x2c
+using Matrix=std::array<double,16>;
+inline Matrix rowsOf(const game::MatrixRows& m){Matrix r{};for(int i=0;i<16;i++)r[i]=m.values[i];return r;}
+inline Matrix multiply(const Matrix& a,const Matrix& b){Matrix r{};for(int i=0;i<4;i++)for(int j=0;j<4;j++){double s=0;for(int k=0;k<4;k++)s+=a[i*4+k]*b[k*4+j];r[i*4+j]=s;}return r;}
+inline bool invert(Matrix m,Matrix& out){
+    Matrix r{};for(int i=0;i<4;i++)r[i*4+i]=1;
+    for(int c=0;c<4;c++){
+        int pivot=c;for(int i=c+1;i<4;i++)if(std::abs(m[i*4+c])>std::abs(m[pivot*4+c]))pivot=i;
+        if(std::abs(m[pivot*4+c])<1e-12)return false;
+        if(pivot!=c)for(int j=0;j<4;j++){std::swap(m[c*4+j],m[pivot*4+j]);std::swap(r[c*4+j],r[pivot*4+j]);}
+        const double inv=1/m[c*4+c];for(int j=0;j<4;j++){m[c*4+j]*=inv;r[c*4+j]*=inv;}
+        for(int i=0;i<4;i++)if(i!=c){const double f=m[i*4+c];if(f!=0)for(int j=0;j<4;j++){m[i*4+j]-=f*m[c*4+j];r[i*4+j]-=f*r[c*4+j];}}
+    }
+    out=r;return true;
+}
+// Returns the evaluation's own motion vector resource pointer when it was swapped for the layer's (0: left as it was).
+inline uintptr_t fixMotion(void* command,uintptr_t p){
+    const auto out=read<uintptr_t>(p+8),motion=read<uintptr_t>(p+0x20),depth=read<uintptr_t>(p+0x18);
+    if(!out||!motion||!depth)return 0;
+    const uint32_t eye=liveFrame.eyeMask==1?0u:1u;
+    if(read<uint32_t>(out+0x28)!=eyeWidth(eye)||read<uint32_t>(out+0x2c)!=eyeHeight(eye))return 0;
+    const auto& before=alternateEyes::drawn[eye];const auto& now=alternateEyes::current.eyes[eye];
+    if(!before.valid||before.session!=liveFrame.sessionGeneration||alternateEyes::currentFrame!=liveFrame.frame||!before.frame||liveFrame.frame<=before.frame)return 0;
+    const uint64_t frames=liveFrame.frame-before.frame;if(frames<2||frames>4)return 0;
+    const auto projection=rowsOf(game::projection(now.fov,alternateEyes::nearZ,alternateEyes::farZ));
+    const Matrix nowClip=multiply(rowsOf(game::cameraRelativeView(now.position,now.orientation,now.position)),projection);
+    const Matrix beforeClip=multiply(rowsOf(game::cameraRelativeView(before.position,before.orientation,now.position)),projection);
+    Matrix back{};if(!invert(nowClip,back))return 0;
+    const Matrix reproject=multiply(back,beforeClip);   // row vectors: this frame's clip -> the last drawing's clip
+    std::array<float,16> r{};for(int i=0;i<16;i++){r[i]=float(reproject[i]);if(!std::isfinite(r[i]))return 0;}
+    using Fix=int(*)(VkCommandBuffer,uint32_t,VkImageView,VkImageView,uint32_t,uint32_t,const float*,float,float,uint32_t,VkImage*,VkImageView*);
+    static const Fix fix=[]{const auto layer=GetModuleHandleW(L"evr_diagnostic.dll");return layer?reinterpret_cast<Fix>(GetProcAddress(layer,"evrFixEyeMotion")):nullptr;}();
+    if(!fix)return 0;
+    static const float ySign=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_AFW_MOTION_YSIGN",v,sizeof v);return n==1&&v[0]=='1'?1.f:-1.f;}();
+    static const uint32_t layoutIn=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_AFW_MOTION_LAYOUT",v,sizeof v);
+        return n&&std::string(v,n)=="general"?uint32_t(VK_IMAGE_LAYOUT_GENERAL):uint32_t(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);}();
+    VkImage image{};VkImageView view{};
+    const int result=fix(reinterpret_cast<VkCommandBuffer>(command),eye,read<VkImageView>(motion),read<VkImageView>(depth),read<uint32_t>(motion+0x28),read<uint32_t>(motion+0x2c),
+        r.data(),float(frames),ySign,layoutIn,&image,&view);
+    if(result||!image||!view){++motionFailures;return 0;}
+    std::memcpy(motionResource.data(),reinterpret_cast<const void*>(motion),motionResource.size());
+    std::memcpy(motionResource.data(),&view,sizeof view);std::memcpy(motionResource.data()+8,&image,sizeof image);
+    const uint32_t format=VK_FORMAT_R16G16_SFLOAT;std::memcpy(motionResource.data()+0x24,&format,sizeof format);
+    *reinterpret_cast<uintptr_t*>(p+0x20)=reinterpret_cast<uintptr_t>(motionResource.data());
+    const auto n=++motionFixed;
+    if(n<=3||n%3600==0)logFile->event("afw_motion_fix","\"count\":"+std::to_string(n)+",\"eye\":"+std::to_string(eye)+",\"frames\":"+std::to_string(frames)+
+        ",\"frame\":"+std::to_string(liveFrame.frame)+",\"motion_format\":"+std::to_string(read<uint32_t>(motion+0x24))+",\"failures\":"+std::to_string(motionFailures.load()));
+    return motion;
+}
 struct CallbackScope {CallbackScope(){++callbacks;}~CallbackScope(){--callbacks;}};
 inline std::string resource(uintptr_t r){
     if(!r)return "null";
@@ -91,7 +149,12 @@ __declspec(noinline) int __fastcall evaluate(void* command,void* handle,void* pa
         if((w==eyeWidth(0)&&h==eyeHeight(0))||(w==eyeWidth(1)&&h==eyeHeight(1))){savedScale[0]=read<float>(p+0x3c);savedScale[1]=read<float>(p+0x40);
             *reinterpret_cast<float*>(p+0x3c)=savedScale[0]*mvScale;*reinterpret_cast<float*>(p+0x40)=savedScale[1]*mvScale;scaled=true;}
     }catch(...){scaled=false;}
+    // The motion vectors of an eye drawn one frame in two (2026-10-23, layer/eye_motion_fix.hpp): for the call only, the
+    // evaluation reads the layer's corrected copy.
+    uintptr_t savedMotion=0;
+    if(motionFix&&from==caller&&(liveFrame.eyeMask==1||liveFrame.eyeMask==2))try{savedMotion=fixMotion(command,reinterpret_cast<uintptr_t>(eval));}catch(...){savedMotion=0;++motionFailures;}
     const int result=original(command,handle,parameters,eval);
+    if(savedMotion)*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(eval)+0x20)=savedMotion;
     if(scaled){const auto p=reinterpret_cast<uintptr_t>(eval);*reinterpret_cast<float*>(p+0x3c)=savedScale[0];*reinterpret_cast<float*>(p+0x40)=savedScale[1];}
     if(!fields.empty()){
         const ObserverLastError preserve;

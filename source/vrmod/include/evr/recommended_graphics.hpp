@@ -21,8 +21,9 @@
 // local_settings.json: textureAnisotropy and models instead; the values below are the executable's own enum names,
 // read from its reflection 2026-10-20): less video memory is met with a smaller eye picture.
 // Game settings written for good (the player may change them again in the game): render.<name> and the two flags.
-// The four the VR start sets itself for each start (antiAliasing, dlss, fsr3, dynamicGi - include/evr/auto_start.hpp)
-// are not touched; their VR values go into the mod's settings ([Picture] Dlss, RenderScale, GiQuality).
+// The two the VR start sets itself for each start (antiAliasing, dynamicGi - include/evr/auto_start.hpp) are not touched;
+// GI's VR value goes into the mod's settings ([Picture] GiQuality, with RenderScale). The DLSS mode (dlss, and fsr3 for
+// cards without DLSS) is written here into the game's settings (2026-10-23: the VR start keeps the game's own mode now).
 #include <evr/auto_start.hpp>
 #include <evr/vr_settings.hpp>
 #include <cstdint>
@@ -80,16 +81,19 @@ inline std::string applyGame(const std::string& text,const Recommendation& r,App
         if(!autostart::field(s,name,b,e)){out.missing.push_back(name);continue;}
         const auto now=s.substr(b,e-b);if(now==value)continue;
         out.changed.push_back(name+" "+now+"->"+value);s=s.substr(0,b)+value+s.substr(e);}
+    // The DLSS mode, and FSR 3's like it where the file has one (a card without DLSS).
+    {size_t b=0,e=0;if(!autostart::field(s,"dlss",b,e))out.missing.push_back("dlss");else if(s.substr(b,e-b)!=r.dlss){out.changed.push_back("dlss "+s.substr(b,e-b)+"->"+r.dlss);s=s.substr(0,b)+r.dlss+s.substr(e);}
+     const auto fsr=autostart::fsr3Preset(r.dlss);if(!fsr.empty()&&autostart::field(s,"fsr3",b,e)&&s.substr(b,e-b)!=fsr){out.changed.push_back("fsr3 "+s.substr(b,e-b)+"->"+fsr);s=s.substr(0,b)+fsr+s.substr(e);}}
     for(const auto& [name,value]:std::vector<std::pair<std::string,bool>>{{"vsync",r.vsync},{"enableHdr",r.hdr}}){size_t b=0,e=0;
         if(!flag(s,name,b,e)){out.missing.push_back(name);continue;}
         const std::string want=value?"true":"false",now=s.substr(b,e-b);if(now==want)continue;
         out.changed.push_back(name+" "+now+"->"+want);s=s.substr(0,b)+want+s.substr(e);}
     return s;
 }
-// The mod's settings (EnshroudedVR.ini) with the VR side of it: the DLSS / FSR 3 mode, the eyes' picture size, GI in VR.
+// The mod's settings (EnshroudedVR.ini) with the VR side of it: the eyes' picture size, GI in VR.
 inline std::string applyIni(const std::string& ini,const Recommendation& r,std::vector<std::string>* changed=nullptr){
     auto out=ini;
-    for(const auto& [key,value]:std::vector<std::pair<std::string,std::string>>{{"Dlss",r.dlss},{"RenderScale",r.renderScale},{"GiQuality",r.giQuality}}){
+    for(const auto& [key,value]:std::vector<std::pair<std::string,std::string>>{{"RenderScale",r.renderScale},{"GiQuality",r.giQuality}}){
         const auto now=settings::get(out,"Picture",key);if(now==value)continue;
         if(changed)changed->push_back(key+" "+(now.empty()?"(unset)":now)+"->"+value);
         out=settings::set(out,"Picture",key,value);}

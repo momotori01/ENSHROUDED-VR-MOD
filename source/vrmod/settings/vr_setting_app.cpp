@@ -34,11 +34,13 @@ std::string g_ini;                           // EnshroudedVR.ini as read
 bool g_running=false,g_loading=false,g_zipping=false,g_installed=false,g_updating=false;
 void refreshUpdateButton();
 std::vector<HWND> g_controls;                // disabled while the game runs
-HWND g_rbVr,g_rbFlat,g_coSize,g_coDlss,g_coSharp,g_coEyes,g_btZip,g_btDefaults,g_status,g_last,g_stZip,g_btUpdate,g_stUpdate;
+HWND g_rbVr,g_rbFlat,g_coSize,g_coSharp,g_coEyes,g_btZip,g_btDefaults,g_status,g_last,g_stZip,g_btUpdate,g_stUpdate;
 // The stroke's speed (a slider, 5 % a step) and swimming by the arms (2026-10-20; also in the game's start menu).
-HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_btRecommend,g_stRecommend;
+// The alternate eyes' own picture and pacing (2026-10-23, include/evr/afw_pacing.hpp).
+HWND g_coAfwPacing,g_coAfwSize,g_coAfwDlss;
+HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff,g_btRecommend,g_stRecommend;
 evr::recommend::Machine g_machine;   // the graphics card, read once at the start
-enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND};
+enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS};
 constexpr UINT WM_APP_ZIP_DONE=WM_APP+1;     // wParam: exit code, lParam: new std::wstring (the zip's path)
 constexpr UINT WM_APP_LATEST=WM_APP+2;       // lParam: new std::wstring (the newest release's version, or "" when it could not be checked)
 constexpr UINT WM_APP_UPDATE_LINE=WM_APP+3;  // lParam: new std::wstring (a line the updater wrote)
@@ -46,9 +48,13 @@ constexpr UINT WM_APP_UPDATE_DONE=WM_APP+4;  // wParam: the updater's exit code
 constexpr int kLeft=20,kRight=330,kWidth=700,kRowHeight=74;
 struct Choice {const wchar_t* label;const char* value;};
 const Choice kSizes[]{{L"Low 0.7  (faster)","0.7"},{L"Normal 0.8","0.8"},{L"High 1.0  (sharper, slower)","1.0"}};
-const Choice kDlss[]{{L"Quality","Quality"},{L"Balanced","Balanced"},{L"Performance","Performance"},{L"DLAA / FSR3 Native  (sharpest, slower)","Dlaa"}};
 const Choice kSharp[]{{L"Off","0"},{L"Soft 0.2","0.2"},{L"Strong 0.5","0.5"}};
 const Choice kEyes[]{{L"Both eyes every frame","0"},{L"AFW: one eye a frame, the other made from it (test)","2"}};   // 2026-10-21 user: only these two
+// 2026-10-23 (user: "implement all three and make them selectable"): how AFW's frames are paced, and its own picture size
+// and DLSS mode ("same" = the rows above; the steady half rate leaves room for a larger picture).
+const Choice kAfwPacing[]{{L"As fast as it can (shown 1 or 2 refreshes)","0"},{L"Steady half rate (37.5 fps at 75 Hz)","1"},{L"Mod fills every refresh (test)","2"}};
+const Choice kAfwSizes[]{{L"Same as Picture size","0"},{L"Low 0.7","0.7"},{L"Normal 0.8","0.8"},{L"High 1.0","1.0"},{L"Very high 1.2  (steady half rate)","1.2"}};
+const Choice kAfwDlss[]{{L"Same as the game's setting",""},{L"Quality","Quality"},{L"Balanced","Balanced"},{L"Performance","Performance"},{L"DLAA / FSR3 Native","Dlaa"}};
 
 int S(int v){return MulDiv(v,g_dpi,96);}
 std::wstring wide(const std::string& s){if(s.empty())return {};const int n=MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),nullptr,0);std::wstring w(size_t(n),L'\0');MultiByteToWideChar(CP_UTF8,0,s.data(),int(s.size()),w.data(),n);return w;}
@@ -124,12 +130,16 @@ bool load(){
 void show(){
     g_loading=true;const auto v=read(g_ini);
     check(g_rbVr,v.vr);check(g_rbFlat,!v.vr);
-    pick(g_coSize,kSizes,std::size(kSizes),text(v.renderScale),1);pick(g_coDlss,kDlss,std::size(kDlss),v.dlss,0);
+    pick(g_coSize,kSizes,std::size(kSizes),text(v.renderScale),1);
     pick(g_coSharp,kSharp,std::size(kSharp),text(v.sharpness),1);
     pick(g_coEyes,kEyes,std::size(kEyes),v.alternateEyes&&v.eyeWarp==2?"2":"0",0);
+    pick(g_coAfwPacing,kAfwPacing,std::size(kAfwPacing),std::to_string(v.afwPacing),0);
+    SendMessageW(g_coAfwSize,CB_SETCURSEL,0,0);if(v.afwRenderScale>0)pick(g_coAfwSize,kAfwSizes,std::size(kAfwSizes),text(v.afwRenderScale),0);
+    SendMessageW(g_coAfwDlss,CB_SETCURSEL,0,0);if(!v.afwDlss.empty())pick(g_coAfwDlss,kAfwDlss,std::size(kAfwDlss),v.afwDlss,0);
     SendMessageW(g_tbSwing,TBM_SETPOS,TRUE,v.swingSpeed/swingSpeedStep);SetWindowTextW(g_stSwing,(std::to_wstring(v.swingSpeed)+L" %").c_str());
-    check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);
-    for(HWND h:{g_coSize,g_coDlss,g_coSharp,g_coEyes,g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff})EnableWindow(h,!g_running&&v.vr);
+    check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);check(g_rbHudOn,v.uiAutoHide);check(g_rbHudOff,!v.uiAutoHide);
+    for(HWND h:{g_coAfwPacing,g_coAfwSize,g_coAfwDlss})EnableWindow(h,!g_running&&v.vr&&v.alternateEyes);
+    for(HWND h:{g_coSize,g_coSharp,g_coEyes,g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff})EnableWindow(h,!g_running&&v.vr);
     g_loading=false;
 }
 void refreshRunning(bool force=false){
@@ -358,7 +368,7 @@ void gatherReport(const std::wstring& folder,const std::string& title,size_t new
     std::string ini;if(!readFile(iniPath(),ini))ini=g_ini;   // as it is on disk (the window-less runs have not read it)
     const auto v=read(ini);
     info+="Mod version: "+(trim(version).empty()?std::string("unknown"):trim(version))+"\r\n";
-    info+="Settings: VR="+std::to_string(int(v.vr))+" Sync="+std::to_string(int(v.online))+" RenderScale="+text(v.renderScale)+" Dlss="+v.dlss+" Sharpness="+text(v.sharpness)+" AlternateEyes="+std::to_string(int(v.alternateEyes))+" EyeWarp="+std::to_string(v.eyeWarp)+" SwingSpeed="+std::to_string(v.swingSpeed)+" ArmSwim="+std::to_string(int(v.armSwim))+"\r\n";
+    info+="Settings: VR="+std::to_string(int(v.vr))+" Sync="+std::to_string(int(v.online))+" RenderScale="+text(v.renderScale)+" Sharpness="+text(v.sharpness)+" AlternateEyes="+std::to_string(int(v.alternateEyes))+" EyeWarp="+std::to_string(v.eyeWarp)+" AfwPacing="+std::to_string(v.afwPacing)+" AfwRenderScale="+text(v.afwRenderScale)+" AfwDlss="+v.afwDlss+" SwingSpeed="+std::to_string(v.swingSpeed)+" ArmSwim="+std::to_string(int(v.armSwim))+"\r\n";
     // (a game that crashed can stay in the process list a while: a program holding its handle - Steam, a launcher)
     info+="Game running: "+std::string(g_gameStopped?"no (it stopped before the 30 seconds ended)":gameRunning()?"yes":"no")+"\r\nLast start: "+trim(last)+"\r\n";
     const wchar_t* windows=L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
@@ -689,9 +699,14 @@ void build(){
     g_rbFlat=control(part(L"BUTTON",L"Normal (no VR)",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+130,g_y+8,170,22,ID_FLAT));
     next(kRowHeight);
     row(L"Picture size (VR)",L"Bigger is sharper, but gives lower FPS.");g_coSize=combo(ID_SIZE,kSizes,std::size(kSizes));next(kRowHeight-16);
-    row(L"DLSS / FSR3 (VR)",L"How the picture is made from a smaller one.\nCards without DLSS (AMD) use FSR 3 the same way.");g_coDlss=combo(ID_DLSS,kDlss,std::size(kDlss));next(kRowHeight-16);
+    // No DLSS row (2026-10-23, user: a player asked why it is here - "it is the same as the game's setting, remove it"):
+    // a VR start keeps the game's own DLSS / FSR 3 mode (include/evr/auto_start.hpp).
     row(L"Sharpening (VR)",L"Makes edges crisper.");g_coSharp=combo(ID_SHARP,kSharp,std::size(kSharp));next(kRowHeight-16);
     row(L"Frame mode (VR)",L"In testing - do not use.\n試験中。使用しないで。");g_coEyes=combo(ID_EYES,kEyes,std::size(kEyes),330);next(kRowHeight-16);
+    row(L"AFW frame pacing (VR)",L"AFW only. Steady half rate: no switching between rates while walking. Also in the game's VR settings.\nAFW の表示間隔（ゲーム内の VR 設定でも変更可）");
+    g_coAfwPacing=combo(ID_AFW_PACING,kAfwPacing,std::size(kAfwPacing),330);next(kRowHeight-16);
+    row(L"AFW picture size (VR)",L"AFW only: its own picture size.\nAFW の時だけの絵の大きさ");g_coAfwSize=combo(ID_AFW_SIZE,kAfwSizes,std::size(kAfwSizes));next(kRowHeight-16);
+    row(L"AFW DLSS / FSR3 (VR)",L"AFW only: its own DLSS / FSR3 mode.\nAFW の時だけの DLSS / FSR3");g_coAfwDlss=combo(ID_AFW_DLSS,kAfwDlss,std::size(kAfwDlss));next(kRowHeight-16);
     row(L"Swing speed to attack (VR)",L"How fast a swing must be to attack. Lower: a lighter swing attacks.\n攻撃に要る振りの速さ（低いほど軽い振りで攻撃）");
     g_tbSwing=control(part(TRACKBAR_CLASSW,L"",TBS_HORZ|TBS_AUTOTICKS|WS_TABSTOP|WS_GROUP,kRight,g_y+4,250,30,ID_SWING));
     SendMessageW(g_tbSwing,TBM_SETRANGE,TRUE,MAKELPARAM(swingSpeedLow/swingSpeedStep,swingSpeedHigh/swingSpeedStep));SendMessageW(g_tbSwing,TBM_SETTICFREQ,2,0);
@@ -704,6 +719,10 @@ void build(){
     row(L"Hit stop (VR)",L"When a melee stroke hits, your hand and weapon pause a moment.\n近接攻撃が当たった瞬間に手と武器が一瞬止まる");
     g_rbHitStopOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_HITSTOP_ON));
     g_rbHitStopOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_HITSTOP_OFF));
+    next(kRowHeight-16);
+    row(L"Hide the HUD when nothing changes (VR)",L"Off: health, quick slots and the rest always shown.\nオフ：体力やクイックスロットなどを常に表示");
+    g_rbHudOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_HUD_ON));
+    g_rbHudOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_HUD_OFF));
     next(kRowHeight-16);
     row(L"Recommended graphics (VR)",L"The game's graphics set for VR on this PC.\n推奨グラフィック設定（この PC 向け）に変更");
     g_btRecommend=control(part(L"BUTTON",L"Set recommended",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,140,30,ID_RECOMMEND));
@@ -741,6 +760,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
             case ID_VR:store("Mode","VR","1");break;case ID_FLAT:store("Mode","VR","0");break;
             case ID_SWIM_ON:store("Body","ArmSwim","1");break;case ID_SWIM_OFF:store("Body","ArmSwim","0");break;
             case ID_HITSTOP_ON:store("Melee","HitStop","1");break;case ID_HITSTOP_OFF:store("Melee","HitStop","0");break;
+            case ID_HUD_ON:store("Picture","UiAutoHide","1");break;case ID_HUD_OFF:store("Picture","UiAutoHide","0");break;
             case ID_ZIP:startZip();break;
             case ID_RECOMMEND:applyRecommended(hwnd);break;
             case ID_UPDATE:startUpdate();break;
@@ -748,9 +768,11 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
                 std::string defaults;if(readFile(defaultsPath(),defaults)&&writeFile(iniPath(),defaults)){g_ini=defaults;show();}else status(L"EnshroudedVR\\EnshroudedVR.defaults.ini is missing.");}break;}
         if(code==CBN_SELCHANGE){const auto at=size_t(SendMessageW(reinterpret_cast<HWND>(lParam),CB_GETCURSEL,0,0));
             if(id==ID_SIZE&&at<std::size(kSizes))store("Picture","RenderScale",kSizes[at].value);
-            if(id==ID_DLSS&&at<std::size(kDlss))store("Picture","Dlss",kDlss[at].value);
             if(id==ID_SHARP&&at<std::size(kSharp))store("Picture","Sharpness",kSharp[at].value);
-            if(id==ID_EYES&&at<std::size(kEyes)){store("Picture","AlternateEyes",at?"1":"0");store("Picture","EyeWarp",at?"2":"0");}}
+            if(id==ID_EYES&&at<std::size(kEyes)){store("Picture","AlternateEyes",at?"1":"0");store("Picture","EyeWarp",at?"2":"0");show();}
+            if(id==ID_AFW_PACING&&at<std::size(kAfwPacing))store("Picture","AfwPacing",kAfwPacing[at].value);
+            if(id==ID_AFW_SIZE&&at<std::size(kAfwSizes))store("Picture","AfwRenderScale",kAfwSizes[at].value);
+            if(id==ID_AFW_DLSS&&at<std::size(kAfwDlss))store("Picture","AfwDlss",kAfwDlss[at].value);}
         return 0;}
     case WM_HSCROLL:if(reinterpret_cast<HWND>(lParam)==g_tbSwing){
         const int percent=clampSwingSpeed(int(SendMessageW(g_tbSwing,TBM_GETPOS,0,0))*swingSpeedStep);

@@ -50,27 +50,44 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  reset();for(unsigned i=0;i<20;i++){r=step(true,{},20);ck(!r.buttons&&!r.opened&&!t.busy());}open();
  // A tracking gap ends an open wheel.
  reset();open();r=step(true,{},400);ck(r.cancelled&&!r.buttons);
- // By the wrist's roll (2026-10-18, the default): the twist about the controller's forward axis, twice over, from the top
- // clockwise; 12 degrees to point, under 8 back at the centre; the hand may move meanwhile.
- {QuickSlot d;HandFrame g;g.focused=true;g.sessionGeneration=g.originGeneration=1;g.predictedTime=1000000000;uint64_t ms=1000;
+ // By the wrist's roll (2026-10-18, the default): the twist about the controller's forward axis from the top clockwise;
+ // 12 degrees to point, under 8 back at the centre; the hand may move meanwhile. (The stick following the wrist without a
+ // hold: rollHold 0.) The wheel's angle for a twist (2026-10-23): 2.2 times the twist past the centre's edge (8 degrees).
+ const auto onWheel=[](const QuickSlotResult& r,float twistDegrees){const float a=2.2f*(std::abs(twistDegrees)-8)*(twistDegrees<0?-1.f:1.f)*pi/180;
+  return std::abs(r.x-std::sin(a))<1e-3f&&std::abs(r.y-std::cos(a))<1e-3f;};
+ {QuickSlotSettings continuous;continuous.rollHold=0;QuickSlot d{continuous};HandFrame g;g.focused=true;g.sessionGeneration=g.originGeneration=1;g.predictedTime=1000000000;uint64_t ms=1000;
   auto& h=g.hands[1];h.gripActive=h.secondaryActive=true;h.gripFlags=15;h.profile=1;h.grip={{0,0,0,1},start};
   // The wrist from the centre (45 degrees counter-clockwise from level): twistDegrees to the right = roll 45 - twist.
   auto go=[&](bool down,float twistDegrees,Vec3 move={0,0,0},uint64_t dt=20){++g.frame;g.predictedTime+=XrDuration(dt)*1000000;ms+=dt;
    h.secondaryPressed=down;h.grip.position=start+move;h.grip.orientation=euler(.2f,.2f,(45-twistDegrees)*pi/180);return d.update(g,head,true,ms);};
   ck(d.settings().roll&&!d.settings().rollFromOpen);go(false,0);go(true,0);QuickSlotResult q;for(unsigned i=0;i<15&&!q.opened;++i)q=go(true,0);ck(q.opened&&q.x==0&&q.y==0);
   q=go(true,10,{.2f,.1f,0});ck(q.x==0&&q.y==0&&std::abs(d.twist()-10*pi/180)<1e-3f);     // under 12 degrees: centre, whatever the hand's place
-  q=go(true,22.5f);ck(std::abs(q.x-std::sin(pi/4))<1e-3f&&std::abs(q.y-std::cos(pi/4))<1e-3f);   // 22.5 to the right: the top-right slot
-  q=go(true,45);ck(std::abs(q.x-1)<1e-3f&&std::abs(q.y)<1e-3f);                                // a quarter of the wheel
-  q=go(true,-90);ck(std::abs(q.x)<1e-3f&&std::abs(q.y+1)<1e-3f);                               // to the left, a quarter turn: the bottom
-  q=go(true,-30);ck(std::abs(q.x+std::sin(pi/3))<1e-3f&&std::abs(q.y-.5f)<1e-3f);
-  q=go(true,-10);ck(q.x!=0);q=go(true,-7);ck(q.x==0&&q.y==0);                                  // hysteresis: still at 10, centre under 8
-  q=go(true,30);q=go(false,30);ck(q.chosen&&q.steer&&std::abs(q.x-std::sin(pi/3))<1e-3f);}     // let go on a slot: chosen
+  q=go(true,12.5f);ck(onWheel(q,12.5f)&&q.y>.98f);                                              // just past the centre: the top
+  q=go(true,22.5f);ck(onWheel(q,22.5f));                                                        // 22.5 to the right: 32 degrees of the wheel
+  q=go(true,45);ck(onWheel(q,45)&&q.x>.98f);                                                    // about a quarter of the wheel
+  q=go(true,-90);ck(onWheel(q,-90)&&q.y<-.99f);                                                 // to the left, a quarter turn: the bottom
+  q=go(true,-30);ck(onWheel(q,-30));
+  q=go(true,-10);ck(q.x!=0&&q.y>.99f);q=go(true,-7);ck(q.x==0&&q.y==0);                         // hysteresis: still at 10 (near the top), centre under 8
+  q=go(true,30);q=go(false,30);ck(q.chosen&&q.steer&&onWheel(q,30));}                           // let go on a slot: chosen
  // The centre is fixed, not the opening's: a wheel opened with the wrist already 30 degrees to the right points at once.
- {QuickSlot d;HandFrame g;g.focused=true;g.sessionGeneration=g.originGeneration=1;g.predictedTime=1000000000;uint64_t ms=1000;
+ {QuickSlotSettings continuous;continuous.rollHold=0;QuickSlot d{continuous};HandFrame g;g.focused=true;g.sessionGeneration=g.originGeneration=1;g.predictedTime=1000000000;uint64_t ms=1000;
   auto& h=g.hands[1];h.gripActive=h.secondaryActive=true;h.gripFlags=15;h.profile=1;h.grip={euler(-.3f,.1f,15*pi/180),start};
   auto step=[&](bool down){++g.frame;g.predictedTime+=20000000;ms+=20;h.secondaryPressed=down;return d.update(g,head,true,ms);};
   step(false);QuickSlotResult q;for(unsigned i=0;i<20&&!q.opened;++i)q=step(true);ck(q.opened);
-  q=step(true);ck(std::abs(q.x-std::sin(pi/3))<1e-3f&&std::abs(q.y-.5f)<1e-3f&&std::abs(d.twist()-pi/6)<1e-3f);}
+  q=step(true);ck(onWheel(q,30)&&std::abs(d.twist()-pi/6)<1e-3f);}
+ // The hold (2026-10-23, the default): a wrist shaking within 1 degree leaves the stick where it was; turned further, the
+ // stick takes the wrist's angle - every angle can be reached (the eight slots before it left the items between them out).
+ {QuickSlot d;HandFrame g;g.focused=true;g.sessionGeneration=g.originGeneration=1;g.predictedTime=1000000000;uint64_t ms=1000;
+  auto& h=g.hands[1];h.gripActive=h.secondaryActive=true;h.gripFlags=15;h.profile=1;h.grip={{0,0,0,1},start};
+  auto go=[&](bool down,float twistDegrees){++g.frame;g.predictedTime+=20000000;ms+=20;
+   h.secondaryPressed=down;h.grip.orientation=euler(.2f,.2f,(45-twistDegrees)*pi/180);return d.update(g,head,true,ms);};
+  ck(std::abs(d.settings().rollHold-.0349f)<1e-3f);go(false,0);QuickSlotResult q;for(unsigned i=0;i<20&&!q.opened;++i)q=go(true,0);ck(q.opened);
+  const auto at=[&](const QuickSlotResult& r,float degrees){return std::abs(r.x-std::sin(degrees*pi/180))<1e-3f&&std::abs(r.y-std::cos(degrees*pi/180))<1e-3f;};
+  q=go(true,12.5f);ck(at(q,9.9f));                                                              // near the top
+  for(unsigned i=0;i<10;++i){q=go(true,i%2?12.5f:11.75f);ck(at(q,9.9f));}                        // 8.25 / 9.9 degrees in turn: stays
+  q=go(true,14);ck(at(q,13.2f));                                                                // 3.3 degrees further: follows
+  q=go(true,20);ck(at(q,26.4f));                                                                // between the eighths: reached
+  q=go(true,-30);ck(at(q,-48.4f));q=go(false,-30);ck(q.chosen&&at(q,-48.4f));}
  // levelRoll: the Euler roll for a level or pitched controller, whatever its heading; none pointing straight up.
  for(float yaw:{0.f,1.f,-2.5f})for(float pitch:{0.f,.4f,-.6f})for(float r:{0.f,.7854f,-1.2f,2.5f})ck(std::abs(QuickSlot::levelRoll(euler(yaw,pitch,r))-r)<1e-3f);
  ck(QuickSlot::levelRoll(euler(0,pi/2,.5f))==0);
@@ -79,7 +96,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   auto& h=g.hands[1];h.gripActive=h.secondaryActive=true;h.gripFlags=15;h.profile=1;h.grip={euler(0,0,1.f),start};
   auto step=[&](bool down,float roll){++g.frame;g.predictedTime+=20000000;ms+=20;h.secondaryPressed=down;h.grip.orientation=euler(0,0,roll);return d.update(g,head,true,ms);};
   step(false,1.f);QuickSlotResult q;for(unsigned i=0;i<20&&!q.opened;++i)q=step(true,1.f);ck(q.opened&&q.x==0);
-  q=step(true,1.f);ck(q.x==0&&q.y==0);q=step(true,1.f-pi/4);ck(std::abs(q.x-1)<1e-3f);}
+  q=step(true,1.f);ck(q.x==0&&q.y==0);q=step(true,1.f-pi/4);ck(onWheel(q,45));}
  // The roll is about the controller's own axis, not the room's: the same twist with the hand pointed elsewhere.
  {const Quat pointed=euler(1.f,.5f,0);ck(std::abs(QuickSlot::rollBetween(pointed,multiply(pointed,euler(0,0,-.5f)))-.5f)<1e-4f);
   ck(std::abs(QuickSlot::rollBetween(pointed,multiply(pointed,euler(.3f,0,0))))<1e-4f);}    // turning the hand sideways is no roll

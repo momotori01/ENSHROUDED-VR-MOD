@@ -22,6 +22,49 @@ inline void apply(const game::ClientInputBytes& source,game::ClientInputBytes& o
     }
 }
 }
+// A consumable chosen on the quick wheel is held, not used (include/evr/consumable_hold.hpp; 2026-10-23): the wheel's consume
+// of a consumable on the action bar is kept back, the right hand is emptied (the action bar's selection "no slot", as the
+// holsters send it) while the item is held, and at the mouth or by the right trigger (controller_ui_fixture.hpp
+// consumableUse) the consume goes out; the slot selected before comes back after the use's sequence (1.1 .. 1.5 s,
+// UseItem_* of docs/analysis/attacks_1_0_20261017). Another choice on the wheel lets the held item go. Throwables are
+// weapons to the game (category 2) and go as before. EVR_CONSUMABLE_HOLD=0: the game's own use at once, as before.
+namespace consumableHoldInput {
+inline const bool requested=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_CONSUMABLE_HOLD",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline std::mutex mutex;inline game::ConsumableHold hold;inline bool seeded=false;
+// The action bar's consumable at an inventory slot {entity, index} (0: none, or not a consumable) and the selected slot
+// (0..15, 16 none; -1 unknown) - set by the probe from live_actionbar_pages.hpp.
+inline uint32_t (*consumableAt)(const game::InventorySlotBytes&)=nullptr;inline int (*selectedSlot)()=nullptr;
+inline int restoreSlot=-1;inline uint64_t restoreAt=0,heldChoice=0;inline std::atomic<unsigned> lines{0};
+inline void apply(const game::ClientInputBytes& source,game::ClientInputBytes& output,uint32_t tick){
+    if(!requested)return;
+    const auto now=GetTickCount64();const auto chosen=controllerUiFixture::quickWheelChosenMs.load();
+    // the game's own item actions, on record as they change (the inventory slot's form is to be seen on the headset)
+    {static game::ItemActionBytes seen{};static unsigned seenLines=0;game::ItemActionBytes a{};std::memcpy(a.data(),source.data()+game::inputItemAction,game::itemActionBytes);
+     if(a!=seen){seen=a;if(seenLines++<300){static const char* digits="0123456789abcdef";std::string hexBytes;for(const auto b:a){hexBytes+=digits[b>>4];hexBytes+=digits[b&15];}
+        const bool fresh=chosen&&now-chosen<=600;
+        try{logFile->event("item_action_seen","\"tick\":"+std::to_string(tick)+",\"bytes\":\""+hexBytes+"\",\"type\":"+std::to_string(a[game::itemActionType])+
+            ",\"after_wheel\":"+(fresh?"true":"false")+",\"consumable\":"+std::to_string(consumableAt?consumableAt([&]{game::InventorySlotBytes s{};std::memcpy(s.data(),a.data(),8);return s;}()):0));}catch(...){}}}}
+    game::ConsumableHold::Result r;uint32_t held=0;bool dropped=false;
+    {std::lock_guard<std::mutex> lock(mutex);
+     if(!seeded){seeded=true;hold.seed(uint32_t(std::time(nullptr)));}
+     // another choice on the wheel that held nothing within 0.7 s: the held item is let go (a weapon or a tool was chosen)
+     if(hold.held()&&chosen&&chosen!=heldChoice&&now-chosen>700){hold.drop();dropped=true;restoreSlot=-1;}
+     if(controllerUiFixture::consumableUse.exchange(false))hold.use();
+     r=hold.apply(source,output,[&](const game::InventorySlotBytes& slot)->uint32_t{
+        if(!chosen||now-chosen>600||!consumableAt)return 0;return consumableAt(slot);});
+     if(r.deferred){heldChoice=chosen;
+        if(restoreSlot<0&&selectedSlot){const int s=selectedSlot();if(s>=0&&s<16){restoreSlot=s;game::HolsterRequest q;q.select=16;holsterInput::ask(q);}}}
+     if(r.used&&restoreSlot>=0)restoreAt=now+1600;
+     if(restoreAt&&now>=restoreAt){restoreAt=0;if(restoreSlot>=0&&!hold.held()){game::HolsterRequest q;q.select=restoreSlot;holsterInput::ask(q);}restoreSlot=-1;}
+     held=hold.item();}
+    controllerUiFixture::consumableHeld.store(held);
+    if((r.deferred||r.used||dropped)&&lines.fetch_add(1)<400){
+        uint32_t entity=0;std::memcpy(&entity,r.slot.data(),4);
+        try{logFile->event(r.deferred?"consumable_held":r.used?"consumable_used":"consumable_dropped","\"tick\":"+std::to_string(tick)+",\"item\":"+std::to_string(r.item)+
+            ",\"slot_entity\":"+std::to_string(entity)+",\"slot_index\":"+std::to_string(r.slot[4])+",\"restore_slot\":"+std::to_string(restoreSlot));}catch(...){}
+    }
+}
+}
 namespace inputHeadIdle {
 inline bool requested=false,walkingRequested=false,fixtureRequested=false;
 // The way the stick is turned back while the guard turns the sent camera. Mock game-20261014-221432: with +1 the walk
@@ -257,6 +300,8 @@ inline void patch(const game::ClientInputBytes& source,game::ClientInputBytes& o
         }
         logFile->event(walkingRequested?"input_head_walking_sample":"input_head_idle_sample",out.str());
     }
+    // the consumable first: its emptying of the hand is a holster request, which goes out with this input
+    consumableHoldInput::apply(source,output,tick);
     holsterInput::apply(source,output,tick);
     if(holsterInput::requested){const auto ms=GetTickCount64();game::applyAreaLoot(output,ms);game::applySwimInput(output,ms);}
     // A watch on "the stick is pushed and the player does not move" (headset run game-20261013-105615: after the second

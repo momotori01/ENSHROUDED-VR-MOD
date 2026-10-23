@@ -159,8 +159,10 @@ inline void destroy(VkDevice d) noexcept {
     }catch(...){own=false;}
 }
 // Before a submission of the game's on `queue`: bring the pictures whose label changed up to date.
+// The mod's own queue (native_xr.hpp, afw_pacing.hpp pacing 2): the game's pictures are not written from it.
+inline std::atomic<VkQueue> modOwnQueue{VK_NULL_HANDLE};
 inline void beforeSubmit(VkQueue queue) noexcept {
-    if(!replace||own)return;
+    if(!replace||own||queue==modOwnQueue.load())return;
     const auto want=wanted.load();if(want==0xffffffffu)return;
     try{
         using namespace evr::glyph;

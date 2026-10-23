@@ -96,7 +96,10 @@ inline bool guard(void* world,uint32_t type,const void* const* data,const void*&
     if(!found){refuse("attacker_unknown",attacker,health,-1,-1,frontFrom);return false;}
     const double ax=double(from[0]-own.stable.position.x)*q,az=double(from[2]-own.stable.position.z)*q,al=std::sqrt(ax*ax+az*az);
     const double angle=evr::guard::angleFromFront(front.x,front.z,ax,az);
-    const int stamina=networkStamina(reinterpret_cast<uintptr_t>(world),own.entity);
+    int stamina=networkStamina(reinterpret_cast<uintptr_t>(world),own.entity);
+    // A guest's game holds no stamina of its player (2026-10-23: only ClientPlayerStaminaHints): the value the host's mod
+    // sent for this player (online_sync.hpp kind 9), when it is at most 1.5 s old.
+    if(stamina<0){const auto h=controllerUiFixture::hostStamina.load();const auto at=h>>16;if(h&&now>=at&&now-at<=1500)stamina=int(h&0xffff);}
     if(angle>evr::guard::halfAngle){refuse("outside_the_guard",attacker,health,angle,stamina,frontFrom);return false;}
     if(stamina==0){refuse("no_stamina",attacker,health,angle,stamina,frontFrom);return false;}
     guarded=e;flags|=1u;const int32_t zero=0;const uint16_t none=0;std::memcpy(guarded.data()+152,&flags,4);std::memcpy(guarded.data()+188,&zero,4);

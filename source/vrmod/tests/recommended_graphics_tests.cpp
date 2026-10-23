@@ -35,16 +35,17 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(value(out,"distantObjects")=="Medium"&&value(out,"decoObjects")=="Medium"&&value(out,"tessellation")=="Medium"&&value(out,"textureAnisotropy")=="High"&&value(out,"detailScattering")=="Medium");
   ck(value(out,"antiAliasing")=="Dlss"&&value(out,"dynamicGi")=="High"&&value(out,"models")=="Balance"&&value(out,"windowMode")=="Fullscreen");
   ck(out.find("\"vsync\": false,")!=std::string::npos&&out.find("\"enableHdr\": false")!=std::string::npos&&out.find("\"automaticRenderScale\": true")!=std::string::npos);
-  ck(a.missing.empty()&&a.changed.size()==2);   // textureAnisotropy, vsync (this PC's other values are the recommended ones)
-  ck(out.size()==game.size()+2);   // Low->High (+1), true->false (+1)
+  // textureAnisotropy, vsync, and the DLSS mode with FSR 3's (the VR start keeps the game's own mode since 2026-10-23)
+  ck(a.missing.empty()&&a.changed.size()==4&&value(out,"dlss")=="Quality"&&value(out,"fsr3")=="Quality");
+  ck(out.size()==game.size()+1);   // Low->High (+1), true->false (+1), Balanced->Quality (-1), Balance->Quality (0)
   Applied again;ck(applyGame(out,recommend(card(16)),again)==out&&again.changed.empty());}   // pressed twice: nothing more
  // a file without one of the fields: the rest is done, that one named
  {std::string older=game;const auto at=older.find("\t\t\t\"textureAnisotropy\": \"Low\",\r\n");older.erase(at,std::string("\t\t\t\"textureAnisotropy\": \"Low\",\r\n").size());
   Applied a;const auto out=applyGame(older,recommend(card(16)),a);ck(a.missing.size()==1&&a.missing[0]=="textureAnisotropy"&&out.find("\"vsync\": false")!=std::string::npos);}
- // the mod's settings: the VR picture, DLSS / FSR 3 mode and GI; the request for the next start and the card's memory
+ // the mod's settings: the VR picture and GI (the DLSS mode goes into the game's settings); the request for the next start and the card's memory
  {const std::string ini="[Mode]\r\nVR=1\r\n\r\n[Picture]\r\nRenderScale=1.0\r\nDlss=Balanced\r\nSharpness=0.2\r\n";
   std::vector<std::string> changed;auto out=applyIni(ini,recommend(card(9.9)),&changed);
-  ck(evr::settings::get(out,"Picture","RenderScale")=="0.7"&&evr::settings::get(out,"Picture","Dlss")=="Quality"&&evr::settings::get(out,"Picture","GiQuality")=="Performance"&&evr::settings::get(out,"Picture","Sharpness")=="0.2"&&changed.size()==3);
+  ck(evr::settings::get(out,"Picture","RenderScale")=="0.7"&&evr::settings::get(out,"Picture","Dlss")=="Balanced"&&evr::settings::get(out,"Picture","GiQuality")=="Performance"&&evr::settings::get(out,"Picture","Sharpness")=="0.2"&&changed.size()==2);
   ck(!pending(out));out=setPending(out,true,card(9.9));ck(pending(out));
   const auto m=pendingMachine(out);ck(m.known&&gigabytes(m.videoMemory)>9.8&&gigabytes(m.videoMemory)<10.0&&recommend(m).renderScale=="0.7");
   out=setPending(out,false);ck(!pending(out));

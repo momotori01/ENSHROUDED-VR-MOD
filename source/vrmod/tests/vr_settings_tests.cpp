@@ -6,7 +6,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
  const std::string ini="; Enshrouded VR\r\n[Mode]\r\nVR=1   ; 1 = headset, 0 = monitor\r\n\r\n[Online]\r\nSync = 0\r\nMenu=0\r\n\r\n[Picture]\r\nRenderScale=0.8\r\nDlss=Quality\r\nSharpness=0.2\r\n[Session]\r\nMinutes=240\r\n";
  // Reading: sections and keys in any letter case, a comment behind a value is not part of it.
  ck(get(ini,"Mode","VR")=="1"&&get(ini,"mode","vr")=="1"&&get(ini,"Online","Sync")=="0"&&get(ini,"Picture","Dlss")=="Quality"&&get(ini,"Mode","Nothing","x")=="x"&&get(ini,"Nowhere","VR").empty());
- const auto v=read(ini);ck(v.vr&&!v.online&&v.renderScale==.8&&v.dlss=="Quality"&&v.sharpness==.2&&v.keepLogs==8);
+ const auto v=read(ini);ck(v.vr&&!v.online&&v.renderScale==.8&&v.dlss.empty()&&v.sharpness==.2&&v.keepLogs==8);
  // Changing one value: its line alone changes, the comment behind it and every other byte stay.
  {const auto off=set(ini,"Mode","VR","0");ck(get(off,"Mode","VR")=="0"&&off.find("VR=0   ; 1 = headset, 0 = monitor\r\n")!=std::string::npos&&off.size()==ini.size()&&!read(off).vr);
   ck(set(off,"Mode","VR","1")==ini);
@@ -18,9 +18,9 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
  // What the loader takes is held to what the mod accepts; anything else gives the value it came with.
  // Without a file: VR off, the other players' VR bodies on (user, 2026-10-14).
  {auto bad=set(set(set(set(ini,"Picture","RenderScale","9"),"Picture","Dlss","Best"),"Log","Keep","-1"),"Mode","VR","yes");const auto b=read(bad);
-  ck(!b.vr&&b.renderScale==.8&&b.dlss=="Quality"&&b.keepLogs==8);
-  const auto ok=read(set(set(set(ini,"Picture","RenderScale","1.0"),"Picture","Dlss","performance"),"Log","Keep","3"));ck(ok.vr&&ok.renderScale==1.&&ok.dlss=="Performance"&&ok.keepLogs==3);
-  ck(!read("").vr&&read("").online&&read("").keepLogs==8&&read("garbage\n=\n[").dlss=="Quality"&&read(set(ini,"Log","Keep","0")).keepLogs==0);
+  ck(!b.vr&&b.renderScale==.8&&b.dlss.empty()&&b.keepLogs==8);
+  const auto ok=read(set(set(set(ini,"Picture","RenderScale","1.0"),"Picture","Dlss","performance"),"Log","Keep","3"));ck(ok.vr&&ok.renderScale==1.&&ok.dlss.empty()&&ok.keepLogs==3);
+  ck(!read("").vr&&read("").online&&read("").keepLogs==8&&read("garbage\n=\n[").dlss.empty()&&read(set(ini,"Log","Keep","0")).keepLogs==0);
   // One eye a frame: off unless [Picture] AlternateEyes=1.
   ck(!read(ini).alternateEyes&&read(set(ini,"Picture","AlternateEyes","1")).alternateEyes&&!read(set(ini,"Picture","AlternateEyes","2")).alternateEyes);
   // The GI quality of VR: High unless [Picture] GiQuality names another known one (2026-10-15).
@@ -34,6 +34,14 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
  ck(read(ini).swingSpeed==100&&read(ini).armSwim&&read(set(ini,"Melee","SwingSpeed","80")).swingSpeed==80&&read(set(ini,"Melee","SwingSpeed","83")).swingSpeed==85&&
     read(set(ini,"Melee","SwingSpeed","200")).swingSpeed==100&&read(set(ini,"Melee","SwingSpeed","45")).swingSpeed==100&&read(set(ini,"Melee","SwingSpeed","x")).swingSpeed==100&&
     !read(set(ini,"Body","ArmSwim","0")).armSwim&&clampSwingSpeed(149)==150&&clampSwingSpeed(10)==50);
+ // [Picture] UiAutoHide (2026-10-23): on unless set; 0 = the HUD always shown; anything else keeps the default.
+ ck(read(ini).uiAutoHide&&!read(set(ini,"Picture","UiAutoHide","0")).uiAutoHide&&read(set(ini,"Picture","UiAutoHide","1")).uiAutoHide&&read(set(ini,"Picture","UiAutoHide","x")).uiAutoHide);
+ // The alternate eyes' own picture and pacing (2026-10-23): unset = the usual picture, pacing 0; only with AlternateEyes=1.
+ {const auto v=read(ini);ck(v.afwRenderScale==0&&v.afwDlss.empty()&&v.afwPacing==0&&forStart(v).renderScale==.8&&forStart(v).dlss.empty());
+  auto afw=set(set(set(ini,"Picture","AfwRenderScale","0.7"),"Picture","AfwDlss","performance"),"Picture","AfwPacing","1");
+  const auto off=read(afw);ck(off.afwRenderScale==.7&&off.afwDlss=="Performance"&&off.afwPacing==1&&forStart(off).renderScale==.8&&forStart(off).dlss.empty());
+  const auto on=read(set(afw,"Picture","AlternateEyes","1"));ck(forStart(on).renderScale==.7&&forStart(on).dlss=="Performance"&&forStart(on).afwPacing==1);
+  ck(read(set(ini,"Picture","AfwPacing","3")).afwPacing==0&&read(set(ini,"Picture","AfwPacing","2")).afwPacing==2&&read(set(ini,"Picture","AfwDlss","best")).afwDlss.empty()&&read(set(ini,"Picture","AfwRenderScale","0")).afwRenderScale==0);}
  // A whole section, in the file's order ([Environment] of the loader).
  {const auto e=entries("[Mode]\r\nVR=1\r\n[Environment]\r\n; a comment\r\nEVR_GRIP_TRIM=\r\nXR_RUNTIME_JSON = C:\\x y\\mock.json   ; test\r\n[Other]\r\nA=1\r\n","environment");
   ck(e.size()==2&&e[0].first=="EVR_GRIP_TRIM"&&e[0].second.empty()&&e[1].first=="XR_RUNTIME_JSON"&&e[1].second=="C:\\x y\\mock.json"&&entries(ini,"Nothing").empty());}

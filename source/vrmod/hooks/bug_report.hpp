@@ -59,12 +59,20 @@ inline std::atomic<int> hoverHit{int(Hit::None)},hoverX{-1};inline std::atomic<b
 inline std::atomic<int> sliderHeld{int(Hit::None)};
 // The recommended graphics asked from this panel in this session (its button then says so; done at the next start).
 inline std::atomic<bool> recommendAsked{false};
+// The alternate eyes' pacing (2026-10-23, include/evr/afw_pacing.hpp; the layer's evrSetAfwPacing): the value shown, whether
+// the alternate eyes are on (without them the row is dim - a press still writes the value for their next start), and "fill"
+// chosen in a session not started with it (it waits for the next start; the note says so).
+inline std::atomic<int> afwPacing{0};inline bool afwOn=false;inline std::atomic<bool> pacingWaits{false};
+using PacingFn=int(*)(int);inline PacingFn setAfwPacing=nullptr;
 inline evr::vrpanel::Texts panelTexts;inline std::wstring settingsIni;inline std::vector<evr::vrpanel::TestPress> testPresses;inline size_t nextTestPress=0;
 static_assert(panelW==uint32_t(evr::vrpanel::width)&&panelH==uint32_t(evr::vrpanel::height)&&buttonW==uint32_t(evr::vrpanel::bugButton.x1)&&buttonH==uint32_t(evr::vrpanel::buttonHeight));
 inline std::vector<uint8_t> panel,line;
 // The window.
 inline uint64_t armedAt=0,startMs=0,startFrame=0,doneAt=0;inline int64_t startUnix=0,endUnix=0;
-inline std::filesystem::path folder;inline std::ofstream handsCsv,headCsv;inline uint64_t rows=0,lastState=0;inline size_t nextStep=0;
+// frames.csv (2026-10-23): each frame's XR number, predicted display time (ns), a precise clock (ms) and the eyes drawn
+// (3 both, 1 or 2 one eye a frame) - the head script's time is GetTickCount's, 15.6 ms steps, too coarse to tell how many
+// refreshes of the headset each frame took (the alternate-eye warp's "shakes while walking" against the frame rate).
+inline std::filesystem::path folder;inline std::ofstream handsCsv,headCsv,framesCsv;inline uint64_t rows=0,lastState=0;inline size_t nextStep=0;
 inline std::vector<std::string> captureResults;inline uint8_t lastScreen=255;
 inline HANDLE maker=nullptr;inline std::wstring zipName;inline unsigned long makerExit=0;
 
@@ -125,7 +133,8 @@ inline std::vector<uint8_t> render(uint32_t w,uint32_t h,const std::vector<Block
 // What the panel shows, as one number: a change of any part draws it again.
 inline uint64_t look(int kind){
     return uint64_t(kind&3)|uint64_t(hoverHit.load()&15)<<2|uint64_t(settingsOpen.load()?1:0)<<6|uint64_t(controllerUiFixture::roomSneakOn.load()?1:0)<<7|uint64_t(controllerUiFixture::crouchDrop.load()&255)<<8|
-        uint64_t(sliderHeld.load()&15)<<16|uint64_t(noticeOn()?1:0)<<21|uint64_t(controllerUiFixture::swingPercent.load()&255)<<22|uint64_t(controllerUiFixture::armSwimOn.load()?1:0)<<30|uint64_t(controllerUiFixture::hitStopOn.load()?1:0)<<31|uint64_t(recommendAsked.load()?1:0)<<32;
+        uint64_t(sliderHeld.load()&15)<<16|uint64_t(noticeOn()?1:0)<<21|uint64_t(controllerUiFixture::swingPercent.load()&255)<<22|uint64_t(controllerUiFixture::armSwimOn.load()?1:0)<<30|uint64_t(controllerUiFixture::hitStopOn.load()?1:0)<<31|uint64_t(recommendAsked.load()?1:0)<<32|
+        uint64_t(afwPacing.load()&3)<<33|uint64_t(pacingWaits.load()?1:0)<<35;
 }
 // The VR settings' values now.
 inline evr::vrpanel::Body currentBody(){
@@ -172,7 +181,10 @@ inline void drawPanel(int kind){
         label(3,panelTexts.swim,false);pill(swimOn,panelTexts.on,body.armSwim);pill(swimOff,panelTexts.off,!body.armSwim);
         label(4,panelTexts.hitStop,false);pill(hitStopOn,panelTexts.on,body.hitStop);pill(hitStopOff,panelTexts.off,!body.hitStop);
         label(5,panelTexts.recommend,false);pill(recommendButton,recommendAsked.load()?panelTexts.recommendDone:panelTexts.recommendSet,recommendAsked.load());
+        {const int pacing=afwPacing.load();label(6,panelTexts.pacing,!afwOn);
+         pill(pacingMax,panelTexts.pacingMax,pacing==0);pill(pacingHalf,panelTexts.pacingHalf,pacing==1);pill(pacingFill,panelTexts.pacingFill,pacing==2);}
         std::wstring note=panelTexts.note;if(settingsIni.empty())note+=std::wstring(L"\n")+panelTexts.unsaved;
+        if(pacingWaits.load())note+=std::wstring(L"\n")+panelTexts.pacingNext;
         b.push_back({{LONG(labelX0),LONG(noteTop),LONG(panelW)-30,LONG(panelH)-6},note,17,FW_NORMAL,RGB(140,133,120),0,0,0,0,DT_LEFT|DT_WORDBREAK|DT_EDITCONTROL});
     }
     else if(kind==0)b.push_back({{0,LONG(buttonH)+10,LONG(panelW),450},texts.description,26,FW_NORMAL,RGB(214,206,192),dark,190,0,0,DT_LEFT|DT_WORDBREAK|DT_EDITCONTROL});
@@ -236,6 +248,17 @@ inline void pressHit(Hit hit,const char* by,int testValue=-1){
             ",\"vendor\":"+std::to_string(machine.vendor)+",\"video_memory_mb\":"+std::to_string(machine.videoMemory/(1024ull*1024ull))+",\"tier\":"+jsonString(r.tier)+
             ",\"render_scale\":"+jsonString(r.renderScale)+",\"dlss\":"+jsonString(r.dlss)+",\"gi\":"+jsonString(r.giQuality)+",\"ini_changed\":["+list+"],\"game_settings\":\"at the next start\",\"frame\":"+std::to_string(liveFrame.frame));
         return;}
+    // The alternate eyes' pacing: live at once (the layer), and into [Picture] AfwPacing for the next start.
+    if(const int pacing=evr::vrpanel::pacingOf(hit);pacing>=0){
+        const int live=afwOn&&setAfwPacing?setAfwPacing(pacing):-1;   // 0 taken, 1 "fill" not prepared in this session
+        afwPacing=pacing;pacingWaits=afwOn&&pacing==2&&live!=0;
+        std::string why="no settings file (a development start)";bool saved=false;
+        if(!settingsIni.empty()){std::string text;{std::ifstream in(std::filesystem::path(settingsIni),std::ios::binary);if(in)text.assign(std::istreambuf_iterator<char>(in),{});}
+            const auto fresh=settingsIni+L".new";{std::ofstream o(std::filesystem::path(fresh),std::ios::binary|std::ios::trunc);if(o)o<<evr::vrpanel::storePacing(text,pacing);saved=bool(o);}
+            saved=saved&&MoveFileExW(fresh.c_str(),settingsIni.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);if(!saved)why="could not write";}
+        logFile->event("vr_settings_pacing","\"by\":\""+std::string(by)+"\",\"pacing\":"+std::to_string(pacing)+",\"alternate_eyes\":"+(afwOn?"true":"false")+",\"live\":"+std::to_string(live)+
+            ",\"waits_for_next_start\":"+(pacingWaits.load()?"true":"false")+",\"saved\":"+(saved?"true":"false")+(saved?std::string():",\"why\":"+jsonString(why))+",\"frame\":"+std::to_string(liveFrame.frame));
+        return;}
     const auto before=currentBody();
     auto after=evr::vrpanel::apply(before,hit);
     // a slider: the value where it was pressed (a Mock's press gives its value), then followed while held; saved when let go
@@ -272,6 +295,12 @@ inline void install(){
     language=gameLanguage();texts=evr::bugreport::texts(language);panelTexts=evr::vrpanel::texts(language);
     {wchar_t ini[MAX_PATH*2]{};const DWORD n=GetEnvironmentVariableW(L"EVR_SETTINGS_INI",ini,DWORD(std::size(ini)));if(n&&n<std::size(ini))settingsIni=ini;}
     {char v[512]{};const auto n=GetEnvironmentVariableA("EVR_VR_SETTINGS_PRESSES",v,sizeof v);if(n&&n<sizeof v)testPresses=evr::vrpanel::testPresses(v);}
+    // the pacing shown: this session's (the layer's) with the alternate eyes, else the settings file's for their next start
+    {char v[8]{};const auto n=GetEnvironmentVariableA("EVR_ALTERNATE_EYES",v,sizeof v);afwOn=n==1&&v[0]=='1';
+     setAfwPacing=reinterpret_cast<PacingFn>(GetProcAddress(layer,"evrSetAfwPacing"));
+     int shown=0;if(const auto now=reinterpret_cast<int(*)()>(GetProcAddress(layer,"evrAfwPacing"));now&&afwOn)shown=now()&3;
+     else if(!settingsIni.empty()){std::string text;std::ifstream in(std::filesystem::path(settingsIni),std::ios::binary);if(in){text.assign(std::istreambuf_iterator<char>(in),{});shown=evr::settings::read(text).afwPacing;}}
+     afwPacing=shown;}
     menuPointer::overlayButtonAt=&buttonAt;menuPointer::overlayButtonPress=&press;menuPointer::overlayButtonDrag=&drag;menuPointer::overlayButtonRelease=&release;installed=true;
     logFile->event("bug_report_enabled","\"language\":"+jsonString(language)+",\"window_ms\":"+std::to_string(evr::bugreport::windowMs)+",\"pairs\":"+std::to_string(evr::bugreport::plannedPairs())+
         ",\"captures\":"+std::string(requestCapture?"true":"false")+",\"vr_settings\":true,\"settings_file\":"+(settingsIni.empty()?std::string("null"):jsonString(narrowOf(settingsIni)))+
@@ -306,7 +335,8 @@ inline void launchWatcher(){
 }
 inline void begin(uint64_t now){
     const auto stamp=stampNow();folder=calibrationDirectory/("bug-report-"+stamp);std::error_code ec;std::filesystem::create_directories(folder,ec);
-    handsCsv.open(folder/"hands.csv",std::ios::trunc);headCsv.open(folder/"head.csv",std::ios::trunc);
+    handsCsv.open(folder/"hands.csv",std::ios::trunc);headCsv.open(folder/"head.csv",std::ios::trunc);framesCsv.open(folder/"frames.csv",std::ios::trunc);
+    framesCsv<<"# xr_frame,predicted_display_time_ns,clock_ms,eyes_drawn\n";
     handsCsv<<"# The player's hands of the VR bug report "<<stamp<<" (Mock hand script, EVR_MOCK_HAND_SEQUENCE; include/evr/bug_report.hpp)\n";
     headCsv<<"# The player's head of the VR bug report "<<stamp<<" (Mock pose script, EVR_POSE_SEQUENCE)\n";
     rows=0;lastState=0;nextStep=0;captureResults.clear();startMs=now;startFrame=liveFrame.frame;startUnix=unixNow();endUnix=0;lastFlush=now;
@@ -341,7 +371,7 @@ inline void launchMaker(){
 }
 inline void finish(uint64_t now,const char* why){
     if(captureHalf)captureHalf(-1);
-    endUnix=unixNow();handsCsv.close();headCsv.close();
+    endUnix=unixNow();handsCsv.close();headCsv.close();framesCsv.close();
     writeReport(now,"complete",why);
     logFile->event("bug_report_window_end","\"frame\":"+std::to_string(liveFrame.frame)+",\"window_ms\":"+std::to_string(now-startMs)+",\"rows\":"+std::to_string(rows)+",\"captures\":"+std::to_string(captureResults.size())+",\"ended_by\":"+jsonString(why));
     // the window's last 10 seconds, then the zip (frame() starts the maker once they are written)
@@ -354,8 +384,10 @@ inline void sample(const evr::motion::HandFrame& f,const evr::motion::GestureHea
     const auto recommended=[](uint32_t v){return liveRenderScale>0&&v?uint32_t(std::lround(double(v)/liveRenderScale)):0u;};
     std::array<float,8> fov{};
     for(size_t eye=0;eye<2;++eye){const auto& v=liveFrame.views[eye].fov;fov[eye*4]=v.angleLeft;fov[eye*4+1]=v.angleRight;fov[eye*4+2]=v.angleUp;fov[eye*4+3]=v.angleDown;}
+    {LARGE_INTEGER c{},q{};QueryPerformanceCounter(&c);QueryPerformanceFrequency(&q);
+     framesCsv<<liveFrame.frame<<','<<liveFrame.time<<','<<std::fixed<<std::setprecision(3)<<(q.QuadPart?double(c.QuadPart)*1000.0/double(q.QuadPart):0.0)<<std::defaultfloat<<','<<unsigned(liveFrame.eyeMask)<<'\n';}
     headCsv<<evr::bugreport::mockHeadRow(double(now-startMs)/1000.0,head.pose,(head.flags&15)==15,recommended(liveFrame.width[0]),recommended(liveFrame.height[0]),&fov)<<'\n';
-    if(now>=lastFlush+1000){lastFlush=now;handsCsv.flush();headCsv.flush();writeReport(now,"recording","");}   // a crash loses at most a second
+    if(now>=lastFlush+1000){lastFlush=now;handsCsv.flush();headCsv.flush();framesCsv.flush();writeReport(now,"recording","");}   // a crash loses at most a second
     // EVR_BUG_REPORT_CRASH_AT_MS=<ms> (Mock trials only): the game crashes that long into the window, to try the crash case.
     {static const uint64_t crashAt=[]{char v[24]{};const auto n=GetEnvironmentVariableA("EVR_BUG_REPORT_CRASH_AT_MS",v,sizeof v);return n&&n<sizeof v?std::strtoull(v,nullptr,10):0ull;}();
      if(crashAt&&now-startMs>=crashAt){logFile->event("bug_report_test_crash","\"t_ms\":"+std::to_string(now-startMs));*static_cast<volatile int*>(nullptr)=1;}}

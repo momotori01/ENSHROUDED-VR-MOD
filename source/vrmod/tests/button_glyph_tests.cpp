@@ -8,7 +8,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  char dir[260]{};const auto dump=GetEnvironmentVariableA("EVR_GLYPH_DUMP",dir,sizeof dir);
  struct Case{uint32_t w,h;const wchar_t* label;const char* file;};
  for(const auto& c:{Case{64,64,L"LT","LT"},Case{64,64,L"RB","RB"},Case{64,64,L"LG","LG"},Case{64,64,L"A","A"},Case{64,64,L"Y","Y"},
-                    Case{80,64,L"RS▼","RS_down"},Case{96,64,L"LS◀▶","LS_horizontal"},Case{64,64,L"RP","RP"},Case{64,64,evr::glyph::swingLabel.c_str(),"swing"},Case{64,64,L"RG+RT","RG_RT"}}){
+                    Case{80,64,L"RS▼","RS_down"},Case{96,64,L"LS◀▶","LS_horizontal"},Case{64,64,L"RP","RP"},Case{64,64,evr::glyph::swingLabel.c_str(),"swing"},Case{64,64,L"RG+RT","RG_RT"},Case{64,64,evr::glyph::gripSwingLabel.c_str(),"RG_swing"}}){
   evr::glyph::Style st;st.round=evr::glyph::faceLabel(c.label);const auto px=evr::glyph::paint(c.w,c.h,c.label,st);ck(px.size()==size_t(c.w)*c.h*4);
   bool premultiplied=true;unsigned opaque=0,dark=0;
   for(size_t p=0;p<size_t(c.w)*c.h;++p){const auto* q=&px[p*4];premultiplied=premultiplied&&q[0]<=q[3]&&q[1]<=q[3]&&q[2]<=q[3];opaque+=q[3]==255;}
@@ -25,7 +25,8 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  {using namespace evr::glyph;const auto I=Family::Index,Q=Family::Quest;
   ck(label(Pic::FaceTop,I,Scene::Play,Held::Weapon)==L"LT");ck(label(Pic::FaceBottom,I,Scene::Play,Held::Weapon)==L"RA");ck(label(Pic::FaceBottom,Q,Scene::Play,Held::Weapon)==L"A");
   ck(label(Pic::FaceLeft,I,Scene::Play,Held::Weapon)==swingLabel);ck(label(Pic::FaceLeft,I,Scene::Play,Held::Wand)==swingLabel);ck(label(Pic::FaceLeft,I,Scene::Play,Held::Tool)==L"RT");
-  ck(label(Pic::FaceLeft,I,Scene::Play,Held::Bow).empty());ck(label(Pic::ShoulderLeftLower,I,Scene::Play,Held::Bow)==L"RT");ck(label(Pic::ShoulderLeftLower,I,Scene::Play,Held::Hammer)==L"LT");
+  ck(label(Pic::FaceLeft,I,Scene::Play,Held::Bow).empty());ck(label(Pic::ShoulderRightLower,I,Scene::Play,Held::Weapon)==gripSwingLabel);
+  ck(label(Pic::ShoulderRightLower,I,Scene::Play,Held::Wand)==L"RG+RT");ck(label(Pic::ShoulderRightLower,I,Scene::Play,Held::Bow)==L"RT");ck(label(Pic::ShoulderLeftLower,I,Scene::Play,Held::Bow)==L"RT");ck(label(Pic::ShoulderLeftLower,I,Scene::Play,Held::Hammer)==L"LT");
   ck(label(Pic::FaceTop,I,Scene::Play,Held::Hammer)==L"RB");ck(label(Pic::FaceTop,Q,Scene::Play,Held::Hammer)==L"B");
   ck(label(Pic::FaceRight,I,Scene::Menu,Held::Nothing)==L"LA");ck(label(Pic::FaceRight,Q,Scene::Menu,Held::Nothing)==L"X");ck(label(Pic::FaceLeft,Q,Scene::Menu,Held::Nothing)==L"Y");
   ck(label(Pic::ShoulderRightUpper,I,Scene::Menu,Held::Nothing)==L"RG");ck(label(Pic::ShoulderLeftLower,I,Scene::Menu,Held::Nothing).empty());

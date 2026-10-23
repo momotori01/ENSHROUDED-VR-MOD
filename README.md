@@ -42,13 +42,13 @@ The program next to enshrouded.exe holds the settings that cannot be changed in 
 | Update | Shows the installed and the newest version. **Update now** installs the newest release. |
 | Play mode | **VR**: play with the headset. **Normal**: play on your monitor without VR. Other VR players' movements show in both. |
 | Picture size (VR) | Low 0.7 (faster) / Normal 0.8 / High 1.0 (sharper, slower) |
-| DLSS / FSR3 (VR) | Quality / Balanced / Performance / DLAA (sharpest, slower). Cards without DLSS (AMD) use FSR 3 at the same scale (DLAA: FSR 3 Native). |
 | Sharpening (VR) | Off / Soft 0.2 / Strong 0.5 |
 | Frame mode (VR) | Both eyes every frame (normal), or one eye a frame (a test for more FPS) |
 | Problem report | **Make zip**: the mod's logs, its settings and the game's log in one zip next to the program, to send with a description. It also finishes a VR bug report that a crash cut short. |
 | Put settings back | All settings back to how they came. |
 
 It also shows what the mod did at the last start of the game.
+DLSS / FSR 3 quality is the game's own graphics setting: choose it in the game. A VR start switches anti-aliasing to DLSS (DLAA stays DLAA); cards without DLSS use the game's FSR 3 setting.
 Real crouching for sneaking is switched on or off, and its depth set, in the game itself: the **VR settings** button next to the bug report button in the start menu.
 
 ## Combat
@@ -84,11 +84,17 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 1. Holding a throwable, hold the right trigger to get ready.
 2. Hold your left hand out in front of you: a guide line shows where it will go, following your left hand.
 3. Swing your right hand and let go of the trigger to throw along the guide. Without the guide it flies the way your hand swings.
+- The throwable shows in your right hand, and it leaves the moment you let go.
 
 ### Weapons and tools
 - **Holsters:** left shoulder + left grip = bow, right shoulder + right grip = your current weapon, left hip + left grip = shield. A short vibration tells you it switched.
 - **Quick slots:** hold right B, point your hand at the slot you want and let go.
 - **Tools** (pickaxe, axe, ...): swing them like weapons. You aim with your right hand's direction.
+
+### Food, potions and other items
+- Choosing a consumable on the quick slots puts it in your right hand (a short vibration) instead of using it at once. Bring it to your mouth or pull the right trigger to use it.
+- Each item is held the way it would be in life: bottles, cups and bombs in the closed hand, plates, bowls and handfuls (berries, nuts, popcorn) on the open palm, a whole fish by its tail.
+- Other players with the mod see the item in your hand.
 
 ### Fishing
 - **Cast:** hold the trigger, swing the rod and let go of the trigger during the swing. A faster swing casts farther (how long you hold the trigger does not matter).

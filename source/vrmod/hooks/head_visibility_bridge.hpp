@@ -82,7 +82,7 @@ inline void onCopy(uintptr_t rsp) noexcept {
                 throw std::runtime_error("head and body share a model handle");
             indices.push_back(index);
         }
-        head::Payload payload{};uint32_t hand=UINT32_MAX,extra=UINT32_MAX,shield=UINT32_MAX,handMask=0;bool arrowShown=false,offhandShown=false;
+        head::Payload payload{};uint32_t hand=UINT32_MAX,extra=UINT32_MAX,shield=UINT32_MAX,handMask=0;bool arrowShown=false,offhandShown=false,consumableShown=false;
         // Gloves: where the equipment covers a body part the game does not draw that part - the part's model has
         // the mask 0 (run game-20261013-084345: the parts with mask 0 are exactly the bits of the equipment's hide
         // mask 0x407fda at +300 - hair, beard, neck, chest .. feet, the hands among them - and the parts that are
@@ -138,6 +138,16 @@ inline void onCopy(uintptr_t rsp) noexcept {
             const auto object=objects+uintptr_t(hand)*0x1b0,resource=read<uintptr_t>(object+layout::modelResource);handMask=read<uint32_t>(object+layout::modelMask);
             if(!resource||s.ready[11]!=1||read<uint8_t>(resource+0x14)!=1||read<uint16_t>(resource+layout::resourceModel)!=s.models[11]||handMask!=s.masks[11])throw std::runtime_error("local hand resource changed");
             }
+            // The consumable held in the right hand (motion_consumable_visual.hpp) takes the weapon's private slot - the hand
+            // item is put away while one is held - or the third one while the weapon is still in the hand.
+            uint32_t consumable=UINT32_MAX;
+            if(motionConsumableVisual::shown(pair.serial)){
+                const auto model=motionVisual::object(motionConsumableVisual::handle);consumable=motionConsumableVisual::handle&0xffffff;
+                if(read<uintptr_t>(model+layout::modelResource)!=motionConsumableVisual::resource||read<uint32_t>(model+layout::modelMask)||read<uint32_t>(model+layout::modelSdf))
+                    throw std::runtime_error("private consumable culling invariant differs");
+                if(consumable>=cpuCount)consumable=UINT32_MAX;
+                else if(hand==UINT32_MAX){hand=consumable;consumableShown=true;}
+            }
             if(!handsCovered&&motionHandVisual::requested&&motionHandVisual::ready&&motionHandVisual::serial==pair.serial&&motionHandVisual::frame==liveFrame.frame&&motionHandVisual::handle){
                 const auto object=motionVisual::object(motionHandVisual::handle);extra=motionHandVisual::handle&0xffffff;
                 if(extra>=cpuCount)extra=UINT32_MAX;
@@ -183,6 +193,7 @@ inline void onCopy(uintptr_t rsp) noexcept {
                     if(index<cpuCount&&indices.size()<body::maximumModels){shield=index;arrowShown=true;}
                 }
             }
+            if(!consumableShown&&consumable!=UINT32_MAX&&shield==UINT32_MAX&&consumable!=hand&&consumable!=extra){shield=consumable;consumableShown=true;}
             const auto owned=body::packAppearance(indices,hand==UINT32_MAX?0:hand+1,extra==UINT32_MAX?0:extra+1,shield==UINT32_MAX?0:shield+1);uint64_t gpuAddress=0;
             using GetPayload=int(*)(VkDevice,const body::Payload*,uint64_t*);
             const auto module=GetModuleHandleW(L"evr_diagnostic.dll");const auto get=module?reinterpret_cast<GetPayload>(GetProcAddress(module,"evrBodyClipPayload")):nullptr;
@@ -206,6 +217,10 @@ inline void onCopy(uintptr_t rsp) noexcept {
         if(arrowShown&&motionArrowVisual::payloadSerial[eye]!=pair.serial){
             motionArrowVisual::payloadSerial[eye]=pair.serial;
             logFile->event("motion_arrow_eye_payload",out.str()+",\"frame\":"+std::to_string(liveFrame.frame));
+        }
+        if(consumableShown&&motionConsumableVisual::payloadSerial[eye]!=pair.serial){
+            motionConsumableVisual::payloadSerial[eye]=pair.serial;
+            static unsigned told=0;if(told++<12)logFile->event("consumable_model_eye_payload",out.str()+",\"frame\":"+std::to_string(liveFrame.frame)+",\"consumable_instance\":"+std::to_string(motionConsumableVisual::handle&0xffffff));
         }
         if(offhandShown&&motionOffhandVisual::payloadSerial[eye]!=pair.serial){
             motionOffhandVisual::payloadSerial[eye]=pair.serial;

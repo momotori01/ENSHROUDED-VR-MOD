@@ -1,0 +1,41 @@
+#version 450
+// The motion vectors DLSS takes for an eye drawn one frame in two (alternate-eye rendering; layer/eye_motion_fix.hpp,
+// 2026-10-23). The game writes each pixel's motion as (previous - current) in UV: the camera's part from the View's own
+// previous camera - the eye's last drawing, two frames back - but a moving thing's part from its place one frame back
+// (Mock: the right hand moved 5 mm a frame gave the held bow the same 2.23 pixels with both eyes drawn and with one eye a
+// frame). DLSS then takes the history of moving things from half way: the hands, the weapons, the grass smeared.
+// Here the camera's part is worked out from the pixel's depth and the two cameras (reproject: this frame's clip space
+// -> the eye's last drawing's), and the rest - the things' own motion - is stretched to the frames between.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D motion;   // the game's motion vectors (UV, previous - current)
+layout(set = 0, binding = 1) uniform sampler2D depth;    // the depth DLSS takes (reversed: 1 near, 0 far)
+layout(set = 0, binding = 2, rg16f) uniform writeonly image2D fixedMotion;
+layout(set = 0, binding = 3, rg16f) uniform writeonly image2D residual; // the game's motion - the camera's: in pixels (check 1), in UV (check 2)
+layout(push_constant) uniform Push {
+    mat4 reproject;    // this frame's clip (x, y, depth, 1) -> the last drawing's clip
+    vec2 size;         // the motion image's pixels
+    float objectScale; // the frames since the eye's last drawing (2: one eye a frame)
+    float ySign;       // -1: clip y up while the image's rows go down
+    uint check;        // 1: also write the residual in pixels (the check); 2: in UV, kept with the eye's picture for the mod's own
+                       // frames for every refresh, which carry a moving thing on by its own motion (afw_pacing.hpp, pacing 2)
+} pc;
+void main()
+{
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(pc.size.x) || p.y >= int(pc.size.y))
+        return;
+    const vec2 uv = (vec2(p) + 0.5) / pc.size;
+    const vec2 game = texelFetch(motion, p, 0).xy;
+    const float d = texelFetch(depth, p, 0).x;
+    const vec4 q = pc.reproject * vec4(uv.x * 2.0 - 1.0, (uv.y * 2.0 - 1.0) * pc.ySign, d, 1.0);
+    vec2 camera = game; // without a usable reprojection the game's motion stays as it is
+    if (q.w > 1e-8 && !any(isnan(q)) && !any(isinf(q))) {
+        const vec2 before = q.xy / q.w;
+        camera = vec2(before.x * 0.5 + 0.5, before.y * pc.ySign * 0.5 + 0.5) - uv;
+    }
+    imageStore(fixedMotion, p, vec4(camera + pc.objectScale * (game - camera), 0.0, 0.0));
+    if (pc.check == 1u)
+        imageStore(residual, p, vec4((game - camera) * pc.size, 0.0, 0.0));
+    else if (pc.check == 2u)
+        imageStore(residual, p, vec4(game - camera, 0.0, 0.0));
+}

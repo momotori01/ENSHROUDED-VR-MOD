@@ -62,6 +62,9 @@
 #include <evr/height_settle.hpp>
 #include <evr/grip_router.hpp>
 #include <evr/holster.hpp>
+#include <evr/consumable_hold.hpp>
+#include <evr/consumable_model.hpp>
+#include <evr/consumable_hand_catalog.hpp>
 #include <evr/room_sneak.hpp>
 #include <evr/swim_stroke.hpp>
 #include <evr/equip_planner.hpp>
@@ -290,7 +293,10 @@ namespace alternateEyes {
 inline bool requested=false;inline unsigned parity=0;inline uint64_t asked=0,single=0,turned=0;
 constexpr uint32_t warmupPairs=150;   // after the desktop-skip warm-up (120): both eyes have pictures and histories
 // The game camera each eye was last drawn with (world).
-struct Drawn {bool valid=false;uint64_t session=0;WorldPositionQ32 position{};Quat orientation{0,0,0,1};};
+struct Drawn {bool valid=false;uint64_t session=0;WorldPositionQ32 position{};Quat orientation{0,0,0,1};uint64_t frame=0;};
+// This frame's eye cameras as the mod gave them to the game, with the game's near and far (hooks/dlss_eval_observer.hpp:
+// the motion vectors of an eye drawn one frame in two, layer/eye_motion_fix.hpp).
+inline game::StereoCameras current{};inline float nearZ=0,farZ=0;inline uint64_t currentFrame=0;
 inline std::array<Drawn,2> drawn{},pendingDrawn{};   // pendingDrawn: drawn in this frame, taken once it is submitted
 // The eye left out in this frame, at the pose in the tracking space (LOCAL) that its picture now belongs to: where its
 // game camera was, seen from this frame's anchor. Without that the runtime would show the picture at the pose it was
@@ -298,6 +304,12 @@ inline std::array<Drawn,2> drawn{},pendingDrawn{};   // pendingDrawn: drawn in t
 // eye one frame behind the other.
 struct Stale {uint64_t frame=0;uint32_t eye=0;bool valid=false;XrPosef pose{{0,0,0,1},{0,0,0}};};
 inline Stale stale{};
+// The world's motion under the tracking space from the last frame to this one (2026-10-23, the mod's own frame for every
+// refresh - include/evr/afw_pacing.hpp pacing 2 - carries the walk and the turn by the stick on between the game's frames):
+// where a fixed world point goes in the tracking space, from the last frame's anchor to this frame's, as one rigid motion,
+// and the time between the two frames' display times (ns).
+struct WorldMotion {uint64_t frame=0;bool valid=false;XrPosef motion{{0,0,0,1},{0,0,0}};int64_t dt=0;};
+inline WorldMotion worldMotion{};
 }
 // Mock-only A/B: retain the normal skip policy and temporarily request the
 // original View on the next complete frame. No GI/shadow state is reset.
@@ -589,12 +601,14 @@ bool finishEyeCpuTasks(uintptr_t scene,unsigned milliseconds=100);
 #include "motion_shield_visual.hpp"
 #include "motion_arrow_visual.hpp"
 #include "motion_offhand_visual.hpp"
+#include "motion_consumable_visual.hpp"
 #include "live_throw_aim.hpp"
 #include "motion_fist.hpp"
 #include "vfx_emitter_census.hpp"
 #include "motion_body_ik.hpp"
 #include "steam_link.hpp"
 #include "remote_body.hpp"
+#include "remote_consumable_visual.hpp"
 #include "online_sync.hpp"
 #include "held_vfx_bridge.hpp"
 #include "motion_contact_observer.hpp"
@@ -1287,7 +1301,17 @@ namespace cpuTiming {
 enum Part:unsigned{Begin,Eye0,Eye1,Tasks0,Tasks1,Record,Submit,Hook,Count};
 inline std::array<double,Count> sum{},worst{};inline uint64_t pairs=0;inline double lastPair=0,periodSum=0,periodWorst=0;inline unsigned periods=0;
 inline double now(){return std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();}
-struct Span{Part part;double start=now();explicit Span(Part p):part(p){}~Span(){const double d=now()-start;sum[part]+=d;worst[part]=std::max(worst[part],d);}Span(const Span&)=delete;Span& operator=(const Span&)=delete;};
+// A part of the frame that took long (2026-10-23, the dashboard with SteamVR's motion smoothing: a frame every 3 s or so):
+// which part, how long, which frame - 150 ms and longer, 300 at most, at once (the averages above come every 120 pairs).
+inline std::atomic<unsigned> slowSpans{0};
+inline void noteSlowSpan(Part part,double ms) noexcept;
+struct Span{Part part;double start=now();explicit Span(Part p):part(p){}~Span(){const double d=now()-start;sum[part]+=d;worst[part]=std::max(worst[part],d);if(d>=150)noteSlowSpan(part,d);}Span(const Span&)=delete;Span& operator=(const Span&)=delete;};
+inline void noteSlowSpan(Part part,double ms) noexcept {
+    if(slowSpans.fetch_add(1)>=300)return;
+    try{static const char* const names[Count]{"begin","eye0","eye1","tasks0","tasks1","record","submit","hook"};
+        std::ostringstream o;o<<std::fixed<<std::setprecision(1)<<"\"part\":\""<<names[part]<<"\",\"ms\":"<<ms<<",\"frame\":"<<liveFrame.frame<<",\"focused\":"<<(liveFrame.hands.focused?"true":"false");
+        logFile->event("cpu_slow_span",o.str());}catch(...){}
+}
 inline void pairDone() noexcept {
     const double t=now();if(lastPair>0){const double p=t-lastPair;periodSum+=p;periodWorst=std::max(periodWorst,p);++periods;}lastPair=t;
     if(++pairs%120)return;
@@ -1413,6 +1437,11 @@ void submitLiveFrame(PairResources& pair){
             if(set&&set(liveFrame.frame,alternateEyes::stale.eye,&alternateEyes::stale.pose)){
                 static unsigned refused=0;if(refused++<3)logFile->event("alternate_eye_stale_pose_refused","\"frame\":"+std::to_string(liveFrame.frame));}
         }
+        if(alternateEyes::worldMotion.valid&&alternateEyes::worldMotion.frame==liveFrame.frame){
+            using WorldMotion=int(*)(uint64_t,const XrPosef*,int64_t);
+            static const auto set=reinterpret_cast<WorldMotion>(GetProcAddress(module,"evrSetNativeXrWorldMotion"));
+            if(set)set(liveFrame.frame,&alternateEyes::worldMotion.motion,alternateEyes::worldMotion.dt);
+        }
         if(!finish||finish(liveFrame.frame,images.data()))throw std::runtime_error("live native XR submission failed");
         for(size_t eye=0;eye<2;++eye)if(liveFrame.eyeMask>>eye&1){alternateEyes::drawn[eye]=alternateEyes::pendingDrawn[eye];alternateEyes::pendingDrawn[eye]={};}
         using Captured=int(*)(uint64_t);
@@ -1480,6 +1509,14 @@ void skipLiveFrame(PairResources& pair,bool early=false){
 // the update for the right eye as well crashes (the brick jobs write through the closed frame arena, 0x13ab449 <-
 // 0x5875b, -055635 and 10-18). With the left eye's object every View picks its bricks and detail from one state.
 inline const bool shareStreaming=[]{char v[8]{};return GetEnvironmentVariableA("EVR_SHARE_EYE_STREAMING",v,sizeof v)!=1||v[0]!='0';}();
+// With one eye drawn a frame (alternate eyes), the right eye drawn alone takes the left eye's objects as well - the
+// streaming object, the many-lights shadows, the fog (viewLend) and the exposure (2026-10-23, the user after the headset:
+// "the outlines still shake, even standing; the fog flickers fast"). Each was lent only on a frame that also drew the
+// left eye, so with one eye a frame each eye kept its own fog, exposure, detail and point-light shadows - the left/right
+// differences the lends had taken away came back, and every eye showed its own and the other eye's in turns. On a right
+// eye's frame the left eye's objects are idle (the left View is not drawn), and each object is still updated once a
+// frame. EVR_AFW_SHARE_LEFT=0: as before.
+inline const bool afwShareLeft=[]{char v[8]{};return GetEnvironmentVariableA("EVR_AFW_SHARE_LEFT",v,sizeof v)!=1||v[0]!='0';}();
 struct StreamingLend {uintptr_t view=0,own=0;bool lent=false;
     StreamingLend(uintptr_t to,uintptr_t left,bool want){if(!want||!to||!left)return;
         try{own=read<uintptr_t>(to+layout::viewStreaming);const auto l=read<uintptr_t>(left+layout::viewStreaming);
@@ -1503,6 +1540,47 @@ struct FieldLend {uintptr_t view=0,own=0,offset=0;bool lent=false;
             if(own&&l&&own!=l){*reinterpret_cast<uintptr_t*>(to+at)=l;view=to;lent=true;}}catch(...){}}
     FieldLend(const FieldLend&)=delete;FieldLend& operator=(const FieldLend&)=delete;
     ~FieldLend(){if(lent)*reinterpret_cast<uintptr_t*>(view+offset)=own;}};
+// The many-lights shadow object is updated once a headset frame (2026-10-23; the user's reports "lights with parallax:
+// a door's handle, metal parts, the night's lights", also offline). RenderDoc game-20261023-020815, pair 600 in the user's
+// night village: with the object lent (FieldLend above) the right eye's frame updated it once more - 0xca3c0, called at
+// 0x1368f1 with View+0xf28, the graph context and its parameters - and re-rendered 4 of the 384 tiles of the shared
+// 3072x2048 point-light shadow atlas between the two eyes' lighting (13924..13956 and 19278..19310): a flickering
+// fire's shadow, the leaves moved. The left eye lit with the first, the right with the second, and the fire's light on
+// the leaves above it differed at the same points of the world. A second update of the same object within one headset
+// frame is skipped now (its return value is not used at the call), so both eyes light with one atlas.
+// EVR_SHADOW_UPDATE_ONCE=0: as before.
+namespace shadowUpdateOnce {
+using Update=void(__fastcall*)(void*,void*,void*,void*);
+inline Update original=nullptr;inline bool enabled=false;
+constexpr uintptr_t rva=0xca3c0,callerRva=0x1368f1;
+constexpr const char* pattern="48 8B C4 55 53 56 57 41 54 41 55 41 56 41 57 48 8D A8 B8 FC FF FF 48 81 EC 08 04 00 00";
+inline std::mutex mutex;inline void* lastObject=nullptr;inline uint64_t lastFrame=0;inline std::atomic<uint64_t> updates{0},skipped{0};
+__declspec(noinline) void __fastcall update(void* object,void* graph,void* parameters,void* fourth){
+    bool skip=false;
+    if(reinterpret_cast<uintptr_t>(_ReturnAddress())==baseAddress+callerRva+5){
+        std::lock_guard<std::mutex> lock(mutex);const uint64_t frame=liveFrame.frame;
+        if(frame&&object&&object==lastObject&&frame==lastFrame)skip=true;else{lastObject=object;lastFrame=frame;}}
+    if(skip){const auto n=++skipped;
+        if(n<=3||n%1800==0){const ObserverLastError preserve;try{logFile->event("shadow_update_skipped","\"frame\":"+std::to_string(liveFrame.frame)+",\"skipped\":"+std::to_string(n)+",\"updates\":"+std::to_string(updates.load())+",\"object\":"+hex(reinterpret_cast<uintptr_t>(object)));}catch(...){}}
+        return;}
+    ++updates;original(object,graph,parameters,fourth);
+}
+inline void install(){
+    {char v[8]{};const auto n=GetEnvironmentVariableA("EVR_SHADOW_UPDATE_ONCE",v,sizeof v);if(n==1&&v[0]=='0'){logFile->event("shadow_update_once_off","\"reason\":\"EVR_SHADOW_UPDATE_ONCE=0\"");return;}}
+    if(!shareManyLightShadows){logFile->event("shadow_update_once_off","\"reason\":\"the shadow object is not lent (EVR_SHARE_MANY_LIGHT_SHADOWS=0)\"");return;}
+    const auto bytes=parsePattern(pattern);const auto site=baseAddress+rva,call=baseAddress+callerRva;
+    if(scan(reinterpret_cast<const uint8_t*>(site),bytes.size(),bytes)!=std::vector<size_t>{0}||read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=site)
+        throw std::runtime_error("shadow update signature or caller changed");
+    if(MH_CreateHook(reinterpret_cast<void*>(site),reinterpret_cast<void*>(&update),reinterpret_cast<void**>(&original))!=MH_OK||
+       MH_EnableHook(reinterpret_cast<void*>(site))!=MH_OK)throw std::runtime_error("shadow update hook failed");
+    enabled=true;logFile->event("shadow_update_once_enabled","\"rva\":"+hex(rva)+",\"caller\":"+hex(callerRva));
+}
+inline void disable() noexcept {
+    if(!enabled)return;
+    const auto status=renderHookRetirement::disable(reinterpret_cast<void*>(baseAddress+rva));if(status==MH_OK)enabled=false;
+    try{logFile->event("shadow_update_once_removed","\"status\":"+std::to_string(status)+",\"updates\":"+std::to_string(updates.load())+",\"skipped\":"+std::to_string(skipped.load()));}catch(...){}
+}
+}
 // (A) one View state for both eyes (2026-10-21, the user: "the fixes feel ad hoc - is something more basic wrong?"): the two
 // eyes are two whole Views, so everything the game keeps from frame to frame grows on its own in each eye. To find all of
 // it at once, EVR_VIEW_COMPARE=1 writes, just before the right eye's render of the pairs viewCompare::serials, the three
@@ -1690,7 +1768,26 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         anchor=sceneryAnchor(anchor);
         runtimeCameras=game::stereoCameras(anchor,liveXr?liveTrackingToAnchor:recordedXr.trackingToAnchor,frame.views,3,frame.time,frame.frame,
                                          anchor.root,read<float>(input+0x70),read<float>(input+0x74));
+        if(liveXr){alternateEyes::current=runtimeCameras;alternateEyes::nearZ=read<float>(input+0x70);alternateEyes::farZ=read<float>(input+0x74);alternateEyes::currentFrame=liveFrame.frame;}
         if(liveXr)targetMark::noteAnchor(anchor,liveTrackingToAnchor,read<WorldPositionQ32>(input+0x38),baseRotation,read<float>(input+0x78));   // the locked target's mark (target_mark.hpp)
+        // A world camera's pose in the tracking space under an anchor (stereoCameras: world = anchor * trackingPose(trackingToAnchor * eye)).
+        auto trackingOf=[&](const game::StableAnchor& a,const WorldPositionQ32& position,const Quat& orientation){
+            const auto o=normalized(a.orientation);
+            const auto root=cameraPosition(a.root,rotate(o,a.cameraOffsetGameUnits),1);
+            const auto back=inverse(o);
+            const Vec3 offset{float(relativeQ32(position.x,root.x)),float(relativeQ32(position.y,root.y)),float(relativeQ32(position.z,root.z))};
+            return compose(inverse(liveTrackingToAnchor),game::trackingPose(Pose{normalized(multiply(back,orientation)),rotate(back,offset)}));
+        };
+        alternateEyes::worldMotion={};
+        if(liveXr){
+            static game::StableAnchor lastAnchor{};static bool lastValid=false;static uint64_t lastFrame=0,lastSession=0;static int64_t lastTime=0;
+            if(lastValid&&lastSession==liveFrame.sessionGeneration&&liveFrame.frame==lastFrame+1&&anchor.worldUnitsPerMeter==1&&lastAnchor.worldUnitsPerMeter==1&&liveFrame.time>lastTime){
+                const auto& eye=runtimeCameras.eyes[0];
+                const auto motion=compose(trackingOf(anchor,eye.position,eye.orientation),inverse(trackingOf(lastAnchor,eye.position,eye.orientation)));
+                if(finite(motion.position)&&length(motion.position)<5.f)alternateEyes::worldMotion={liveFrame.frame,true,motion,int64_t(liveFrame.time-lastTime)};
+            }
+            lastAnchor=anchor;lastValid=true;lastFrame=liveFrame.frame;lastSession=liveFrame.sessionGeneration;lastTime=liveFrame.time;
+        }
         alternateEyes::stale={};
         if(liveXr&&liveFrame.eyeMask!=3){
             // stereoCameras: world = anchor * trackingPose(trackingToAnchor * eye). The eye left out was drawn with the
@@ -1942,22 +2039,23 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
             struct ExposurePair{explicit ExposurePair(uintptr_t from,uintptr_t to){eyeExposure::source=from;eyeExposure::target=to;}
                 ~ExposurePair(){eyeExposure::source=0;eyeExposure::target=0;}};
             std::optional<ExposurePair> exposurePair;
-            if(eye==1&&eyeExposure::enabled&&(liveFrame.eyeMask&1))try{
+            const bool leftShared=(liveFrame.eyeMask&1)||(afwShareLeft&&alternateEyes::requested&&liveFrame.eyeMask==2);
+            if(eye==1&&eyeExposure::enabled&&leftShared)try{
                 const auto from=read<uintptr_t>(pair.created[0]+layout::viewPost),to=read<uintptr_t>(pair.created[1]+layout::viewPost);
                 if(from&&to&&from!=to)exposurePair.emplace(from,to);
             }catch(...){}
             if(eye==1)viewCompare::dump(pair.serial,pair.created[0],pair.created[1],pair.originalView);
             // The right eye draws with the left eye's View streaming object (StreamingLend above).
             {const cpuTiming::Span eyeTimed(eye?cpuTiming::Eye1:cpuTiming::Eye0);
-             streamingLend.emplace(eye==1?pair.created[1]:0,pair.created[0],shareStreaming&&eye==1&&(liveFrame.eyeMask&1));
-             shadowLend.emplace(eye==1?pair.created[1]:0,pair.created[0],viewManyLightShadows,shareManyLightShadows&&eye==1&&(liveFrame.eyeMask&1));
+             streamingLend.emplace(eye==1?pair.created[1]:0,pair.created[0],shareStreaming&&eye==1&&leftShared);
+             shadowLend.emplace(eye==1?pair.created[1]:0,pair.created[0],viewManyLightShadows,shareManyLightShadows&&eye==1&&leftShared);
              {static std::atomic<uint64_t> shadowLends{0};if(shadowLend->lent){const auto n=++shadowLends;if(n<=3||n%1800==0)logFile->event("eye_many_light_shadows_lent","\"serial\":"+std::to_string(pair.serial)+
                  ",\"lends\":"+std::to_string(n)+",\"own\":"+hex(shadowLend->own)+",\"left\":"+hex(read<uintptr_t>(pair.created[1]+viewManyLightShadows)));}
               else if(shareManyLightShadows&&eye==1){static std::atomic<unsigned> notLent{0};if(notLent.fetch_add(1)<3)logFile->event("eye_many_light_shadows_not_lent","\"serial\":"+std::to_string(pair.serial)+
                  ",\"right\":"+hex(read<uintptr_t>(pair.created[1]+viewManyLightShadows))+",\"left\":"+hex(read<uintptr_t>(pair.created[0]+viewManyLightShadows)));}}
              {static std::atomic<uint64_t> lends{0};if(streamingLend->lent){const auto n=++lends;if(n<=3||n%1800==0)logFile->event("eye_streaming_lent","\"serial\":"+std::to_string(pair.serial)+
                  ",\"lends\":"+std::to_string(n)+",\"own\":"+hex(streamingLend->own)+",\"left\":"+hex(read<uintptr_t>(pair.created[1]+layout::viewStreaming)));}}
-             fieldLends.emplace(eye==1?pair.created[1]:0,pair.created[0],eye==1&&(liveFrame.eyeMask&1));
+             fieldLends.emplace(eye==1?pair.created[1]:0,pair.created[0],eye==1&&leftShared);
              original(pair.results[eye].data(),context,reinterpret_cast<void*>(pair.created[eye]),pair.parameters[eye].data(),pair.targetArguments[eye].data());}}
         if(stableFrustumBridge::observeEyes&&(eyeFrustum.failed||(projectionCalls==1&&(eyeFrustum.calls!=2||eyeFrustum.mask!=3))))
             throw std::runtime_error("eye frustum diagnostic boundary differs");
@@ -1997,7 +2095,7 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         if(worldNativeDiagnostic){worldSharedStages::write(sharedStage);if(sharedStage.rejected)throw std::runtime_error("shared world update lacks same-frame original proof");}
         if(worldNativeDiagnostic)worldSharedDiagnostic::snapshot(eye?"right_return":"left_return",pair.scene);
         eyeProjection=nullptr;
-        if(liveXr&&runtimeEyes())alternateEyes::pendingDrawn[eye]={true,liveFrame.sessionGeneration,runtimeCameras.eyes[eye].position,runtimeCameras.eyes[eye].orientation};
+        if(liveXr&&runtimeEyes())alternateEyes::pendingDrawn[eye]={true,liveFrame.sessionGeneration,runtimeCameras.eyes[eye].position,runtimeCameras.eyes[eye].orientation,liveFrame.frame};
         if(runtimeEyes()){
             if(projectionCalls!=1){
                 logFile->event("native_eye_projection_incomplete","\"eye\":"+std::to_string(eye)+",\"calls\":"+std::to_string(projectionCalls)+
@@ -2202,6 +2300,8 @@ void __fastcall destroyOwner(void* ownerAddress){
             motionShieldVisual::dispose(scene);
             motionArrowVisual::dispose(scene);
             motionOffhandVisual::dispose(scene);
+            motionConsumableVisual::dispose(scene);
+            itemGallery::dispose(scene);
             onlineSync::dispose(scene);
             motionBodyIk::dispose(scene);
             motionHandVisual::dispose(scene);
@@ -2731,6 +2831,8 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
             motionArrowVisual::prepare(anchor,sharedStage.serial);
             motionOffhandVisual::prepare(anchor,sharedStage.serial);
             motionOffhandVisual::fishInHand(anchor);
+            motionConsumableVisual::prepare(anchor,sharedStage.serial);
+            itemGallery::tick(anchor,sharedStage.serial);
             liveThrowAim::prepare(anchor);
             motionFist::prepare(anchor);
             motionBodyIk::prepare(anchor,sharedStage.serial);
@@ -3545,6 +3647,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         // new build fails is noted (optional_hook_skipped) and left out, instead of ending the session.
         auto optional=[&](const char* name,auto&& body,auto&& off){try{body();}catch(const std::exception& e){off();logFile->event("optional_hook_skipped","\"hook\":"+jsonString(name)+",\"reason\":"+jsonString(e.what()));}};
         if(privateWaterFeedback)optional("water_feedback",[&]{waterFeedback::install();},[&]{privateWaterFeedback=false;});
+        if(waterFeedback::waterObserve::wanted()&&!waterFeedback::enabled)optional("water_feedback_observe",[&]{waterFeedback::waterObserve::install();},[&]{});
         if(cullingHistory::requested&&worldNativeDiagnostic)optional("culling_history",[&]{cullingHistory::install();},[&]{cullingHistory::requested=false;});
         if(detailBinding::requested)optional("detail_binding",[&]{detailBinding::install();},[&]{detailBinding::requested=false;});   // 1.0: skipped, not failed (the eye check below ends the session on failed)
         if(shadowProjection::requested)optional("shadow_projection",[&]{shadowProjection::install();},[&]{shadowProjection::requested=false;});
@@ -3564,6 +3667,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         optional("snow_displacement",[&]{snowDisplacementBridge::install();},[&]{});
         optional("water_displacement",[&]{waterDisplacementBridge::install();},[&]{});
         optional("hit_event_intake",[&]{hitEventIntake::install();},[&]{});
+        optional("shadow_update_once",[&]{shadowUpdateOnce::install();},[&]{});   // the shared point-light shadows updated once a frame (EVR_SHADOW_UPDATE_ONCE=0: off)
         optional("world_ray",[&]{worldRay::install();},[&]{});   // the guest's arrows against walls (EVR_ARROW_WALLS=0: off); EVR_RAYCAST_CENSUS=1: the census
         optional("shadow_history",[&]{shadowHistoryProbe::install();},[&]{});
         {void* const modelStubs[8]{reinterpret_cast<void*>(&evr_vfx_model_stub0),reinterpret_cast<void*>(&evr_vfx_model_stub1),reinterpret_cast<void*>(&evr_vfx_model_stub2),reinterpret_cast<void*>(&evr_vfx_model_stub3),
@@ -3672,7 +3776,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                     for(auto& r:controllerUiFixture::hitReports)if(r.serial<slot->serial)slot=&r;
                     *slot={++controllerUiFixture::hitReportSerial,now,at,character,false,entity};};
                 remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::hitThing=&liveTargets::thingTouched;
-                controllerUiFixture::creatureNear=&liveTargets::creatureNear;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;
+                controllerUiFixture::creatureNear=&liveTargets::creatureNear;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;controllerUiFixture::staminaOf=&liveTargets::staminaOf;
                 controllerUiFixture::localParryDecided=&parryObserver::localDecided;
                 motionArrowVisual::flightHit=&liveTargets::segmentHit;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
                 controllerUiFixture::shotSurfaceArrived=&liveTargets::publishSurfaceHit;
@@ -3778,8 +3882,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             // changed; the game's use / pick-up pins stay. The layer does the look and the fade (hud_fade.hpp).
             std::ifstream uf(calibrationDirectory/"world-ui-auto-hide.txt");std::string magic;uf>>magic>>std::ws;
             if(!uf||!uf.eof()||magic!="EVR_UI_AUTO_HIDE_1"||!controllerUiFixture::liveRequested)throw std::runtime_error("UI auto-hide requires the live controller input");
+            // The settings' [Picture] UiAutoHide=0 (the loader's EVR_UI_AUTO_HIDE=0; 2026-10-23): the HUD always shown.
+            char hide[8]{};const auto hn=GetEnvironmentVariableA("EVR_UI_AUTO_HIDE",hide,sizeof hide);
+            if(hn==1&&hide[0]=='0')logFile->event("ui_auto_hide_off","\"reason\":\"[Picture] UiAutoHide=0\"");else{
             uiHudBridge::requested=true;
-            logFile->event("ui_auto_hide_enabled","\"hold_ms\":5000,\"fade_out_ms\":800,\"pins_always_shown\":[[420,84,1300,972],[0,280,1480,900]],\"compass_ignored\":true,\"ticking_numbers_ignored\":true");
+            logFile->event("ui_auto_hide_enabled","\"hold_ms\":5000,\"fade_out_ms\":800,\"pins_always_shown\":[[420,84,1300,972],[0,280,1480,900]],\"compass_ignored\":true,\"ticking_numbers_ignored\":true");}
         }
         if(std::filesystem::exists(calibrationDirectory/"world-menu-pointer.txt")){
             // VHVR's pointer on the menus (menu_pointer.hpp): the right hand's ray is the mouse while a menu is open.
@@ -3811,6 +3918,12 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
              if(!(m&&m<sizeof off&&off[0]=='0')&&inputHeadIdle::requested&&inputShadow::requested&&controllerUiFixture::liveRequested){
                 {std::lock_guard<std::mutex> lock(holsterInput::mutex);holsterInput::sender.seed(uint32_t(std::time(nullptr)));}
                 holsterInput::requested=true;controllerUiFixture::holsterAct=&holsters::act;controllerUiFixture::holsterTick=&holsters::tick;controllerUiFixture::holsterRequested=true;
+                // The consumable held from the quick wheel (input_head_idle.hpp consumableHoldInput): it empties the hand and brings the
+                // slot back through the holsters' input, so it is on with them.
+                consumableHoldInput::consumableAt=&liveActionbars::consumableAt;consumableHoldInput::selectedSlot=&liveActionbars::selectedSlot;
+                // Its model in the right hand (motion_consumable_visual.hpp): with the tracked hands drawn. EVR_CONSUMABLE_MODEL=0: off.
+                motionConsumableVisual::requested=motionConsumableVisual::wanted()&&motionVisual::requested&&motionHandVisual::requested;
+                itemGallery::configure();
                 // keen::actor::StateFlag FloatingOnWater (43) / UnderWater (44) of the local actor within the last half second.
                 controllerUiFixture::actorSwimming=[](uint64_t now){std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;
                     return s.actorKnown&&s.milliseconds&&now>=s.milliseconds&&now-s.milliseconds<=500&&(s.actorState&game::swimmingStates)!=0;};
@@ -4096,7 +4209,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         objectWatch::uninstall();
         statusVignette::uninstall();
         if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
-        vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
+        vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowUpdateOnce::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
         shadowProjection::disable();
         detailBinding::disable();
         cullingHistory::disable();
@@ -4105,7 +4218,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             if(!renderHookRetirement::batch.complete()||!restored)throw std::runtime_error("render batch receipts or original code incomplete");
             logFile->event("render_hook_batch_complete","\"count\":12,\"pending\":0,\"original_bytes_restored\":true,\"trampolines_retained\":true,\"elapsed_ms\":"+std::to_string(GetTickCount64()-renderBatchBegin)+",\"thread\":"+std::to_string(GetCurrentThreadId()));
         }
-        waterFeedback::disable();
+        waterFeedback::disable();waterFeedback::waterObserve::disable();
         if(worldNativeDiagnostic){worldReadyDiagnostic::disable();worldSharedStages::disable();terrainReadyDiagnostic::disable();downloadFeedbackDiagnostic::disable();}
         if(detailFactoryProbe||worldResourceStage==2||worldNativeDiagnostic)disableDetailFactoryReserveHook();
         if(projectionEnabled){require(MH_DisableHook(projectionTarget),"MH_DisableHook eye projection");projectionEnabled=false;
@@ -4144,7 +4257,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             objectWatch::uninstall();
             statusVignette::uninstall();
             if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
-            vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
+            vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowUpdateOnce::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
             try{equipmentObserver::disable();}catch(...){}
             try{inputDirection::disable();}catch(...){}
             try{contactQuiescenceObserver::disable();}catch(...){}
@@ -4155,7 +4268,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             try{shadowProjection::disable();}catch(...){}
             try{detailBinding::disable();}catch(...){}
             try{cullingHistory::disable();}catch(...){}
-            waterFeedback::disable();
+            waterFeedback::disable();waterFeedback::waterObserve::disable();
             if(worldNativeDiagnostic){worldReadyDiagnostic::disable();worldSharedStages::disable();terrainReadyDiagnostic::disable();downloadFeedbackDiagnostic::disable();}
             if(detailFactoryProbe||worldResourceStage==2||worldNativeDiagnostic)disableDetailFactoryReserveHook();
             if(projectionEnabled){const auto status=MH_DisableHook(projectionTarget);projectionEnabled=status!=MH_OK;}
@@ -4440,7 +4553,7 @@ void prepareHostParts(){
     nativeImpactComponents::requested=true;actionSequenceObserver::requested=true;   // recording stays on (no eye pairs to wait for)
     sequenceColliderObserver::requested=true;impactHierarchyObserver::requested=true;attachmentObserver::requested=true;
     motionColliderApply::requested=true;motionColliderApply::live=true;liveTargets::requested=true;
-    remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;
+    remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;controllerUiFixture::staminaOf=&liveTargets::staminaOf;
     controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
     inputRanged::liveBowWatch=true;bowSpawnObserver::remoteAlways=true;   // the own shots known as own (not a guest's)
 }

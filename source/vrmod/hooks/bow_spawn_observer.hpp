@@ -240,7 +240,10 @@ __declspec(noinline) bool __fastcall observe(void* output,void* nativeContext,co
      controllerUiFixture::ThrowWorldAim w;const char* reason="applied";
      {std::lock_guard<std::mutex> lock(controllerUiFixture::throwMutex);w=controllerUiFixture::throwWorldAim;
       if(w.serial&&!w.used&&now>=w.milliseconds&&now-w.milliseconds<=1500)controllerUiFixture::throwWorldAim.used=true;else w.serial=0;}
-     const bool own=identity.world&&identity.entity&&identity.milliseconds&&now>=identity.milliseconds&&now-identity.milliseconds<=100&&cachedItem==nativeItem&&nativeWeapon[0]==3;
+     // The game's thrown state (3); a throw the mod handed early (controllerUiFixture::throwEarlySpawnUntil) comes before it
+     // (Mock game-20261023-181633: the early spawn 31 ms after the throw, refused here for the state - the game's aim stood).
+     const bool early=now<=controllerUiFixture::throwEarlySpawnUntil.load();
+     const bool own=identity.world&&identity.entity&&identity.milliseconds&&now>=identity.milliseconds&&now-identity.milliseconds<=100&&cachedItem==nativeItem&&(nativeWeapon[0]==3||early);
      if(!w.serial)reason="no_throw";else if(!own)reason="native_identity";
      else{
       WorldPositionQ32 nativePosition;Quat nativeQ;float nativeDistance;

@@ -14,6 +14,9 @@ struct BorrowedVulkan
     VkPhysicalDevice physical = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
     uint32_t apiVersion = 0, queueFamily = 0, queueIndex = 0, createdQueueCount = 0;
+    // The queue (queueIndex) is one the layer added beside the game's (index 0) for the mod's own frames for every refresh
+    // (include/evr/afw_pacing.hpp, pacing 2): what the game draws is then read on another queue than it was drawn on.
+    bool ownQueue = false;
     std::vector<std::string> enabledInstanceExtensions, enabledDeviceExtensions;
 };
 inline void vkCheck(VkResult r, const char *operation)

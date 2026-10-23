@@ -39,6 +39,10 @@ int main(int argc,char** argv){try{unsigned n=0;
   {std::string o,why;RenderRecord rec;ck(applyVr(json,"Balanced",nullptr,o,rec,why)&&o.find("\"fsr3\": \"Balance\"")!=std::string::npos&&restore(o,rec)==json);
    const std::string noFsr=json.substr(0,json.find("      \"fsr3\""))+json.substr(json.find("      \"shadows\""));
    ck(applyVr(noFsr,"Performance",nullptr,o,rec,why)&&rec.changes.size()==2&&restore(o,rec)==noFsr);}
+  // no mode (2026-10-23, the setting exe's DLSS row gone): antiAliasing Dlss, the game's own dlss and fsr3 kept; a DLAA kept
+  {std::string o,why;RenderRecord rec;ck(applyVr(json,"",nullptr,o,rec,why)&&o.find("\"antiAliasing\": \"Dlss\"")!=std::string::npos&&o.find("\"dlss\": \"Balanced\"")!=std::string::npos&&restore(o,rec)==json);
+   std::string dlaa=json;const auto at=dlaa.find("\"antiAliasing\": \"Fsr3\"");ck(at!=std::string::npos);dlaa.replace(at,std::string("\"antiAliasing\": \"Fsr3\"").size(),"\"antiAliasing\": \"Dlaa\"");
+   std::string d;RenderRecord drec;ck(applyVr(dlaa,"",nullptr,d,drec,why)&&d.find("\"antiAliasing\": \"Dlaa\"")!=std::string::npos&&d.find("\"dlss\": \"Balanced\"")!=std::string::npos);}
   ck(!applyVr("{}","Quality",nullptr,out,r,reason)&&!reason.empty()&&out=="{}");
   // HDR (2026-10-23): on in the game -> off for VR, recorded, put back; off is left; vsync (another true/false) untouched.
  {const std::string hdr=json.substr(0,json.find("    \"render\""))+"    \"hdrSettings\": {\r\n      \"enableHdr\": true\r\n    },\r\n"+json.substr(json.find("    \"render\""));

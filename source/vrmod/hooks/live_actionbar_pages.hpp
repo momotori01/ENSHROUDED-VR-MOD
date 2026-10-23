@@ -74,6 +74,17 @@ inline controllerUiFixture::HandItem hand(uint64_t now){
 }
 // The items of both bars' 16 slots (the holsters: where the worn bow is on the bar, hooks/holster_actions.hpp).
 inline std::array<uint32_t,16> barItems{};inline uint64_t barItemsAt=0;
+// The bars' entities, each slot's item category (keen ItemCategory: 7 Consumables) and the selected slot - for the consumable
+// held from the quick wheel (hooks/input_head_idle.hpp consumableHoldInput).
+inline std::array<uint32_t,2> barEntities{};inline std::array<uint8_t,16> barCategories{};inline int selectedNow=-1;
+inline std::unordered_map<uint32_t,uint8_t> categoryOf;   // item -> category, read once (0xff: not readable yet)
+inline uint32_t consumableAt(const game::InventorySlotBytes& slot){
+ uint32_t entity=0;std::memcpy(&entity,slot.data(),4);const uint8_t index=slot[4];
+ std::lock_guard<std::mutex> lock(selectedMutex);if(!entity||index>=8||!pauseClock::fresh(barItemsAt,GetTickCount64(),1000))return 0;
+ for(unsigned b=0;b<2;++b)if(barEntities[b]==entity){const unsigned i=b*8+index;return barCategories[i]==7?barItems[i]:0;}
+ return 0;
+}
+inline int selectedSlot(){std::lock_guard<std::mutex> lock(selectedMutex);return pauseClock::fresh(barItemsAt,GetTickCount64(),1000)?selectedNow:-1;}
 inline uint8_t slotOf(uint32_t item,uint64_t now){
  std::lock_guard<std::mutex> lock(selectedMutex);if(!item||!pauseClock::fresh(barItemsAt,now,1000))return 0xff;
  for(uint8_t i=0;i<16;++i)if(barItems[i]==item)return i;
@@ -101,7 +112,14 @@ inline void tick(uintptr_t world,uint32_t local){
    const auto raw=read<std::array<uint8_t,96>>(inventory);std::memcpy(bytes.data()+16+96*b,raw.data(),96);
   }
   {std::array<uint32_t,16> items{};for(unsigned i=0;i<16;++i)if(bars[i/8])std::memcpy(&items[i],bytes.data()+16+96*(i/8)+12*(i%8),4);
-   {std::lock_guard<std::mutex> lock(selectedMutex);barItems=items;barItemsAt=now;}}
+   std::array<uint8_t,16> categories{};categories.fill(0xff);
+   if(const auto registry=attachmentObserver::itemRegistry.load())for(unsigned i=0;i<16;++i){if(!items[i])continue;
+    auto c=categoryOf.find(items[i]);
+    if(c==categoryOf.end()||c->second==0xff){auto reader=inputRanged::readItemBytes;const auto found=game::lookupItem(reader,registry,items[i]);game::ItemMetadata m;
+     const uint8_t category=game::readItemMetadata(reader,found,items[i],m)?uint8_t(m.category):uint8_t(0xff);
+     if(categoryOf.size()<4096)c=categoryOf.insert_or_assign(items[i],category).first;}
+    if(c!=categoryOf.end())categories[i]=c->second;}
+   {std::lock_guard<std::mutex> lock(selectedMutex);barItems=items;barItemsAt=now;barEntities=bars;barCategories=categories;selectedNow=slot;}}
   {uint32_t item=0,count=0;
    if(slot<16){std::memcpy(&item,bytes.data()+16+96*(slot/8)+12*(slot%8),4);std::memcpy(&count,bytes.data()+16+96*(slot/8)+12*(slot%8)+4,4);}
    std::lock_guard<std::mutex> lock(selectedMutex);

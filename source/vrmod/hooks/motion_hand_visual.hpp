@@ -8,6 +8,9 @@ inline std::vector<hand::Joint> lastOutput; // this frame's joints of the privat
 inline std::array<hand::FingerCurl,2> lastCurls{}; // ... and the curl amounts they were made from (what other players would be sent)
 // Finger curl (2026-10-09): closed-hand pose from the grip calibration (world-hand-curl.txt + hand-curl-closed-pose.bin).
 inline std::vector<hand::Joint> closedPose;inline float curlRelaxed=.15f;inline uint64_t curlLogged=0;
+// The consumable held in the right hand (motion_consumable_visual.hpp, set there for the next frame): -1 none, 0 held in the
+// fist (the fingers closed around it), 1 lying on the open palm (the fingers a little cupped).
+inline int rightHold=-1;inline float rightCurl=.9f;   // the fist's closing for what it holds (thick things leave it open)
 struct ThumbSeen {bool active=false,touch=false;};inline std::array<ThumbSeen,2> thumbSeen{};inline uint64_t thumbChanges=0;
 using PoseCreate=uint32_t(__fastcall*)(void*,const void*);
 using PoseUpdate=void(__fastcall*)(void*,uint32_t,const void*);
@@ -176,7 +179,8 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
         if(v.thumbTouchActive!=thumbSeen[h].active||v.thumbTouch!=thumbSeen[h].touch){thumbSeen[h]={v.thumbTouchActive,v.thumbTouch};
             if(thumbChanges++<200)logFile->event("motion_thumb_touch","\"frame\":"+std::to_string(liveFrame.frame)+",\"hand\":"+std::to_string(h)+
                 ",\"sensor\":"+(v.thumbTouchActive?"true":"false")+",\"touch\":"+(v.thumbTouch?"true":"false")+",\"stick\":["+std::to_string(v.stick.x)+","+std::to_string(v.stick.y)+"]");}
-        curls[h]=hand::curlFromControls(v.triggerActive?v.trigger:0.f,v.grabActive?v.squeeze:0.f,thumb,curlRelaxed);}
+        curls[h]=hand::curlFromControls(v.triggerActive?v.trigger:0.f,v.grabActive?v.squeeze:0.f,thumb,curlRelaxed);
+        if(h==1&&rightHold>=0){const float f=rightHold==0?rightCurl:.2f;for(auto& c:curls[h].amount)c=f;if(rightHold==0)curls[h].amount[hand::Thumb]=1.f;}}
     if(rig->curlEnabled()&&(++curlLogged%600)==1)logFile->event("motion_hand_curl_sample","\"frame\":"+std::to_string(liveFrame.frame)+
         ",\"left\":["+std::to_string(curls[0].amount[0])+","+std::to_string(curls[0].amount[1])+","+std::to_string(curls[0].amount[2])+"],\"right\":["+
         std::to_string(curls[1].amount[0])+","+std::to_string(curls[1].amount[1])+","+std::to_string(curls[1].amount[2])+"]");
@@ -200,6 +204,26 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
     for(unsigned h=0;h<2;h++){if(h)o<<',';auto p=grips[h];o<<"["<<p.position.x<<','<<p.position.y<<','<<p.position.z<<','<<p.orientation.x<<','<<p.orientation.y<<','<<p.orientation.z<<','<<p.orientation.w<<']';}
     o<<']';logFile->event("motion_hand_pose",o.str());
     if(updates==1){handPoseMetadata::save(calibrationDirectory,"hand-owned-joints.bin",joints(owned),102*48);}
+}
+// A palm in its socket's space (consumable_model.hpp palmFrame), from the rig's rest pose: where an item laid on the open
+// palm goes. The socket (64 left, 94 right) is where the rig puts the tracked grip; the wrist 44/74 and the bases of the
+// index, middle and little fingers 49/79, 53/83, 61/91 (the knuckles the grip calibration measured).
+inline bool palmInSocket(unsigned h,Pose& out){
+    static std::array<Pose,2> known{};static std::array<bool,2> have{};static const hand::Rig* of=nullptr;
+    if(!rig||h>1)return false;
+    if(of!=rig.get()){have={};of=rig.get();}
+    if(!have[h]){
+        const auto g=rig->globals(rig->neutral());const uint16_t wrist=h?74:44,socket=h?94:64,index=h?79:49,middle=h?83:53,little=h?91:61;
+        if(g.size()<=socket)return false;
+        // The rig's joints are in the game's space, the mirror of the headset's (Z turned): there a right hand turns as a
+        // left one does (2026-10-23, user: "many things sat on the back of the hand" - with h==1 the palm came out of the back).
+        const auto palm=evr::motion::palmFrame(g[wrist].position,g[index].position,g[middle].position,g[little].position,h!=1);
+        known[h]=compose(inverse(g[socket]),palm);have[h]=true;
+        std::ostringstream o;o<<std::setprecision(5)<<"\"hand\":"<<h<<",\"palm_in_socket\":["<<known[h].position.x<<','<<known[h].position.y<<','<<known[h].position.z<<"],\"palm_up_in_socket\":[";
+        const auto up=rotate(known[h].orientation,Vec3{0,1,0});o<<up.x<<','<<up.y<<','<<up.z<<"]";
+        logFile->event("motion_hand_palm",o.str());
+    }
+    out=known[h];return true;
 }
 inline void dispose(uintptr_t scene){
     if(scene!=s())return;

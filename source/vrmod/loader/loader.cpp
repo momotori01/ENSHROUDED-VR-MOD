@@ -308,9 +308,9 @@ void begin(){
     g.ini=given&&given<std::size(other)?std::wstring(other):g.paths.mod+L"\\EnshroudedVR.ini";
     if(!exists(g.ini)&&!given)CopyFileW((g.paths.mod+L"\\EnshroudedVR.defaults.ini").c_str(),g.ini.c_str(),TRUE);
     if(!readFile(g.ini,g.iniText))say("settings: "+narrow(g.ini)+" is not there; the defaults are used (VR off)");
-    g.values=evr::settings::read(g.iniText);
+    g.values=evr::settings::forStart(evr::settings::read(g.iniText));   // with the alternate eyes, their own picture (2026-10-23)
     say("settings: VR="+std::to_string(int(g.values.vr))+" Sync="+std::to_string(int(g.values.online))+" RenderScale="+evr::settings::text(g.values.renderScale)+" Dlss="+g.values.dlss+
-        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+(given?" (from EVR_AUTO_INI)":""));
+        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+" UiAutoHide="+std::to_string(int(g.values.uiAutoHide))+" AlternateEyes="+std::to_string(int(g.values.alternateEyes))+" AfwPacing="+std::to_string(g.values.afwPacing)+(given?" (from EVR_AUTO_INI)":""));
     if(!supportedBuild()){restoreRenderSettings();status("Off: this version of the game is not the one the mod was made for (the game was updated?); the game runs without the mod");return;}
     applyRecommendedGraphics();
     const bool hooks=exists(g.paths.bin+L"\\evr_hooks.dll");
@@ -341,11 +341,12 @@ void begin(){
             const auto name=t.substr(0,space),hash=evr::settings::trim(t.substr(space+1));if(hash.size()!=64)continue;
             if(name=="shadow_receiver"&&exists(g.paths.data+L"\\shadow_receiver.spv"))shaders.shadowReceiver=wide(hash);
             if(name=="gi_probe"&&exists(g.paths.data+L"\\gi_probe.spv"))shaders.giProbe=wide(hash);}
-        for(const auto& variable:start::vrEnvironment(g.paths,shaders,g.values.online,g.values.renderScale,g.values.alternateEyes,g.values.eyeWarp))setEnvironment(variable.first,variable.second);
+        for(const auto& variable:start::vrEnvironment(g.paths,shaders,g.values.online,g.values.renderScale,g.values.alternateEyes,g.values.eyeWarp,g.values.afwPacing))setEnvironment(variable.first,variable.second);
         // Real crouching (2026-10-18): how it begins, and the file the game's start menu (VR settings) writes its changes into.
         setEnvironment(L"EVR_ROOM_SNEAK",g.values.realCrouch?L"":L"0");setEnvironment(L"EVR_CROUCH_DROP",std::to_wstring(g.values.crouchDrop));setEnvironment(L"EVR_SETTINGS_INI",g.ini);
         // The stroke's speed and swimming by the arms (2026-10-20), changeable there too.
         setEnvironment(L"EVR_SWING_SPEED",std::to_wstring(g.values.swingSpeed));setEnvironment(L"EVR_ARM_SWIM",g.values.armSwim?L"":L"0");setEnvironment(L"EVR_HIT_STOP",g.values.hitStop?L"":L"0");
+        setEnvironment(L"EVR_UI_AUTO_HIDE",g.values.uiAutoHide?L"":L"0");   // [Picture] UiAutoHide (2026-10-23)
         // The mod's Vulkan layer prepares OpenXR only with the runtime named by an absolute path (layer/xr_preflight.hpp).
         // Without XR_RUNTIME_JSON it is the PC's own active runtime, named here. First headset start from Steam,
         // 2026-10-14 12:39: "preflight requires explicit absolute runtime/loader paths" - the Mock tests had always

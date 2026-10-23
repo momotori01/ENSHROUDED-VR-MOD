@@ -14,15 +14,22 @@
 // Mode 2 (the hole fill, after mode 1): one triangle over the whole picture at depth 0.5, drawn only where the grid
 // wrote no depth (the holes); its fragments take this eye's own last picture (eye_warp.frag).
 layout(set = 0, binding = 1) uniform sampler2D depthTex;   // NEAREST
+// The kept picture's things' own motion over its game frame (2026-10-23, the mod's own frames for every refresh,
+// include/evr/afw_pacing.hpp pacing 2): the game's motion vectors less the camera's (layer/eye_motion_fix.hpp), in UV,
+// previous - current. A refresh between the game's frames carries a moving thing on by motion.x of its frame's motion: the
+// hands and the weapon, which move with the player, keep their place while the world is carried on by the walk.
+layout(set = 0, binding = 3) uniform sampler2D motionTex;
 layout(push_constant) uniform Warp {
     mat4 oldToNew;   // kept eye's view space -> new eye's view space, for vec4(point, 1)
     vec4 oldTan;     // tan of the kept fov: left, right, down, up (left and down negative)
     vec4 newTan;     // the same for this frame's fov
     vec4 params;     // x: cells along each side, y: near (depth = near / distance), z: the distance shown for depth 0, w: mode (0 stretch, 1 holes, 2 fill)
+    vec4 motion;     // x: the game frames to carry the things' motion on by (0: none)
 } warp;
 layout(location = 0) out vec2 uv;
 layout(location = 1) out float dist;              // the distance at this vertex
 layout(location = 2) flat out vec2 cellRange;     // the nearest and the farthest distance at the cell's four corners
+layout(location = 3) flat out vec4 cellMotion;    // the things' own motion (times motion.x) at the cell's nearest corner (xy) and farthest (zw)
 float distanceAt(vec2 at) {
     float d = textureLod(depthTex, at, 0.0).r;
     return min(d > 1e-7 ? warp.params.y / d : warp.params.z, warp.params.z);
@@ -34,6 +41,7 @@ void main() {
         uv = corner * 0.5 + 0.5;
         dist = 0.0;
         cellRange = vec2(0.0);
+        cellMotion = vec4(0.0);
         return;
     }
     int cells = int(warp.params.x);
@@ -51,13 +59,27 @@ void main() {
     vec2 c0 = vec2(float(qx), float(qy)) * inv;
     float d00 = distanceAt(c0), d10 = distanceAt(c0 + vec2(inv, 0.0)), d01 = distanceAt(c0 + vec2(0.0, inv)), d11 = distanceAt(c0 + vec2(inv, inv));
     cellRange = vec2(min(min(d00, d10), min(d01, d11)), max(max(d00, d10), max(d01, d11)));
+    cellMotion = vec4(0.0);
+    if (warp.motion.x != 0.0) {
+        // a cell over the edge of a thing that moves by itself (the staff in the hand) and of the world behind it: the walk
+        // of a fragment's ray (eye_warp.frag) takes the near corner's motion near and the far corner's far
+        vec2 corners[4] = vec2[4](c0, c0 + vec2(inv, 0.0), c0 + vec2(0.0, inv), c0 + vec2(inv, inv));
+        float ds[4] = float[4](d00, d10, d01, d11);
+        int near = 0, far = 0;
+        for (int i = 1; i < 4; ++i) { if (ds[i] < ds[near]) near = i; if (ds[i] > ds[far]) far = i; }
+        cellMotion = vec4(textureLod(motionTex, corners[near], 0.0).xy, textureLod(motionTex, corners[far], 0.0).xy) * warp.motion.x;
+    }
     dist = ox == 0 ? (oy == 0 ? d00 : d01) : (oy == 0 ? d10 : d11);
-    float x = warp.oldTan.x + (warp.oldTan.y - warp.oldTan.x) * uv.x;
-    float y = warp.oldTan.w - (warp.oldTan.w - warp.oldTan.z) * uv.y;   // row 0 is the top of the picture
+    // where the thing at this place has moved on to (its own motion; the colour is still read at uv)
+    vec2 moved = warp.motion.x != 0.0 ? uv - textureLod(motionTex, uv, 0.0).xy * warp.motion.x : uv;
+    float x = warp.oldTan.x + (warp.oldTan.y - warp.oldTan.x) * moved.x;
+    float y = warp.oldTan.w - (warp.oldTan.w - warp.oldTan.z) * moved.y;   // row 0 is the top of the picture
     vec4 p = warp.oldToNew * vec4(x * dist, y * dist, -dist, 1.0);
     float w = -p.z;
     if (w < 0.02) { gl_Position = vec4(10.0, 10.0, 0.0, 1.0); return; }   // behind the new eye: off the picture
     float u2 = (p.x / w - warp.newTan.x) / (warp.newTan.y - warp.newTan.x);
     float v2 = (warp.newTan.w - p.y / w) / (warp.newTan.w - warp.newTan.z);
-    gl_Position = vec4((u2 * 2.0 - 1.0) * w, (v2 * 2.0 - 1.0) * w, 0.0, w);
+    // the depth (2026-10-23): nearer smaller, below the hole fill's 0.5 - used where the grid is drawn with the depth test
+    // (include/evr/eye_warp.hpp pipelineTested); the painter's order needs none
+    gl_Position = vec4((u2 * 2.0 - 1.0) * w, (v2 * 2.0 - 1.0) * w, 0.49 * w / (w + 1.0) * w, w);
 }

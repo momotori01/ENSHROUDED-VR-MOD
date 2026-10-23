@@ -1,6 +1,7 @@
 // Test-only OpenXR runtime subset. Uses actual Vulkan swapchain images.
 // Not a production compositor or a Khronos conformance implementation.
 #include <atomic>
+#include <mutex>
 #include <cstring>
 #include <deque>
 #include <evr/log.hpp>
@@ -41,6 +42,10 @@ mock::NavigationState navigation;
 bool navigationMoving=false;
 int64_t navigationClock(){return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();}
 bool instanceLive = false, sessionLive = false, begun = false, waited = false, frameBegun = false, requirements = false;
+// The display time the last xrWaitFrame gave (xrEndFrame takes only it). EVR_MOCK_CLOCK_TIME=1 (2026-10-23, the mod's own frames
+// for every refresh): the steady clock's time since the start plus two frames, instead of the frame's number times 11.1 ms,
+// so that a frame held up (a capture) does not shift the times against the game's clock.
+XrTime lastPredicted = 0;
 XrInstance inst = reinterpret_cast<XrInstance>(uintptr_t(0x10001));
 XrSession sess = reinterpret_cast<XrSession>(uintptr_t(0x20001));
 std::unique_ptr<Vulkan> vk;
@@ -183,6 +188,19 @@ XrFovf mockFov(int eye)
 }
 } // namespace
 #define XR_FN(name) static XrResult XRAPI_CALL name
+// Calls from more than one thread (2026-10-23: the mod's own frame for every refresh, include/evr/afw_pacing.hpp, waits
+// for and ends frames on a thread of its own while the game's thread locates views and syncs actions): every function
+// runs under this lock (xrGetInstanceProcAddr hands out Locked<...>::call); xrWaitFrame takes it after its pacing sleep.
+static std::recursive_mutex mockLock;
+template <auto F> struct Locked;
+template <class... A, XrResult(XRAPI_CALL *F)(A...)> struct Locked<F>
+{
+    static XrResult XRAPI_CALL call(A... a)
+    {
+        std::lock_guard<std::recursive_mutex> guard(mockLock);
+        return F(a...);
+    }
+};
 #include "mock_actions.hpp"
 XR_FN(m_xrEnumerateInstanceExtensionProperties)(const char *layer, uint32_t cap, uint32_t *count,
                                                 XrExtensionProperties *props)
@@ -766,11 +784,35 @@ XR_FN(m_xrReleaseSwapchainImage)(XrSwapchain h, const XrSwapchainImageReleaseInf
 }
 XR_FN(m_xrWaitFrame)(XrSession s, const XrFrameWaitInfo *, XrFrameState *p)
 {
+    // EVR_MOCK_FRAME_MS=<n> (2026-10-14): one frame every n milliseconds at most, so that runs of the same input script
+    // go the same way - the game moves by time, a script steps by frames (frames taking longer still take longer).
+    // Slept before the lock (2026-10-23): another thread's calls go on meanwhile.
+    {
+        static const int frameMs = [] { const char *v = std::getenv("EVR_MOCK_FRAME_MS"); const int n = v ? std::atoi(v) : 0; return n > 0 && n <= 200 ? n : 0; }();
+        static std::chrono::steady_clock::time_point due{};
+        if (frameMs)
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (due.time_since_epoch().count() == 0 || now > due + std::chrono::milliseconds(frameMs))
+                due = now;
+            else
+                std::this_thread::sleep_until(due);
+            due += std::chrono::milliseconds(frameMs);
+        }
+    }
+    if (const char *realtime = std::getenv("EVR_MOCK_REALTIME"))
+    {
+        if (std::string(realtime) == "1")
+            std::this_thread::sleep_for(std::chrono::milliseconds(11));
+    }
+    std::lock_guard<std::recursive_mutex> guard(mockLock);
     if (!good(s))
         return XR_ERROR_HANDLE_INVALID;
     if (!begun)
         return XR_ERROR_SESSION_NOT_RUNNING;
-    if (waited || frameBegun)
+    // OpenXR allows waiting for the next frame while one is begun; its xrBeginFrame then discards the frame begun first
+    // (the steady pacing of the alternate eyes, include/evr/afw_pacing.hpp, 2026-10-23).
+    if (waited)
         return XR_ERROR_CALL_ORDER_INVALID;
     waited = true;
     frame++;
@@ -802,28 +844,14 @@ XR_FN(m_xrWaitFrame)(XrSession s, const XrFrameWaitInfo *, XrFrameState *p)
             headTurnLoggedPitch = pitch;
         }
     }
-    // EVR_MOCK_FRAME_MS=<n> (2026-10-14): one frame every n milliseconds at most, so that runs of the same input script
-    // go the same way - the game moves by time, a script steps by frames (frames taking longer still take longer).
-    {
-        static const int frameMs = [] { const char *v = std::getenv("EVR_MOCK_FRAME_MS"); const int n = v ? std::atoi(v) : 0; return n > 0 && n <= 200 ? n : 0; }();
-        static std::chrono::steady_clock::time_point due{};
-        if (frameMs)
-        {
-            const auto now = std::chrono::steady_clock::now();
-            if (due.time_since_epoch().count() == 0 || now > due + std::chrono::milliseconds(frameMs))
-                due = now;
-            else
-                std::this_thread::sleep_until(due);
-            due += std::chrono::milliseconds(frameMs);
-        }
-    }
-    if (const char *realtime = std::getenv("EVR_MOCK_REALTIME"))
-    {
-        if (std::string(realtime) == "1")
-            std::this_thread::sleep_for(std::chrono::milliseconds(11));
-    }
     updateNavigation();
-    p->predictedDisplayTime = XrTime(frame) * 11111111;
+    {
+        static const bool clockTime = [] { const char *v = std::getenv("EVR_MOCK_CLOCK_TIME"); return v && !std::strcmp(v, "1"); }();
+        static const auto start = std::chrono::steady_clock::now();
+        const XrTime clock = XrTime(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count()) + 2 * 11111111;
+        lastPredicted = clockTime ? std::max(clock, lastPredicted + 1) : XrTime(frame) * 11111111;
+    }
+    p->predictedDisplayTime = lastPredicted;
     p->predictedDisplayPeriod = 11111111;
     p->shouldRender = sample.connected ? XR_TRUE : XR_FALSE;
     if (!sample.connected)
@@ -837,10 +865,16 @@ XR_FN(m_xrBeginFrame)(XrSession s, const XrFrameBeginInfo *)
         return XR_ERROR_HANDLE_INVALID;
     if (!begun)
         return XR_ERROR_SESSION_NOT_RUNNING;
-    if (!waited || frameBegun)
+    if (!waited)
         return XR_ERROR_CALL_ORDER_INVALID;
+    const bool discarded = frameBegun;
     waited = false;
     frameBegun = true;
+    if (discarded)
+    {
+        note("frame_discarded", "\"frame\":" + std::to_string(frame));
+        return XR_FRAME_DISCARDED;
+    }
     return XR_SUCCESS;
 }
 // This validates only the projection + UI quads subset, not arbitrary composition. Since 2026-10-13 the UI image may
@@ -870,7 +904,7 @@ XR_FN(m_xrEndFrame)(XrSession s, const XrFrameEndInfo *info)
     if (!frameBegun)return XR_ERROR_CALL_ORDER_INVALID;
     frameBegun = false;
     if(!info || info->type!=XR_TYPE_FRAME_END_INFO || info->next)return XR_ERROR_VALIDATION_FAILURE;
-    if (info->displayTime != XrTime(frame) * 11111111)return XR_ERROR_TIME_INVALID;
+    if (info->displayTime != lastPredicted)return XR_ERROR_TIME_INVALID;
     if (info->environmentBlendMode != XR_ENVIRONMENT_BLEND_MODE_OPAQUE)return XR_ERROR_ENVIRONMENT_BLEND_MODE_UNSUPPORTED;
     if (info->layerCount) {
         if (info->layerCount>16 || !info->layers || !info->layers[0])return XR_ERROR_LAYER_INVALID;
@@ -925,10 +959,15 @@ XR_FN(m_xrGetInstanceProcAddr)(XrInstance, const char *name, PFN_xrVoidFunction 
     if (!name || !fn)
         return XR_ERROR_VALIDATION_FAILURE;
     *fn = nullptr;
+    if (!std::strcmp(name, "xrWaitFrame"))   // it locks itself after its sleep
+    {
+        *fn = reinterpret_cast<PFN_xrVoidFunction>(m_xrWaitFrame);
+        return XR_SUCCESS;
+    }
 #define MAP(n)                                                                                                         \
     if (!std::strcmp(name, #n))                                                                                        \
     {                                                                                                                  \
-        *fn = reinterpret_cast<PFN_xrVoidFunction>(m_##n);                                                             \
+        *fn = reinterpret_cast<PFN_xrVoidFunction>(&Locked<m_##n>::call);                                                           \
         return XR_SUCCESS;                                                                                             \
     }
     EVR_MOCK_ACTION_MAP(MAP)
@@ -948,7 +987,7 @@ XR_FN(m_xrGetInstanceProcAddr)(XrInstance, const char *name, PFN_xrVoidFunction 
                                     MAP(xrGetReferenceSpaceBoundsRect) MAP(xrLocateViews)
                                         MAP(xrEnumerateSwapchainFormats) MAP(xrCreateSwapchain) MAP(xrDestroySwapchain)
                                             MAP(xrEnumerateSwapchainImages) MAP(xrAcquireSwapchainImage)
-                                                MAP(xrWaitSwapchainImage) MAP(xrReleaseSwapchainImage) MAP(xrWaitFrame)
+                                                MAP(xrWaitSwapchainImage) MAP(xrReleaseSwapchainImage)
                                                     MAP(xrBeginFrame) MAP(xrEndFrame) MAP(xrResultToString)
                                                         MAP(xrStructureTypeToString) MAP(xrGetVisibilityMaskKHR)
 #undef MAP

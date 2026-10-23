@@ -241,4 +241,65 @@ inline void disable() noexcept {
     const auto result=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0xfe6d80));if(result==MH_OK)enabled=false;
     try{logFile->event("water_feedback_hook_removed","\"status\":"+std::to_string(result));}catch(...){}
 }
+
+// The scene's own water feedback, read only (2026-10-23, the user: "with AFW the water's reflection is the same in both
+// eyes - does that help with the left/right difference of the main mode?"). Since 1.0 the eyes' private feedback is off
+// (install above), so both eyes' water copies go to the scene's one pool, and its consumer - the shared update 0x1fe0c0,
+// the owner's alone (worldSharedStages) - takes one result a frame. With both eyes drawn a frame that is two copies made and
+// one taken; with one eye a frame (AFW) one and one. EVR_WATER_FEEDBACK_OBSERVE=1: each take's result (whether one was
+// there, its serial against the frame's) and the pool's words around its capacity and pending count, as the June layout had
+// them (+0x28, +0x278), read with checks; nothing is changed.
+namespace waterObserve {
+inline const bool observe=[]{char v[8]{};return GetEnvironmentVariableA("EVR_WATER_FEEDBACK_OBSERVE",v,sizeof v)==1&&v[0]=='1';}();
+// The other eye running the first shared update itself (worldSharedStages EVR_EYE_RUNS_SHARED bit 1, 2026-10-23: the water's
+// left/right difference of the main mode) takes the scene's water result a second time a frame: Mock game-20261023-134101 and
+// -152432 ended in an access violation (enshrouded.exe+0x132eadf) as the session closed. That eye's take finds nothing now -
+// the result stays the owner's, one a frame as the game has it.
+inline bool guardOtherEye(){return (worldSharedStages::eyeRunsShared&1)!=0;}
+inline bool wanted(){return observe||guardOtherEye();}
+inline bool enabled=false;inline Take original=nullptr;
+inline std::atomic<uint64_t> calls{0},available{0},lagSum{0},lagMax{0},noStage{0},guarded{0};
+inline uintptr_t lastPool=0;
+bool __fastcall take(Result* output,void* pool){
+    const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress;
+    if(guardOtherEye()&&caller==0x1fe227){const auto* stage=worldSharedStages::current;
+        if(stage&&stage->eye>=0&&stage->eye!=worldSharedStages::ownerEye){const auto n=++guarded;
+            if(n<=3||n%3600==0)try{logFile->event("water_feedback_other_eye_take_skipped","\"frame\":"+std::to_string(liveFrame.frame)+",\"eye\":"+std::to_string(stage->eye)+",\"times\":"+std::to_string(n));}catch(...){}
+            return false;}}
+    const bool got=original(output,pool);
+    if(!observe)return got;
+    try{
+        const auto n=++calls;const auto* stage=worldSharedStages::current;
+        uint64_t lag=0;
+        if(got)++available;
+        if(stage&&got&&stage->serial>=output->serial){lag=stage->serial-output->serial;lagSum+=lag;if(lag>lagMax)lagMax=lag;}
+        if(!stage)++noStage;
+        const auto p=reinterpret_cast<uintptr_t>(pool);
+        if(n<=40||p!=lastPool||n%600==0){
+            uint64_t capacity=0,pending=0;try{capacity=read<uint64_t>(p+0x28);pending=read<uint64_t>(p+0x278);}catch(...){}
+            std::ostringstream o;o<<"\"call\":"<<n<<",\"frame\":"<<liveFrame.frame<<",\"eye_mask\":"<<liveFrame.eyeMask<<",\"caller\":"<<hex(caller)<<",\"pool\":"<<hex(p)
+                <<",\"available\":"<<(got?"true":"false")<<",\"result_serial\":"<<(got?output->serial:0)<<",\"bytes\":"<<(got?output->bytes:0)
+                <<",\"stage_eye\":"<<(stage?stage->eye:-9)<<",\"stage_serial\":"<<(stage?stage->serial:0)<<",\"owner_eye\":"<<worldSharedStages::ownerEye
+                <<",\"lag\":"<<lag<<",\"pool_word_28\":"<<capacity<<",\"pool_word_278\":"<<pending
+                <<",\"calls\":"<<n<<",\"available_calls\":"<<available.load()<<",\"lag_mean\":"<<(available.load()?double(lagSum.load())/double(available.load()):0.0)<<",\"lag_max\":"<<lagMax.load()<<",\"no_stage\":"<<noStage.load();
+            logFile->event("water_feedback_observed",o.str());}
+        lastPool=p;
+    }catch(...){}
+    return got;
+}
+inline void install(){
+    const auto p=parsePattern("48 89 6C 24 18 48 89 74 24 20 57 41 56 41 57 48 81 EC 80 00 00 00 48 83 BA 78");
+    if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0xfe6d80),p.size(),p)!=std::vector<size_t>{0})throw std::runtime_error("water feedback consumer signature changed");
+    const auto call=baseAddress+0x1fe222;
+    if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+0xfe6d80)throw std::runtime_error("water feedback consumer caller changed");
+    if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+0xfe6d80),reinterpret_cast<void*>(&take),reinterpret_cast<void**>(&original))!=MH_OK||
+       MH_EnableHook(reinterpret_cast<void*>(baseAddress+0xfe6d80))!=MH_OK)throw std::runtime_error("water feedback observer hook failed");
+    enabled=true;logFile->event("water_feedback_observer_enabled","\"rva\":\"0xfe6d80\",\"changes_native_results\":false");
+}
+inline void disable() noexcept {
+    if(!enabled)return;const auto r=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0xfe6d80));if(r==MH_OK)enabled=false;
+    try{logFile->event("water_feedback_observer_removed","\"status\":"+std::to_string(r)+",\"calls\":"+std::to_string(calls.load())+",\"available\":"+std::to_string(available.load())+
+        ",\"lag_mean\":"+std::to_string(available.load()?double(lagSum.load())/double(available.load()):0.0)+",\"lag_max\":"+std::to_string(lagMax.load()));}catch(...){}
+}
+}
 }

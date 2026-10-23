@@ -227,6 +227,7 @@ void sweepDepthClearAttachments(VkCommandBuffer cmd,uint32_t count,const VkClear
 #include "diagnostic_readback.hpp"
 #include "gpu_timing.hpp"
 #include "gi_reproject.hpp"
+#include "eye_motion_fix.hpp"
 #include "shadow_share.hpp"
 #include "atmosphere_share.hpp"
 void desktopMirrorSource(VkDevice device,VkImage right) noexcept;
@@ -436,6 +437,9 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateDevice(VkPhysicalDevice physical, const 
     VulkanExtensionPlan plan;
     std::vector<const char *> pointers;
     bool prepared = false;
+    // The mod's own frames for every refresh (include/evr/afw_pacing.hpp, pacing 2 at the start; 2026-10-23): one more queue
+    // in the game's first family, the XR binding's - the refreshes' warps run beside the game's frames instead of after them.
+    std::vector<VkDeviceQueueCreateInfo> ownQueueInfos;std::vector<float> ownQueuePriorities;bool ownQueue = false;
     try
     {
         if (preflight)
@@ -477,6 +481,26 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateDevice(VkPhysicalDevice physical, const 
             pointers = diagnostic::extensionPointers(plan.enabled);
             modified.enabledExtensionCount = uint32_t(pointers.size()); modified.ppEnabledExtensionNames = pointers.data();
             info = &modified; prepared = true;
+            // With the alternate eyes at all (2026-10-23 11:30; the user chose "fill" in the game's VR settings in two starts that had
+            // begun with another pacing - it waited for the next start, and the pacing chosen after it was the one kept): the queue
+            // is made for every start with them, and "fill" can be chosen in the game at any time.
+            const char *pacing = std::getenv("EVR_AFW_PACING");const char *alternate = std::getenv("EVR_ALTERNATE_EYES");
+            if (((pacing && !std::strcmp(pacing, "2")) || (alternate && !std::strcmp(alternate, "1"))) && modified.queueCreateInfoCount && !modified.pQueueCreateInfos[0].flags && modified.pQueueCreateInfos[0].pQueuePriorities)
+            {
+                auto getQueues = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(nextI(instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+                uint32_t count = 0;if (getQueues) getQueues(physical, &count, nullptr);
+                std::vector<VkQueueFamilyProperties> families(count);if (count) getQueues(physical, &count, families.data());
+                const auto &first = modified.pQueueCreateInfos[0];
+                if (first.queueFamilyIndex < count && first.queueCount < families[first.queueFamilyIndex].queueCount)
+                {
+                    ownQueueInfos.assign(modified.pQueueCreateInfos, modified.pQueueCreateInfos + modified.queueCreateInfoCount);
+                    ownQueuePriorities.assign(first.pQueuePriorities, first.pQueuePriorities + first.queueCount);ownQueuePriorities.push_back(1.f);
+                    ownQueueInfos[0].queueCount = first.queueCount + 1;ownQueueInfos[0].pQueuePriorities = ownQueuePriorities.data();
+                    modified.pQueueCreateInfos = ownQueueInfos.data();ownQueue = true;
+                }
+                note("afw_own_queue", "\"added\":" + std::string(ownQueue ? "true" : "false") + ",\"family\":" + std::to_string(first.queueFamilyIndex) +
+                    ",\"game_queues\":" + std::to_string(ownQueue ? first.queueCount : modified.pQueueCreateInfos[0].queueCount) + ",\"family_queues\":" + std::to_string(first.queueFamilyIndex < count ? families[first.queueFamilyIndex].queueCount : 0));
+            }
         }
     }
     catch (const std::exception &e)
@@ -518,6 +542,7 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateDevice(VkPhysicalDevice physical, const 
                 record->enabledDeviceExtensions = diagnostic::extensionNames(info->enabledExtensionCount, info->ppEnabledExtensionNames);
                 record->queueFamily = info->pQueueCreateInfos[0].queueFamilyIndex;
                 record->createdQueueCount = info->pQueueCreateInfos[0].queueCount;
+                if (ownQueue && record->createdQueueCount >= 2) { record->queueIndex = record->createdQueueCount - 1;record->ownQueue = true; }
                 devices.at(key(*result)).fixtureBinding = record;
             }
         }
