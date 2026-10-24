@@ -486,6 +486,7 @@ inline void liveEvents(void* output,const void* actor,void* registry,const std::
    // the next is the game's own, the shots only come 350 ms sooner.
    wandAction.key=key;wandAction.until=now+uint64_t(length/1000000)+3000;++wandShotsEarly;
    if(motion::catalogThrowable(key.item))controllerUiFixture::throwEarlySpawnUntil=now+100;   // the throw's spawn comes within this tick, before the game's thrown state
+   else controllerUiFixture::rangedEarlySpawnUntil=now+100;   // the wand's shot: the same (bow_spawn_observer.hpp rangedAim)
    controllerUiFixture::wandNextShotMs=now+uint64_t((traits.attackAt>0&&traits.attackAt<length?traits.attackAt:length)/1000000);
   }else if(skill){
    // The weapon hits live from this first tick until the next attack may begin (the action's first EnableAbilityEvent
@@ -592,7 +593,9 @@ inline bool ownedElsewhere(uint32_t sequence,uint32_t item,int64_t trigger,uint3
 // side instead: its movement and turn withheld at every call site, as the host withholds them on its server
 // (remoteActions). EVR_GUEST_STILL=0: off.
 inline const bool guestStillWanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_GUEST_STILL",v,sizeof v);return !(n==1&&v[0]=='0');}();
-struct GuestOwned{uint32_t sequence=0,item=0,entity=0;int64_t trigger=0;uint64_t until=0;};inline GuestOwned guestOwned;inline std::mutex guestOwnedMutex;
+struct GuestOwned{uint32_t sequence=0,item=0,entity=0;int64_t trigger=0;uint64_t until=0;int64_t moveAt=0,attackAt=0;};
+inline const bool guestWalk=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_GUEST_WALK",v,sizeof v);return !(n==1&&v[0]=='0');}();   // 0: a guest's own action as before 2026-10-24
+inline GuestOwned guestOwned;inline std::mutex guestOwnedMutex;
 inline std::atomic<unsigned> guestStilled{0},guestOwnedActions{0};
 inline void stillReplica(void* output,const void* actor,void* registry,const void* filter){
  const auto now=GetTickCount64();const auto until=ownedUntil.load();const bool owning=until&&now<=until;
@@ -618,9 +621,26 @@ inline void stillReplica(void* output,const void* actor,void* registry,const voi
     if(length>0&&length<=60000000000ll&&movingAction(before,registry,length,sequence,by)){movingNoted(sequence,item,trigger,by,"replica");return;}
     // a guest: no owner will come - this side holds the action (only a normal attack: movingAction returned above)
     if(guestStillWanted&&(liveTargets::guestWorld||nativeImpactComponents::clientNow(now))&&length>0&&length<=60000000000ll){
-     {std::lock_guard<std::mutex> lock(guestOwnedMutex);guestOwned={sequence,item,triggerEntity,trigger,now+uint64_t(length/1000000)+1000};}guestOwn=true;
+     // When the guest may walk again and attack again in this action (2026-10-24, user after the online run as a guest: "hitting
+     // a pot in passing, the movement stops"; that run's strokes were made walking, left stick 0.96): as the owner's side gives
+     // them (stillAction: the first early event's end or the tool's payment, the next attack's enabling), so that this side
+     // hands the walk back early and keeps the movement factors out (below) - before, a guest's own action had neither and the
+     // character could not walk until it ended.
+     const auto traits=stillTraits(before,registry,length);int64_t moveAt=0;
+     try{std::array<evr::motion::EarlyEvent,evr::motion::maximumEarlyEvents> early{};uint32_t earlyType=0;size_t found=0,lasting=0;
+      if(earlyCandidates(before,registry,length,early,earlyType,found,lasting,false,1000000))moveAt=std::max(early[0].duration,traits.payAt)+16666667;}catch(const std::exception&){}
+     if(!moveAt&&traits.payAt>0)moveAt=traits.payAt+16666667;
+     const int64_t attackAt=controllerUiFixture::liveCooldownEnabled()&&!press.spawnsOnly?traits.attackAt:0;
+     {std::lock_guard<std::mutex> lock(guestOwnedMutex);guestOwned={sequence,item,triggerEntity,trigger,now+uint64_t(length/1000000)+1000,moveAt,attackAt};}guestOwn=true;
      if(guestOwnedActions.fetch_add(1)<200)logFile->event("guest_action_held","\"sequence\":"+std::to_string(sequence)+",\"item\":"+std::to_string(item)+",\"trigger\":"+std::to_string(trigger)+
-      ",\"length_ms\":"+std::to_string(length/1000000)+",\"press_serial\":"+std::to_string(press.serial)+",\"press_age_ms\":"+std::to_string(now-press.pressed));}}
+      ",\"length_ms\":"+std::to_string(length/1000000)+",\"press_serial\":"+std::to_string(press.serial)+",\"press_age_ms\":"+std::to_string(now-press.pressed)+
+      ",\"move_at_ms\":"+std::to_string(moveAt/1000000)+",\"attack_at_ms\":"+std::to_string(attackAt/1000000));
+     // The guest's own stroke began (2026-10-24, user after the online run: "any other bugs?"): as a guest every press was
+     // "lost" - the stroke's begin and its cooldown were told only where the server's world runs (the look ahead above), so the
+     // cooldown's hum and wait never came for a guest (presses lost: 50 of 51 in 20261022-140736, 79 of 84 in -224151, 74 of 75
+     // in 20261024-012838; 1 of 49 or none as host or solo). The same begin and length as there, from this side's action.
+     if(!press.spawnsOnly&&controllerUiFixture::liveCooldownEnabled()){controllerUiFixture::liveAttackBegan=press.serial;
+      if(traits.attackAt>0)controllerUiFixture::measureLiveCooldown(press.serial,uint64_t(traits.attackAt/1000000),sequence);}}}
    }
   }
   const auto address=reinterpret_cast<uintptr_t>(output);const auto h=read<std::array<uintptr_t,4>>(address);
@@ -629,14 +649,16 @@ inline void stillReplica(void* output,const void* actor,void* registry,const voi
   // The swing's sound too (SfxNotifierEvent): this side plays it, at its authored time, after the early hit.
   // And the factors that slow the character for the animation (LerpMovementFactorEvent, LerpRotationFactorEvent).
   for(size_t i=0;i<h[1];++i){const auto p=read<uintptr_t>(h[0]+i*8);const auto type=read<uint32_t>(p);
-   if(type==vfxNotifierEvent||(guestOwn&&movesCharacter(type))||(!pending&&!(stillKeep&1)&&type==sfxNotifierEvent)||(!pending&&!(stillKeep&8)&&(type==lerpMovementFactorEvent||type==lerpRotationFactorEvent))){++withheld;if(guestOwn&&type!=vfxNotifierEvent)++guestStilled;continue;}dst.push_back(p);}
+   if(type==vfxNotifierEvent||(guestOwn&&movesCharacter(type))||(!pending&&!(stillKeep&1)&&type==sfxNotifierEvent)||((!pending||(guestOwn&&guestWalk))&&!(stillKeep&8)&&(type==lerpMovementFactorEvent||type==lerpRotationFactorEvent))){++withheld;if(guestOwn&&type!=vfxNotifierEvent)++guestStilled;continue;}dst.push_back(p);}
   // The abilities to walk, turn and jump, as soon as the early stroke is done: on this side too (see movesNow). A call
   // site can take them only on a tick that gave it an array, so they are offered for 0.4 s from that time on; enabling
   // twice changes nothing.
   // The abilities to attack again, when the cooldown's 80 % are near (attackEarlyAt): on this side as well.
-  unsigned abilities=0;const int64_t moveAt=ownedMoveAt.load(),attackAt=ownedAttackAt.load();
+  // A guest's own action: its own times (guestOwned, set where it was held above), from its first tick on.
+  unsigned abilities=0;int64_t moveAt=ownedMoveAt.load(),attackAt=ownedAttackAt.load();
+  if(guestOwn&&guestWalk){std::lock_guard<std::mutex> lock(guestOwnedMutex);moveAt=guestOwned.moveAt;attackAt=guestOwned.attackAt;}
   bool unfiltered=!filter;if(filter){const auto f=read<std::array<uint8_t,5>>(reinterpret_cast<uintptr_t>(filter));unfiltered=!f[4];}
-  if(!pending&&(moveAt>0||attackAt>0)&&unfiltered&&h[0]&&!(stillKeep&16)){
+  if((!pending||(guestOwn&&guestWalk))&&(moveAt>0||attackAt>0)&&unfiltered&&h[0]&&!(stillKeep&16)){
    const auto before=read<std::array<uint8_t,3104>>(reinterpret_cast<uintptr_t>(actor));int64_t start=0,end=0,length=0;
    std::memcpy(&start,before.data()+0x1b8,8);std::memcpy(&end,before.data()+0x1c0,8);std::memcpy(&length,before.data()+0x188,8);
    const bool playing=(before[0x1b1]&1)&&length>0&&length<=60000000000ll;

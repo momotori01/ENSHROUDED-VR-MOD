@@ -1,0 +1,13 @@
+#version 450
+// The FSR3 upscaler's frame info shared between the eyes (layer/gi_reproject.hpp exposure*, 2026-10-24): the luma
+// pyramid's 1x1 rgba32f image (x the exposure, y the smoothed log luma, z the average luma). toImage 0: after the first
+// eye's luma pyramid its frame info is kept in the layer's buffer; toImage 1: after the second eye's the buffer is written
+// over its frame info, so that both eyes' upscalers run with the first eye's exposure.
+layout(local_size_x=1,local_size_y=1,local_size_z=1) in;
+layout(constant_id=0) const uint toImage=0u;
+layout(set=0,binding=0,rgba32f) uniform image2D frameInfo;
+layout(set=0,binding=1,std430) buffer Kept {vec4 value;} kept;
+void main(){
+    if(toImage==0u)kept.value=imageLoad(frameInfo,ivec2(0,0));
+    else imageStore(frameInfo,ivec2(0,0),kept.value);
+}

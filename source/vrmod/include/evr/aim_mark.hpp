@@ -94,11 +94,13 @@ inline Vec3 markPoint(const Line& l,float reach=markDistance) {return l.origin+l
 // parts around the cluster, the cluster as a quad of its own (OpenXR composition layers of the same UI image; the
 // runtime gives it the depth of the aimed point, so it does not double against what is aimed at).
 struct PixelRect {int32_t x0=0,y0=0,x1=0,y1=0;};
-// The cluster in an image of this size: 200 pixels left of the middle to 420 right, 120 up and down, of a 1080 rows
-// high image.
+// The cluster in an image of this size: 200 pixels left of the middle to 600 right, 170 up and down, of a 1080 rows
+// high image. (420 right and 120 up and down until 2026-10-24 - user after the headset: "the staff's spell switching is cut off
+// and cannot be read; the arrows' too, probably". Bug reports 20261024-152947: the spell list, centred on the chosen spell's row,
+// reached 544 pixels right and 93 up / 96 down, the rows 30 pixels apart, so a list of 6 spells reaches 150 up or down.)
 inline PixelRect clusterRect(uint32_t width,uint32_t height) {
     const float s=float(height)/1080.f,cx=float(width)*.5f,cy=float(height)*.5f;
-    PixelRect r{int32_t(cx-200*s),int32_t(cy-120*s),int32_t(cx+420*s),int32_t(cy+120*s)};
+    PixelRect r{int32_t(cx-200*s),int32_t(cy-170*s),int32_t(cx+600*s),int32_t(cy+170*s)};
     r.x0=std::clamp(r.x0,1,int32_t(width)-2);r.x1=std::clamp(r.x1,r.x0+1,int32_t(width)-1);
     r.y0=std::clamp(r.y0,1,int32_t(height)-2);r.y1=std::clamp(r.y1,r.y0+1,int32_t(height)-1);
     return r;

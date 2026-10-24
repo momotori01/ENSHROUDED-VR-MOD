@@ -2,6 +2,8 @@
 #include <gi_reproject_capture.h>
 #include <gi_reproject_apply.h>
 #include <fog_reproject.h>
+#include <fsr_exposure_copy.h>
+#include <ssr_reproject.h>
 // One indirect light for both eyes (2026-10-17; headset reports 3/5/16/20 and the user: "in many places the darkness of
 // the shadows differs between the eyes, or a shadow is missing in one").
 // Each eye's View runs the game's dynamic GI on its own; the two converge on their own, so a rock face under an
@@ -56,6 +58,16 @@ struct Device {
     bool fogReady=false;VkDescriptorSetLayout fogSetLayout{};VkPipelineLayout fogPipelineLayout{};VkPipeline fogPipeline{};VkDescriptorPool fogPool{};
     std::array<VkDescriptorSet,ring> fogSets{};uint32_t fogNext=0;VkSampler fogSampler{};
     std::unordered_map<VkImage,VkImageView> fogSampledViews,fogStorageViews;
+    // the FSR3 frame info shared between the eyes (exposurePrepare): two pipelines (keep, write back), a ring of sets, a buffer
+    bool exposureReady=false;VkDescriptorSetLayout exposureSetLayout{};VkPipelineLayout exposurePipelineLayout{};VkPipeline exposurePipelines[2]{};
+    VkDescriptorPool exposurePool{};std::array<VkDescriptorSet,ring> exposureSets{};uint32_t exposureNext=0;VkBuffer exposureBuffer{};
+    // the water's reflections shared between the eyes (ssrPrepare, ssrKeep): two pipelines (keep, apply), a ring of sets, a
+    // sampler, the first eye's result and depth kept in the layer's images, its screen-to-world matrix in a buffer
+    // (one slot per picture size: the game resolves two reflections an eye - the picture's and the water's half-width one)
+    struct SsrSlot {uint32_t width=0,height=0;VkImage result{},depth{};VkImageView resultView{},depthView{};bool fresh=false;};
+    bool ssrReady=false;VkDescriptorSetLayout ssrSetLayout{};VkPipelineLayout ssrPipelineLayout{};VkPipeline ssrPipelines[2]{};
+    VkDescriptorPool ssrPool{};std::array<VkDescriptorSet,64> ssrSets{};uint32_t ssrNext=0;VkSampler ssrSampler{};VkBuffer ssrMatrix{};
+    std::array<SsrSlot,4> ssrSlots{};
     uint32_t memoryType(uint32_t bits,VkMemoryPropertyFlags flags){
         for(uint32_t i=0;i<memory.memoryTypeCount;i++)if((bits&(1u<<i))&&(memory.memoryTypes[i].propertyFlags&flags)==flags)return i;
         throw std::runtime_error("GI reprojection memory type");
@@ -87,6 +99,46 @@ inline FogPending fogPending;inline uint64_t fogDispatches=0,fogFirsts=0,fogAppl
 // the second eye's lighting constants, recorded when its GI was taken (the fog pass of the same frame uses them)
 struct Applied {bool valid=false;uint64_t present=0;VkBuffer ubo{};VkDeviceSize offset=0,range=0;};
 inline Applied lastApply;
+// The FSR3 upscaler's frame info (2026-10-24; the user: "fix the other bug"). Its luma pyramid (shader 7567e556, 49092 bytes:
+// FidelityFX FSR 3.1's, RenderDoc 204408 events 9007 / 13898) writes each View's 1x1 frame info at set 0 binding 7 (rgba32f:
+// x the exposure, y the smoothed log luma, z the average luma; every later pass of the upscaler multiplies the colour by x).
+// The game dispatches it with 6 mips, so the "1x1" level is the average of the top-left 64x64 pixels of the eye's picture
+// only: z was 1.5656 in the left eye and 1.9803 in the right, those pixels' means exactly (over the whole pictures the eyes
+// differ by 2 %), and the eyes' exposures were 47 % apart - the highlights' compression and accumulation in the upscaler
+// differ between the eyes. Only with FSR (the usual headset run uses DLSS; a RenderDoc capture falls back to FSR).
+// After the first eye's luma pyramid of a frame its frame info is kept in a buffer of the layer's; after the second eye's
+// (the same groups, another image) the buffer is written over the second eye's frame info (shaders/fsr_exposure_copy.comp),
+// so both eyes' upscalers run with the first eye's exposure. EVR_FSR_EXPOSURE_SHARE=0: each eye its own.
+constexpr uint32_t exposureBytes=49092,exposureSet=0,exposureBinding=7;
+constexpr const char* exposureSha="7567e556de0a127b8ed6da0199eeff2505a298be7cb4e5164212c90edacab959";
+inline bool exposureEnabled(){static const bool yes=[]{const char* v=std::getenv("EVR_FSR_EXPOSURE_SHARE");return enabled()&&!(v&&!std::strcmp(v,"0"));}();return yes;}
+struct ExposureRecord {VkImageView view{};VkImageLayout layout{};};
+inline std::unordered_set<VkShaderModule> exposureModules;inline std::unordered_set<VkPipeline> exposurePipelines;
+inline std::unordered_map<VkDescriptorSet,ExposureRecord> exposureRecords;
+struct ExposurePending {bool valid=false;VkImageView view{};uint32_t gx=0,gy=0;uint64_t present=0,tracked=0;};
+inline ExposurePending exposurePending;inline uint64_t exposureDispatches=0,exposureKeeps=0,exposureApplies=0,exposureSkips=0,exposureTracked=0;
+// The water's screen-space reflections (2026-10-24; the user: "both ponds reflect differently in the eyes", "the right eye shows
+// the sky where the far trees should be"; chosen: "copy the left eye's reflection into the right eye"). Headset capture
+// game-20261024-120935 (pair 3286, FSR): the eyes' water had the same places, heights and normals (pond by the post 842.39 / 842.36
+// high, normals (-0.03, 0.96, 0.08) / (-0.03, 0.96, 0.10)), but each eye's reflection trace hits only what is on its own screen and
+// the screens differ (about 12 degrees apart, each a symmetric frustum around its own field of view): by the post 75 % of the
+// left eye's water pixels hit something and 89 % of the right eye's, the left eye's pond the sky, the right eye's the trees.
+// The game's resolve of the reflections (shader 7a45c485, 17604 bytes; dispatched indirectly per tile) reads its view constants
+// at set 0 binding 0 (the first four rows: screen to world), the half-width depth at set 1 binding 5 and writes the result at
+// set 1 binding 8 (rgba16f, 667 x 1432 on the headset; read by the water's composite). Just after the first eye's resolve of a
+// frame its result, depth and matrix are kept; just after the second eye's (the same size, another image) every pixel of its
+// result takes the first eye's at the same point of the world where the first eye saw that point and had a result
+// (shaders/ssr_reproject.comp; in the capture 90 % of the right eye's water pixels). Both eyes then show one reflection; it
+// lies on the water's surface in depth. The trace's history of each eye is left alone. EVR_SSR_REPROJECT=0: each eye its own.
+constexpr uint32_t ssrBytes=17604,ssrViewSet=0,ssrViewBinding=0,ssrImageSet=1,ssrDepthBinding=5,ssrResultBinding=8;
+constexpr const char* ssrSha="7a45c485b8c687f1d60e005f8eb877c515b1eebef3e38a39cdf74256612297ea";
+inline bool ssrEnabled(){static const bool yes=[]{const char* v=std::getenv("EVR_SSR_REPROJECT");return enabled()&&!(v&&!std::strcmp(v,"0"));}();return yes;}
+struct SsrRecord {VkBuffer ubo{};VkDeviceSize uboOffset=0,uboRange=0;VkDescriptorType uboType=VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    VkImageView depth{},result{};VkImageLayout depthLayout{},resultLayout{};};
+inline std::unordered_set<VkShaderModule> ssrModules;inline std::unordered_set<VkPipeline> ssrPipelines;
+inline std::unordered_map<VkDescriptorSet,SsrRecord> ssrRecords;
+struct SsrPending {bool valid=false;VkImage result{};uint32_t width=0,height=0;uint64_t present=0,tracked=0;};
+inline std::array<SsrPending,4> ssrPending{};inline uint64_t ssrDispatches=0,ssrKeeps=0,ssrApplies=0,ssrSkips=0,ssrTracked=0;
 struct Pending {bool valid=false;VkImage irradiance{};uint32_t width=0,height=0;uint64_t dispatch=0,present=0,tracked=0;};
 inline Pending pending;inline uint64_t lightingDispatches=0,captures=0,applies=0,skips=0,tracked=0;
 // The first 6 of each kind, then one in 1800 of the captures and applies (the counts are in every line).
@@ -179,6 +231,83 @@ inline void fogPrepare(Device& d){
     check(d.vkCreateSampler(d.handle,&sc,nullptr,&d.fogSampler),"fog sampler");
     d.fogReady=true;
     say("fog_reproject_mode",std::string("\"keep_own\":")+(keepOwn?"true":"false")+",\"behind_search\":"+std::to_string(fogSpec[1])+",\"mark_difference\":"+std::to_string(fogSpec[2])+",\"strict_reach\":"+std::to_string(fogSpec[3]));
+}
+// The FSR3 frame info's copy: set 0 = the bindings of shaders/fsr_exposure_copy.comp, toImage (constant 0) 0 / 1.
+inline void exposurePrepare(Device& d){
+    if(d.exposureReady)return;
+    std::array<VkDescriptorSetLayoutBinding,2> b{};
+    b[0].binding=0;b[0].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;b[1].binding=1;b[1].descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    for(auto& x:b){x.descriptorCount=1;x.stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
+    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};li.bindingCount=2;li.pBindings=b.data();
+    check(d.vkCreateDescriptorSetLayout(d.handle,&li,nullptr,&d.exposureSetLayout),"exposure set layout");
+    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pl.setLayoutCount=1;pl.pSetLayouts=&d.exposureSetLayout;
+    check(d.vkCreatePipelineLayout(d.handle,&pl,nullptr,&d.exposurePipelineLayout),"exposure pipeline layout");
+    VkShaderModuleCreateInfo si{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};si.pCode=fsrExposureCopy;si.codeSize=sizeof(fsrExposureCopy);
+    VkShaderModule module{};check(d.vkCreateShaderModule(d.handle,&si,nullptr,&module),"exposure shader");
+    VkResult r=VK_SUCCESS;
+    for(uint32_t pass=0;pass<2&&r==VK_SUCCESS;++pass){
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};ci.stage.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;ci.stage.module=module;ci.stage.pName="main";ci.layout=d.exposurePipelineLayout;
+        const VkSpecializationMapEntry entry{0,0,sizeof(uint32_t)};VkSpecializationInfo spec{1,&entry,sizeof pass,&pass};ci.stage.pSpecializationInfo=&spec;
+        r=d.vkCreateComputePipelines(d.handle,VK_NULL_HANDLE,1,&ci,nullptr,&d.exposurePipelines[pass]);}
+    d.vkDestroyShaderModule(d.handle,module,nullptr);check(r,"exposure pipeline");
+    const VkDescriptorPoolSize sizes[2]{{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,ring},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,ring}};
+    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pi.maxSets=ring;pi.poolSizeCount=2;pi.pPoolSizes=sizes;
+    check(d.vkCreateDescriptorPool(d.handle,&pi,nullptr,&d.exposurePool),"exposure descriptor pool");
+    std::array<VkDescriptorSetLayout,ring> layouts;layouts.fill(d.exposureSetLayout);
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=d.exposurePool;ai.descriptorSetCount=ring;ai.pSetLayouts=layouts.data();
+    check(d.vkAllocateDescriptorSets(d.handle,&ai,d.exposureSets.data()),"exposure descriptor sets");
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};bi.size=256;bi.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    check(d.vkCreateBuffer(d.handle,&bi,nullptr,&d.exposureBuffer),"exposure buffer");VkMemoryRequirements req{};d.vkGetBufferMemoryRequirements(d.handle,d.exposureBuffer,&req);
+    VkMemoryAllocateInfo a{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};a.allocationSize=req.size;a.memoryTypeIndex=d.memoryType(req.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VkDeviceMemory m{};check(d.vkAllocateMemory(d.handle,&a,nullptr,&m),"exposure buffer memory");d.memories.push_back(m);check(d.vkBindBufferMemory(d.handle,d.exposureBuffer,m,0),"exposure buffer bind");
+    d.exposureReady=true;
+}
+// The water reflections' copy: set 0 = the bindings of shaders/ssr_reproject.comp, mode (constant 0) 0 keep / 1 apply.
+inline void ssrPrepare(Device& d){
+    if(d.ssrReady)return;
+    const VkDescriptorType types[7]{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLER,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+    std::array<VkDescriptorSetLayoutBinding,7> b{};
+    for(uint32_t i=0;i<7;i++){b[i].binding=i;b[i].descriptorType=types[i];b[i].descriptorCount=1;b[i].stageFlags=VK_SHADER_STAGE_COMPUTE_BIT;}
+    VkDescriptorSetLayoutCreateInfo li{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};li.bindingCount=7;li.pBindings=b.data();
+    check(d.vkCreateDescriptorSetLayout(d.handle,&li,nullptr,&d.ssrSetLayout),"ssr set layout");
+    VkPipelineLayoutCreateInfo pl{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};pl.setLayoutCount=1;pl.pSetLayouts=&d.ssrSetLayout;
+    check(d.vkCreatePipelineLayout(d.handle,&pl,nullptr,&d.ssrPipelineLayout),"ssr pipeline layout");
+    VkShaderModuleCreateInfo si{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};si.pCode=ssrReproject;si.codeSize=sizeof(ssrReproject);
+    VkShaderModule module{};check(d.vkCreateShaderModule(d.handle,&si,nullptr,&module),"ssr shader");
+    VkResult r=VK_SUCCESS;
+    for(uint32_t pass=0;pass<2&&r==VK_SUCCESS;++pass){
+        VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};ci.stage.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        ci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;ci.stage.module=module;ci.stage.pName="main";ci.layout=d.ssrPipelineLayout;
+        const VkSpecializationMapEntry entry{0,0,sizeof(uint32_t)};VkSpecializationInfo spec{1,&entry,sizeof pass,&pass};ci.stage.pSpecializationInfo=&spec;
+        r=d.vkCreateComputePipelines(d.handle,VK_NULL_HANDLE,1,&ci,nullptr,&d.ssrPipelines[pass]);}
+    d.vkDestroyShaderModule(d.handle,module,nullptr);check(r,"ssr pipeline");
+    constexpr uint32_t sets=uint32_t(std::tuple_size<decltype(d.ssrSets)>::value);   // four dispatches a frame and frames in flight
+    const VkDescriptorPoolSize sizes[5]{{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,sets},{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,sets},{VK_DESCRIPTOR_TYPE_SAMPLER,sets},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,sets*3},{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,sets}};
+    VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pi.maxSets=sets;pi.poolSizeCount=5;pi.pPoolSizes=sizes;
+    check(d.vkCreateDescriptorPool(d.handle,&pi,nullptr,&d.ssrPool),"ssr descriptor pool");
+    std::array<VkDescriptorSetLayout,sets> layouts;layouts.fill(d.ssrSetLayout);
+    VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};ai.descriptorPool=d.ssrPool;ai.descriptorSetCount=sets;ai.pSetLayouts=layouts.data();
+    check(d.vkAllocateDescriptorSets(d.handle,&ai,d.ssrSets.data()),"ssr descriptor sets");
+    VkSamplerCreateInfo sc{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};sc.magFilter=sc.minFilter=VK_FILTER_NEAREST;sc.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sc.addressModeU=sc.addressModeV=sc.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;sc.maxLod=0.f;
+    check(d.vkCreateSampler(d.handle,&sc,nullptr,&d.ssrSampler),"ssr sampler");
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};bi.size=256*4;bi.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;   // a matrix a slot, 256 bytes apart
+    check(d.vkCreateBuffer(d.handle,&bi,nullptr,&d.ssrMatrix),"ssr buffer");VkMemoryRequirements req{};d.vkGetBufferMemoryRequirements(d.handle,d.ssrMatrix,&req);
+    VkMemoryAllocateInfo a{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};a.allocationSize=req.size;a.memoryTypeIndex=d.memoryType(req.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VkDeviceMemory m{};check(d.vkAllocateMemory(d.handle,&a,nullptr,&m),"ssr buffer memory");d.memories.push_back(m);check(d.vkBindBufferMemory(d.handle,d.ssrMatrix,m,0),"ssr buffer bind");
+    d.ssrReady=true;
+}
+// The slot of a picture size: its kept images for the first eye's result (rgba16f) and depth (r32f), made once (-1: none free).
+inline VkImage image2d(Device& d,VkFormat format,uint32_t w,uint32_t h,VkImageView& view);
+inline int ssrSlot(Device& d,uint32_t w,uint32_t h){
+    for(int i=0;i<int(d.ssrSlots.size());i++)if(d.ssrSlots[i].width==w&&d.ssrSlots[i].height==h)return i;
+    for(int i=0;i<int(d.ssrSlots.size());i++){auto& x=d.ssrSlots[i];if(x.width)continue;
+        x.result=image2d(d,VK_FORMAT_R16G16B16A16_SFLOAT,w,h,x.resultView);x.depth=image2d(d,VK_FORMAT_R32_SFLOAT,w,h,x.depthView);
+        x.width=w;x.height=h;x.fresh=true;return i;}
+    return -1;
 }
 // The layer's views of the game's fog volumes: R9G9B9E5 to sample the first eye's, R32_UINT to write the second eye's.
 inline VkImageView fogView(Device& d,std::unordered_map<VkImage,VkImageView>& cache,VkImage image,VkFormat format){
@@ -300,21 +429,118 @@ inline void fogDispatch(VkCommandBuffer c,const Cmd& cmd){
             std::to_string(r.throughLayout)+"],\"applies\":"+std::to_string(fogApplies)+",\"firsts\":"+std::to_string(fogFirsts)+",\"skips\":"+std::to_string(fogSkips));
     }catch(const std::exception& e){if(dev)dev->failed=true;say("gi_reproject_failed","\"reason\":"+jsonString(std::string("fog: ")+e.what()));}
 }
+// Just after a luma pyramid dispatch (giMutex held): the first of its groups in a frame keeps its frame info, the next one
+// (another image) takes it; the game's compute state is put back after each.
+inline void exposureAfter(VkCommandBuffer c,const Cmd& cmd,uint32_t gx,uint32_t gy){
+    const auto n=++exposureDispatches;
+    VkDescriptorSet set{};for(const auto& b:cmd.binds)if(exposureSet>=b.first&&exposureSet<b.first+b.sets.size())set=b.sets[exposureSet-b.first];
+    auto rec=exposureRecords.find(set);
+    if(!set||rec==exposureRecords.end()||!rec->second.view){const auto k=++exposureSkips;
+        if(k<=6||k%1800==0)note("fsr_exposure_skipped","\"dispatch\":"+std::to_string(n)+",\"skips\":"+std::to_string(k)+",\"reason\":\"set 0 binding 7 not tracked\",\"found\":"+(rec==exposureRecords.end()?"false":"true"));return;}
+    const auto r=rec->second;
+    if(r.layout!=VK_IMAGE_LAYOUT_GENERAL){++exposureSkips;say("fsr_exposure_skipped","\"dispatch\":"+std::to_string(n)+",\"reason\":\"frame info not in the general layout\",\"layout\":"+std::to_string(r.layout));return;}
+    const uint64_t present=presents.load(),index=++exposureTracked;
+    const bool second=exposurePending.valid&&exposurePending.gx==gx&&exposurePending.gy==gy&&exposurePending.view!=r.view&&
+        (exposurePending.present==present||(exposurePending.present+1==present&&exposurePending.tracked+1==index));
+    std::shared_ptr<Device> dev;
+    try{
+        dev=deviceFor(c);auto& d=*dev;if(d.failed)return;
+        exposurePrepare(d);
+        const auto s=d.exposureSets[d.exposureNext++%ring];
+        const VkDescriptorImageInfo image{VK_NULL_HANDLE,r.view,VK_IMAGE_LAYOUT_GENERAL};const VkDescriptorBufferInfo buffer{d.exposureBuffer,0,16};
+        std::array<VkWriteDescriptorSet,2> wr{};
+        for(uint32_t i=0;i<2;i++){auto& x=wr[i];x.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;x.dstSet=s;x.dstBinding=i;x.descriptorCount=1;
+            x.descriptorType=i?VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;if(i)x.pBufferInfo=&buffer;else x.pImageInfo=&image;}
+        d.vkUpdateDescriptorSets(d.handle,2,wr.data(),0,nullptr);
+        barrier(d,c);   // the game's luma pyramid has written the frame info (and an earlier keep the buffer)
+        d.vkCmdBindPipeline(c,VK_PIPELINE_BIND_POINT_COMPUTE,d.exposurePipelines[second?1:0]);
+        d.vkCmdBindDescriptorSets(c,VK_PIPELINE_BIND_POINT_COMPUTE,d.exposurePipelineLayout,0,1,&s,0,nullptr);
+        d.vkCmdDispatch(c,1,1,1);
+        barrier(d,c);
+        restore(d,c,cmd);
+        if(second){exposurePending={};++exposureApplies;}else{exposurePending={true,r.view,gx,gy,present,index};++exposureKeeps;}
+        say(second?"fsr_exposure_shared":"fsr_exposure_kept","\"dispatch\":"+std::to_string(n)+",\"cmd\":"+handleText(c)+",\"view\":"+handleText(r.view)+",\"groups\":["+std::to_string(gx)+","+std::to_string(gy)+
+            "],\"present\":"+std::to_string(present)+",\"keeps\":"+std::to_string(exposureKeeps)+",\"shared\":"+std::to_string(exposureApplies)+",\"skips\":"+std::to_string(exposureSkips));
+    }catch(const std::exception& e){if(dev)dev->failed=true;say("gi_reproject_failed","\"reason\":"+jsonString(std::string("exposure: ")+e.what()));}
+}
+// Just after the game's resolve of the water's reflections (giMutex held): the first of a size in a frame is kept, the next one
+// (another image) takes it where the first eye saw the same point; the game's compute state is put back after each.
+inline void ssrAfter(VkCommandBuffer c,const Cmd& cmd){
+    const auto n=++ssrDispatches;
+    VkDescriptorSet viewSet{},imageSet{};const BindCall* viewCall=nullptr;
+    for(const auto& b:cmd.binds){if(ssrViewSet>=b.first&&ssrViewSet<b.first+b.sets.size()){viewSet=b.sets[ssrViewSet-b.first];viewCall=&b;}
+        if(ssrImageSet>=b.first&&ssrImageSet<b.first+b.sets.size())imageSet=b.sets[ssrImageSet-b.first];}
+    auto v=ssrRecords.find(viewSet),im=ssrRecords.find(imageSet);
+    if(!viewSet||!imageSet||v==ssrRecords.end()||im==ssrRecords.end()||!v->second.ubo||!im->second.depth||!im->second.result){const auto k=++ssrSkips;
+        if(k<=6||k%1800==0)note("ssr_reproject_skipped","\"dispatch\":"+std::to_string(n)+",\"skips\":"+std::to_string(k)+",\"reason\":\"sets not tracked\",\"view\":"+(v==ssrRecords.end()?"false":"true")+",\"images\":"+(im==ssrRecords.end()?"false":"true"));return;}
+    const auto view=v->second;const auto images=im->second;
+    VkDeviceSize uboOffset=view.uboOffset;
+    if(view.uboType==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC){
+        // a dynamic offset: only when the view set comes first in its call (its first dynamic descriptor is this one)
+        if(!viewCall||viewCall->first!=ssrViewSet||viewCall->offsets.empty()){++ssrSkips;say("ssr_reproject_skipped","\"dispatch\":"+std::to_string(n)+",\"reason\":\"dynamic view constants without an offset\"");return;}
+        uboOffset+=viewCall->offsets[0];}
+    else if(view.uboType!=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER){++ssrSkips;say("ssr_reproject_skipped","\"dispatch\":"+std::to_string(n)+",\"reason\":\"view constants not a uniform buffer\",\"type\":"+std::to_string(view.uboType));return;}
+    if(view.uboRange<64||images.resultLayout!=VK_IMAGE_LAYOUT_GENERAL){++ssrSkips;say("ssr_reproject_skipped","\"dispatch\":"+std::to_string(n)+",\"reason\":\"range or layout\",\"range\":"+std::to_string(view.uboRange)+",\"result_layout\":"+std::to_string(images.resultLayout));return;}
+    ImageViewRecord out{};VkImageCreateInfo oi{};
+    {std::lock_guard<std::mutex> l(mutex);auto views=imageViews.find(key(c));if(views==imageViews.end())return;
+        auto x=views->second.find(images.result);if(x==views->second.end())return;out=x->second;
+        auto created=imageCreation.find(key(c));if(created==imageCreation.end())return;
+        auto io=created->second.find(out.image);if(io==created->second.end())return;oi=io->second;}
+    const uint32_t w=oi.extent.width,h=oi.extent.height;
+    if(oi.format!=VK_FORMAT_R16G16B16A16_SFLOAT||!(oi.usage&VK_IMAGE_USAGE_STORAGE_BIT)||!w||!h){++ssrSkips;say("ssr_reproject_skipped","\"dispatch\":"+std::to_string(n)+",\"reason\":\"result image differs\",\"format\":"+std::to_string(oi.format));return;}
+    const uint64_t present=presents.load(),index=++ssrTracked;
+    std::shared_ptr<Device> dev;
+    try{
+        dev=deviceFor(c);auto& d=*dev;if(d.failed)return;
+        ssrPrepare(d);
+        const int slot=ssrSlot(d,w,h);
+        if(slot<0){++ssrSkips;say("ssr_reproject_skipped","\"dispatch\":"+std::to_string(n)+",\"reason\":\"no slot for this size\",\"extent\":["+std::to_string(w)+","+std::to_string(h)+"]");return;}
+        auto& kept=d.ssrSlots[size_t(slot)];auto& pend=ssrPending[size_t(slot)];
+        const bool second=pend.valid&&pend.result!=out.image&&(pend.present==present||(pend.present+1==present&&pend.tracked+1==index));
+        const auto s=d.ssrSets[d.ssrNext++%d.ssrSets.size()];
+        const VkDescriptorBufferInfo ubo{view.ubo,uboOffset,64},matrix{d.ssrMatrix,VkDeviceSize(slot)*256,64};
+        const VkDescriptorImageInfo infos[5]{{VK_NULL_HANDLE,images.depth,images.depthLayout},{d.ssrSampler,VK_NULL_HANDLE,VK_IMAGE_LAYOUT_UNDEFINED},
+            {VK_NULL_HANDLE,images.result,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,kept.resultView,VK_IMAGE_LAYOUT_GENERAL},{VK_NULL_HANDLE,kept.depthView,VK_IMAGE_LAYOUT_GENERAL}};
+        const VkDescriptorType types[7]{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,VK_DESCRIPTOR_TYPE_SAMPLER,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER};
+        std::array<VkWriteDescriptorSet,7> wr{};
+        for(uint32_t i=0;i<7;i++){auto& x=wr[i];x.sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;x.dstSet=s;x.dstBinding=i;x.descriptorCount=1;x.descriptorType=types[i];
+            if(i==0)x.pBufferInfo=&ubo;else if(i==6)x.pBufferInfo=&matrix;else x.pImageInfo=&infos[i-1];}
+        d.vkUpdateDescriptorSets(d.handle,7,wr.data(),0,nullptr);
+        barrier(d,c);   // the game's resolve has written the result
+        if(kept.fresh){const VkImageSubresourceRange all{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+            layout(d,c,kept.result,all,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL);layout(d,c,kept.depth,all,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_GENERAL);kept.fresh=false;}
+        d.vkCmdBindPipeline(c,VK_PIPELINE_BIND_POINT_COMPUTE,d.ssrPipelines[second?1:0]);
+        d.vkCmdBindDescriptorSets(c,VK_PIPELINE_BIND_POINT_COMPUTE,d.ssrPipelineLayout,0,1,&s,0,nullptr);
+        d.vkCmdDispatch(c,(w+7)/8,(h+7)/8,1);
+        VkMemoryBarrier after{VK_STRUCTURE_TYPE_MEMORY_BARRIER};after.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;after.dstAccessMask=VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT;
+        d.vkCmdPipelineBarrier(c,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,0,1,&after,0,nullptr,0,nullptr);
+        restore(d,c,cmd);
+        if(second){pend={};++ssrApplies;}else{pend={true,out.image,w,h,present,index};++ssrKeeps;}
+        say(second?"ssr_reproject_apply":"ssr_reproject_keep","\"dispatch\":"+std::to_string(n)+",\"cmd\":"+handleText(c)+",\"result\":"+handleText(out.image)+",\"extent\":["+std::to_string(w)+","+std::to_string(h)+
+            "],\"depth_layout\":"+std::to_string(images.depthLayout)+",\"ubo_type\":"+std::to_string(view.uboType)+",\"present\":"+std::to_string(present)+",\"keeps\":"+std::to_string(ssrKeeps)+",\"applies\":"+std::to_string(ssrApplies)+",\"skips\":"+std::to_string(ssrSkips));
+    }catch(const std::exception& e){if(dev)dev->failed=true;say("gi_reproject_failed","\"reason\":"+jsonString(std::string("ssr: ")+e.what()));}
+}
 inline void failNow(const std::shared_ptr<Device>& d,const std::string& reason){if(d)d->failed=true;say("gi_reproject_failed","\"reason\":"+jsonString(reason)+",\"captures\":"+std::to_string(captures)+",\"applies\":"+std::to_string(applies));}
 }
 void giReprojectModule(VkShaderModule module,const VkShaderModuleCreateInfo* info) noexcept {
     if(!giReproject::enabled()||!info)return;
-    const bool lighting=info->codeSize==giReproject::lightingBytes,fog=giReproject::fogEnabled()&&info->codeSize==giReproject::fogBytes;
-    if(!lighting&&!fog)return;
+    const bool lighting=info->codeSize==giReproject::lightingBytes,fog=giReproject::fogEnabled()&&info->codeSize==giReproject::fogBytes,
+        exposure=giReproject::exposureEnabled()&&info->codeSize==giReproject::exposureBytes,ssr=giReproject::ssrEnabled()&&info->codeSize==giReproject::ssrBytes;
+    if(!lighting&&!fog&&!exposure&&!ssr)return;
     try{const auto sha=head::sha256(info->pCode,info->codeSize);
         std::lock_guard<std::mutex> lock(giReproject::giMutex);
         if(lighting&&sha==giReproject::lightingSha){giReproject::lightingModules.insert(module);giReproject::say("gi_reproject_lighting_shader","\"module\":"+handleText(module));}
-        else if(fog&&sha==giReproject::fogSha){giReproject::fogModules.insert(module);giReproject::say("fog_reproject_shader","\"module\":"+handleText(module));}}catch(...){}
+        else if(fog&&sha==giReproject::fogSha){giReproject::fogModules.insert(module);giReproject::say("fog_reproject_shader","\"module\":"+handleText(module));}
+        else if(exposure&&sha==giReproject::exposureSha){giReproject::exposureModules.insert(module);giReproject::say("fsr_exposure_shader","\"module\":"+handleText(module));}
+        else if(ssr&&sha==giReproject::ssrSha){giReproject::ssrModules.insert(module);giReproject::say("ssr_reproject_shader","\"module\":"+handleText(module));}}catch(...){}
 }
 void giReprojectPipeline(VkShaderModule module,VkPipeline pipeline) noexcept {
     if(!giReproject::enabled()||!pipeline)return;
     try{std::lock_guard<std::mutex> lock(giReproject::giMutex);
         if(giReproject::fogModules.count(module)){giReproject::fogPipelines.insert(pipeline);giReproject::say("fog_reproject_pipeline","\"pipeline\":"+handleText(pipeline));return;}
+        if(giReproject::exposureModules.count(module)){giReproject::exposurePipelines.insert(pipeline);giReproject::say("fsr_exposure_pipeline","\"pipeline\":"+handleText(pipeline));return;}
+        if(giReproject::ssrModules.count(module)){giReproject::ssrPipelines.insert(pipeline);giReproject::say("ssr_reproject_pipeline","\"pipeline\":"+handleText(pipeline));return;}
         if(!giReproject::lightingModules.count(module))return;giReproject::lightingPipelines.insert(pipeline);
         giReproject::say("gi_reproject_lighting_pipeline","\"pipeline\":"+handleText(pipeline));}catch(...){}
 }
@@ -322,11 +548,11 @@ void giReprojectPipeline(VkShaderModule module,VkPipeline pipeline) noexcept {
 // and 256x1 groups on "lighting" pipelines made from a reused module handle), so they leave the sets with it.
 void giReprojectModuleDestroyed(VkShaderModule module) noexcept {
     if(!giReproject::enabled())return;
-    try{std::lock_guard<std::mutex> lock(giReproject::giMutex);giReproject::lightingModules.erase(module);giReproject::fogModules.erase(module);}catch(...){}
+    try{std::lock_guard<std::mutex> lock(giReproject::giMutex);giReproject::lightingModules.erase(module);giReproject::fogModules.erase(module);giReproject::exposureModules.erase(module);giReproject::ssrModules.erase(module);}catch(...){}
 }
 void giReprojectPipelineDestroyed(VkPipeline pipeline) noexcept {
     if(!giReproject::enabled())return;
-    try{std::lock_guard<std::mutex> lock(giReproject::giMutex);giReproject::lightingPipelines.erase(pipeline);giReproject::fogPipelines.erase(pipeline);}catch(...){}
+    try{std::lock_guard<std::mutex> lock(giReproject::giMutex);giReproject::lightingPipelines.erase(pipeline);giReproject::fogPipelines.erase(pipeline);giReproject::exposurePipelines.erase(pipeline);giReproject::ssrPipelines.erase(pipeline);}catch(...){}
 }
 void giReprojectWrites(uint32_t count,const VkWriteDescriptorSet* writes,uint32_t copies,const VkCopyDescriptorSet* copy) noexcept {
     if(!giReproject::enabled())return;
@@ -343,6 +569,27 @@ void giReprojectWrites(uint32_t count,const VkWriteDescriptorSet* writes,uint32_
                    (w.descriptorType!=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER&&w.descriptorType!=VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC))continue;
                 auto f=fogRecords.find(w.dstSet);if(f==fogRecords.end())continue;
                 f->second.ubo=w.pBufferInfo[0].buffer;f->second.uboOffset=w.pBufferInfo[0].offset;f->second.uboRange=w.pBufferInfo[0].range;f->second.uboType=w.descriptorType;}
+        }
+        if(exposureEnabled()&&!exposurePipelines.empty()){
+            if(exposureRecords.size()>300000)exposureRecords.clear();
+            for(uint32_t i=0;i<count&&writes;i++){const auto& w=writes[i];
+                if(w.dstBinding!=exposureBinding||w.dstArrayElement||w.descriptorCount!=1||w.descriptorType!=VK_DESCRIPTOR_TYPE_STORAGE_IMAGE||!w.pImageInfo)continue;
+                auto& e=exposureRecords[w.dstSet];e.view=w.pImageInfo[0].imageView;e.layout=w.pImageInfo[0].imageLayout;}
+            for(uint32_t i=0;i<copies&&copy;i++){const auto& c=copy[i];if(c.srcBinding!=exposureBinding||c.dstBinding!=exposureBinding)continue;
+                auto from=exposureRecords.find(c.srcSet);if(from!=exposureRecords.end()){const auto e=from->second;exposureRecords[c.dstSet]=e;}}
+        }
+        if(ssrEnabled()&&!ssrPipelines.empty()){
+            if(ssrRecords.size()>300000)ssrRecords.clear();
+            for(uint32_t i=0;i<count&&writes;i++){const auto& w=writes[i];if(w.dstArrayElement||w.descriptorCount!=1)continue;
+                if(w.dstBinding==ssrViewBinding&&w.pBufferInfo&&(w.descriptorType==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER||w.descriptorType==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC)){
+                    auto& r=ssrRecords[w.dstSet];r.ubo=w.pBufferInfo[0].buffer;r.uboOffset=w.pBufferInfo[0].offset;r.uboRange=w.pBufferInfo[0].range;r.uboType=w.descriptorType;}
+                else if(w.dstBinding==ssrDepthBinding&&w.descriptorType==VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE&&w.pImageInfo){auto& r=ssrRecords[w.dstSet];r.depth=w.pImageInfo[0].imageView;r.depthLayout=w.pImageInfo[0].imageLayout;}
+                else if(w.dstBinding==ssrResultBinding&&w.descriptorType==VK_DESCRIPTOR_TYPE_STORAGE_IMAGE&&w.pImageInfo){auto& r=ssrRecords[w.dstSet];r.result=w.pImageInfo[0].imageView;r.resultLayout=w.pImageInfo[0].imageLayout;}}
+            for(uint32_t i=0;i<copies&&copy;i++){const auto& c=copy[i];auto from=ssrRecords.find(c.srcSet);if(from==ssrRecords.end())continue;const auto rec=from->second;auto& to=ssrRecords[c.dstSet];
+                for(uint32_t k=0;k<c.descriptorCount;k++){const auto sb=c.srcBinding+k,db=c.dstBinding+k;if(sb!=db)continue;
+                    if(sb==ssrViewBinding){to.ubo=rec.ubo;to.uboOffset=rec.uboOffset;to.uboRange=rec.uboRange;to.uboType=rec.uboType;}
+                    if(sb==ssrDepthBinding){to.depth=rec.depth;to.depthLayout=rec.depthLayout;}
+                    if(sb==ssrResultBinding){to.result=rec.result;to.resultLayout=rec.resultLayout;}}}
         }
         if(lightingPipelines.empty())return;
         for(uint32_t i=0;i<count&&writes;i++){
@@ -374,14 +621,14 @@ void giReprojectReset(VkCommandBuffer c) noexcept {
 }
 void giReprojectBind(VkCommandBuffer c,VkPipelineBindPoint point,VkPipeline pipeline) noexcept {
     if(!giReproject::enabled()||point!=VK_PIPELINE_BIND_POINT_COMPUTE)return;
-    try{std::lock_guard<std::mutex> lock(giReproject::giMutex);if(giReproject::lightingPipelines.empty())return;
+    try{std::lock_guard<std::mutex> lock(giReproject::giMutex);if(giReproject::lightingPipelines.empty()&&giReproject::exposurePipelines.empty()&&giReproject::ssrPipelines.empty())return;
         if(giReproject::commands.size()>16384&&!giReproject::commands.count(c))giReproject::commands.clear();
         giReproject::commands[c].compute=pipeline;}catch(...){}
 }
 void giReprojectSets(VkCommandBuffer c,VkPipelineBindPoint point,VkPipelineLayout layout,uint32_t first,uint32_t count,const VkDescriptorSet* sets,uint32_t dynamicCount,const uint32_t* offsets) noexcept {
     if(!giReproject::enabled()||point!=VK_PIPELINE_BIND_POINT_COMPUTE||!sets||!count)return;
     try{
-        std::lock_guard<std::mutex> lock(giReproject::giMutex);if(giReproject::lightingPipelines.empty())return;
+        std::lock_guard<std::mutex> lock(giReproject::giMutex);if(giReproject::lightingPipelines.empty()&&giReproject::exposurePipelines.empty()&&giReproject::ssrPipelines.empty())return;
         auto& cmd=giReproject::commands[c];
         giReproject::BindCall b;b.layout=layout;b.first=first;b.sets.assign(sets,sets+count);if(dynamicCount&&offsets)b.offsets.assign(offsets,offsets+dynamicCount);
         // a call whose sets are all bound again here no longer matters
@@ -482,17 +729,33 @@ void giReprojectDispatch(VkCommandBuffer c,uint32_t gx,uint32_t gy,uint32_t gz) 
             ",\"depth_layout\":"+std::to_string(r.depthLayout)+",\"ubo_offset\":"+std::to_string(r.uboOffset)+",\"captures\":"+std::to_string(captures)+",\"applies\":"+std::to_string(applies)+",\"tolerance\":"+std::to_string(tolerance())+",\"hidden\":"+std::to_string(hiddenMode())+",\"mark\":"+std::to_string(markMode()));
     }catch(const std::exception& e){giReproject::failNow(dev,e.what());}
 }
+// Just after every compute dispatch (direct, or indirect with no groups known): the FSR3 luma pyramid gets the frame info's
+// copy (exposureAfter), the water reflections' resolve the first eye's reflections (ssrAfter).
+void giReprojectAfterDispatch(VkCommandBuffer c,uint32_t gx,uint32_t gy,uint32_t) noexcept {
+    if(!giReproject::exposureEnabled()&&!giReproject::ssrEnabled())return;
+    try{using namespace giReproject;std::lock_guard<std::mutex> lock(giMutex);if(exposurePipelines.empty()&&ssrPipelines.empty())return;
+        auto found=commands.find(c);if(found==commands.end())return;
+        if(exposureEnabled()&&exposurePipelines.count(found->second.compute)){exposureAfter(c,found->second,gx,gy);return;}
+        if(ssrEnabled()&&ssrPipelines.count(found->second.compute))ssrAfter(c,found->second);}catch(...){}
+}
 // With the device (vkDestroyDevice; the game has waited for it to be idle): everything the layer made for this.
 void giReprojectDestroy(VkDevice device) noexcept {
     try{
         std::shared_ptr<giReproject::Device> d;
         {std::lock_guard<std::mutex> lock(giReproject::giMutex);auto found=giReproject::giDevices.find(device);if(found==giReproject::giDevices.end())return;d=found->second;giReproject::giDevices.erase(found);
-            giReproject::pending={};giReproject::commands.clear();giReproject::setRecords.clear();giReproject::fogPending={};giReproject::fogRecords.clear();giReproject::lastApply={};}
+            giReproject::pending={};giReproject::commands.clear();giReproject::setRecords.clear();giReproject::fogPending={};giReproject::fogRecords.clear();giReproject::lastApply={};giReproject::exposurePending={};giReproject::exposureRecords.clear();giReproject::ssrPending={};giReproject::ssrRecords.clear();}
         auto& x=*d;const auto h=x.handle;
         for(auto& v:x.uintViews)x.vkDestroyImageView(h,v.second,nullptr);
         for(auto& v:x.fogSampledViews)x.vkDestroyImageView(h,v.second,nullptr);for(auto& v:x.fogStorageViews)x.vkDestroyImageView(h,v.second,nullptr);
         if(x.fogPipeline)x.vkDestroyPipeline(h,x.fogPipeline,nullptr);if(x.fogPipelineLayout)x.vkDestroyPipelineLayout(h,x.fogPipelineLayout,nullptr);
         if(x.fogSetLayout)x.vkDestroyDescriptorSetLayout(h,x.fogSetLayout,nullptr);if(x.fogPool)x.vkDestroyDescriptorPool(h,x.fogPool,nullptr);if(x.fogSampler)x.vkDestroySampler(h,x.fogSampler,nullptr);
+        for(auto p:x.exposurePipelines)if(p)x.vkDestroyPipeline(h,p,nullptr);if(x.exposurePipelineLayout)x.vkDestroyPipelineLayout(h,x.exposurePipelineLayout,nullptr);
+        if(x.exposureSetLayout)x.vkDestroyDescriptorSetLayout(h,x.exposureSetLayout,nullptr);if(x.exposurePool)x.vkDestroyDescriptorPool(h,x.exposurePool,nullptr);if(x.exposureBuffer)x.vkDestroyBuffer(h,x.exposureBuffer,nullptr);
+        for(auto p:x.ssrPipelines)if(p)x.vkDestroyPipeline(h,p,nullptr);if(x.ssrPipelineLayout)x.vkDestroyPipelineLayout(h,x.ssrPipelineLayout,nullptr);
+        if(x.ssrSetLayout)x.vkDestroyDescriptorSetLayout(h,x.ssrSetLayout,nullptr);if(x.ssrPool)x.vkDestroyDescriptorPool(h,x.ssrPool,nullptr);if(x.ssrSampler)x.vkDestroySampler(h,x.ssrSampler,nullptr);
+        if(x.ssrMatrix)x.vkDestroyBuffer(h,x.ssrMatrix,nullptr);
+        for(auto& k:x.ssrSlots){if(k.resultView)x.vkDestroyImageView(h,k.resultView,nullptr);if(k.depthView)x.vkDestroyImageView(h,k.depthView,nullptr);
+            if(k.result)x.vkDestroyImage(h,k.result,nullptr);if(k.depth)x.vkDestroyImage(h,k.depth,nullptr);}
         for(auto& r:x.retired){x.vkDestroyImageView(h,r.second,nullptr);x.vkDestroyImage(h,r.first,nullptr);}
         if(x.keptDepthView)x.vkDestroyImageView(h,x.keptDepthView,nullptr);if(x.keptIrradianceView)x.vkDestroyImageView(h,x.keptIrradianceView,nullptr);
         if(x.keptDepth)x.vkDestroyImage(h,x.keptDepth,nullptr);if(x.keptIrradiance)x.vkDestroyImage(h,x.keptIrradiance,nullptr);
@@ -501,6 +764,6 @@ void giReprojectDestroy(VkDevice device) noexcept {
         if(x.pool)x.vkDestroyDescriptorPool(h,x.pool,nullptr);
         for(auto m:x.memories)x.vkFreeMemory(h,m,nullptr);
         note("gi_reproject_destroyed","\"captures\":"+std::to_string(giReproject::captures)+",\"applies\":"+std::to_string(giReproject::applies)+",\"skips\":"+std::to_string(giReproject::skips)+
-            ",\"fog_firsts\":"+std::to_string(giReproject::fogFirsts)+",\"fog_applies\":"+std::to_string(giReproject::fogApplies)+",\"fog_skips\":"+std::to_string(giReproject::fogSkips));
+            ",\"ssr_keeps\":"+std::to_string(giReproject::ssrKeeps)+",\"ssr_applies\":"+std::to_string(giReproject::ssrApplies)+",\"ssr_skips\":"+std::to_string(giReproject::ssrSkips)+",\"exposure_keeps\":"+std::to_string(giReproject::exposureKeeps)+",\"exposure_shared\":"+std::to_string(giReproject::exposureApplies)+",\"exposure_skips\":"+std::to_string(giReproject::exposureSkips)+",\"fog_firsts\":"+std::to_string(giReproject::fogFirsts)+",\"fog_applies\":"+std::to_string(giReproject::fogApplies)+",\"fog_skips\":"+std::to_string(giReproject::fogSkips));
     }catch(...){}
 }

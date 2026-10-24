@@ -53,7 +53,7 @@ struct LiveNativeXr
     // kept pictures on to each refresh (drawRefresh); written by the game's thread and read by the refresh thread under
     // the queue lock.
     struct Motion {uint64_t frame=0;XrPosef perFrame{{0,0,0,1},{0,0,0}};int64_t dt=0;XrTime time=0;bool valid=false;};
-    Motion pendingMotion{};std::array<Motion,8> motions{};
+    Motion pendingMotion{};std::array<Motion,16> motions{};
     XrTime lastHandTime=0;   // the time of the hands' last sample (evrBeginNativeXr)
     bool refreshGaveUp=false,shotsDone=false;uint64_t refreshCaptures=0,refreshLogs=0;
     ~LiveNativeXr(){if(xr)xr->stopRefreshing();}   // before the warp and the transfers go
@@ -440,6 +440,83 @@ inline XrPosef motionPart(const XrPosef& m,float s){
 inline const LiveNativeXr::Motion* motionOf(const LiveNativeXr& st,uint64_t frame){
     const auto& m=st.motions[frame%st.motions.size()];return m.frame==frame?&m:nullptr;
 }
+// The world's path over the last game frames, smoothed (2026-10-24; the mod's own frames for every refresh while walking, Mock
+// game-20261024-040231 at the real pace: the world moved 0.2 px in one refresh and 2.7 px in the next, its speed per millisecond
+// spread by 41 % - the game's step of a frame and the frame's display time do not go together (a frame's speed read 2.8 .. 6.3 m/s
+// walking evenly), and the last frame's step carried on made the world stand and jump). The places of the frames since r (up to 7
+// motions) at their display times: a straight line in time through the places and the turn about the up axis (least squares, the
+// later frames weighted more); ahead = where the line has the world at `time` (kept within -1 .. 2.5 frames of the last), from the
+// last frame's place. False when the frames do not allow it (fewer than 2 motions, a turn not about the up axis): the caller keeps
+// the last frame's motion carried on. speed / turn: the line's speed (m/s) and turn (degrees/s), for the log.
+inline bool smoothAhead(const LiveNativeXr& st,uint64_t latest,XrTime time,XrPosef& ahead,float& speed,float& turn,float& shortShare){
+    // EVR_AFW_SMOOTH_FRAMES=<2..15> motions in the line (15; with the last 5 blended in at a change of speed, below), EVR_AFW_SMOOTH_AHEAD=<frames> the most carried past the last frame (2.5).
+    // Mock (shots at the real pace, the spread of the world's speed per millisecond): walking, the last frame's step 0.39 - the line of 5
+    // within 1.5 frames 0.15 - of 7 within 2.5 frames 0.07; turning by the stick 0.30 - of 7 within 2.5 0.155.
+    static const int frames=[]{const auto f=std::getenv("EVR_AFW_SMOOTH_FRAMES");const int v=f?std::atoi(f):15;return v>=2&&v<=15?v:15;}();
+    static const double most=[]{const auto f=std::getenv("EVR_AFW_SMOOTH_AHEAD");const double v=f?std::atof(f):2.5;return v>=0.5&&v<=4.0?v:2.5;}();
+    // EVR_AFW_SMOOTH_FLAT=1: the frames weighted alike (else the later more)
+    static const bool flat=[]{const auto f=std::getenv("EVR_AFW_SMOOTH_FLAT");return f&&f[0]=='1';}();
+    const auto weight=[](size_t i){return flat?1.0:double(i+1);};
+    uint64_t r=latest;
+    while(r+uint64_t(frames)>latest&&r>0){const auto* m=motionOf(st,r);if(!m||!m->valid||m->dt<=0)break;--r;}
+    if(latest<r+2)return false;
+    const auto* next=motionOf(st,r+1);const auto* own=motionOf(st,r);
+    const XrTime base=own&&own->time>0?own->time:next->time-next->dt;
+    std::array<double,16> t{},yaw{},px{},py{},pz{};size_t n=0;
+    XrPosef M{{0,0,0,1},{0,0,0}};
+    auto put=[&](double at,const XrPosef& p){
+        const auto q=normalized(p.orientation);
+        if(std::abs(q.x)>0.02f||std::abs(q.z)>0.02f)return false;
+        double a=2.0*std::atan2(double(q.y),double(q.w));
+        if(n){while(a-yaw[n-1]>3.14159265358979)a-=6.28318530717959;while(a-yaw[n-1]<-3.14159265358979)a+=6.28318530717959;}
+        t[n]=at;yaw[n]=a;px[n]=p.position.x;py[n]=p.position.y;pz[n]=p.position.z;++n;return true;
+    };
+    if(!put(0.0,M))return false;
+    for(uint64_t k=r+1;k<=latest;++k){const auto* m=motionOf(st,k);M=compose(m->perFrame,M);if(!put(double(m->time-base)*1e-9,M))return false;}
+    if(n<3)return false;
+    const double tLast=t[n-1],step=tLast/double(n-1);if(!(step>1e-4))return false;
+    const double at=std::clamp(double(time-base)*1e-9,tLast-step,tLast+most*step);
+    // a weighted line through the samples from `from` on: its value at `at` and its slope, per channel (yaw, x, y, z)
+    struct Fit {double v[4]{},s[4]{};bool ok=false;};
+    const std::array<const std::array<double,16>*,4> ys{&yaw,&px,&py,&pz};
+    const auto fitFrom=[&](size_t from){Fit out;double sw=0,sx=0;
+        for(size_t i=from;i<n;++i){const double w=weight(i-from);sw+=w;sx+=w*t[i];}
+        const double mx=sx/sw;double sxx=0;for(size_t i=from;i<n;++i)sxx+=weight(i-from)*(t[i]-mx)*(t[i]-mx);
+        if(!(sxx>0))return out;
+        for(size_t c=0;c<4;++c){const auto& y=*ys[c];double sy=0;for(size_t i=from;i<n;++i)sy+=weight(i-from)*y[i];const double my=sy/sw;double sxy=0;
+            for(size_t i=from;i<n;++i)sxy+=weight(i-from)*(t[i]-mx)*(y[i]-my);out.s[c]=sxy/sxx;out.v[c]=my+out.s[c]*(at-mx);}
+        out.ok=true;return out;};
+    const Fit longFit=fitFrom(0);if(!longFit.ok)return false;
+    // A change of speed (a start, a stop, a turn begun or ended). Facts (Mock 2026-10-24): the game's step of a frame is about the same
+    // from frame to frame while its time is not (a stick turn 1.8 .. 2.2 degrees a frame over 10.7 .. 21.5 ms) - the line of 15 motions
+    // made the turn smooth (spread 0.176 -> 0.077) but at a stop the world ran on and came back by up to 2.5 px (game-20261024-062702);
+    // a released stick halves the turn's step frame by frame (2.24, 1.15, 0.56, 0.28 degrees, -063503). So the last frame's step against
+    // the mean step of the frames before it tells the change at once: within 15 % the line, from 15 % on more and more (all from 45 %)
+    // the last step carried on from the last frame (as before the line). The walk's step is not that even (0.047 .. 0.099 m a frame,
+    // -040231): its change is told by the line of the last 5 motions against the long line's speed - none within 15 %, all from 40 %
+    // (Mock -063126: the walk's spread 0.047, no step back at the stop) - and that line taken in.
+    Fit f=longFit;shortShare=0;
+    if(n>=4){
+        const auto turnStep=[&](size_t i){return std::abs(yaw[i]-yaw[i-1]);};
+        double turnMean=0;for(size_t i=1;i+1<n;++i)turnMean+=turnStep(i);turnMean/=double(n-2);
+        const double turnLast=turnStep(n-1),least=0.0017;   // 0.1 degree a frame
+        const double wTurn=std::max(turnLast,turnMean)<least?0.0:std::clamp((std::abs(turnLast/std::max(turnMean,least)-1.0)-0.15)/0.30,0.0,1.0);
+        const double dtLast=t[n-1]-t[n-2],partLast=dtLast>1e-5?(at-t[n-1])/dtLast:0.0;
+        f.v[0]+=(yaw[n-1]+(yaw[n-1]-yaw[n-2])*partLast-longFit.v[0])*wTurn;
+        double wMove=0;
+        if(n>7){const Fit shortFit=fitFrom(n-6);
+            if(shortFit.ok){
+                const auto norm=[](double a,double b,double c){return std::sqrt(a*a+b*b+c*c);};
+                const double vl=norm(longFit.s[1],longFit.s[2],longFit.s[3]),vs=norm(shortFit.s[1],shortFit.s[2],shortFit.s[3]);
+                const double dv=norm(longFit.s[1]-shortFit.s[1],longFit.s[2]-shortFit.s[2],longFit.s[3]-shortFit.s[3]);
+                wMove=std::clamp((dv/std::max(std::max(vl,vs),0.3)-0.15)/0.25,0.0,1.0);   // 0.3 m/s
+                for(size_t c=1;c<4;++c){f.v[c]+=(shortFit.v[c]-longFit.v[c])*wMove;f.s[c]+=(shortFit.s[c]-longFit.s[c])*wMove;}}}
+        shortShare=float(std::max(wTurn,wMove));}
+    const double a=f.v[0],x=f.v[1],y=f.v[2],z=f.v[3];
+    const XrPosef F{{0,float(std::sin(a/2)),0,float(std::cos(a/2))},{float(x),float(y),float(z)}};
+    ahead=compose(F,inverse(M));speed=float(std::sqrt(f.s[1]*f.s[1]+f.s[2]*f.s[2]+f.s[3]*f.s[3]));turn=float(f.s[0]*57.2957795);
+    return finite(ahead.position)&&length(ahead.position)<5.f;
+}
 // The refresh thread's pictures (OpenXrClient refreshLoop, the queue lock held): each eye from the kept pictures - the
 // other eye's when it is the newer (with this eye's own in its holes), else this eye's own - each from where the world now
 // has it: the world's motion of the frames since it was drawn, and of the last frame carried on to this refresh's time
@@ -453,7 +530,11 @@ bool drawRefresh(LiveNativeXr& st,const std::array<XrView,2>& views,XrTime time,
     const uint64_t latest=std::max(w.keptFrame(0),w.keptFrame(1));
     const auto* last=motionOf(st,latest);
     float part=0;if(last&&last->valid&&last->dt>0)part=std::clamp(float(double(time-last->time)/double(last->dt)),-1.f,1.5f);
-    const XrPosef ahead=last&&last->valid?motionPart(last->perFrame,part):XrPosef{{0,0,0,1},{0,0,0}};
+    XrPosef ahead=last&&last->valid?motionPart(last->perFrame,part):XrPosef{{0,0,0,1},{0,0,0}};
+    // the world on the smoothed path of the last frames (smoothAhead); EVR_AFW_FILL_SMOOTH=0: the last frame's motion carried on
+    static const bool smooth=[]{const auto f=std::getenv("EVR_AFW_FILL_SMOOTH");return !(f&&!std::strcmp(f,"0"));}();
+    float smoothSpeed=-1,smoothTurn=0,smoothShort=0;
+    if(smooth&&carry&&last&&last->valid){XrPosef a{};float sp=0,tu=0;if(smoothAhead(st,latest,time,a,sp,tu,smoothShort)){ahead=a;smoothSpeed=sp;smoothTurn=tu;}}
     // where a kept picture is now, and by how many game frames its world was carried on (the frames since it, and the part)
     auto carried=[&](uint32_t eye,float& frames){
         XrPosef p=w.keptView(eye).pose;frames=last&&last->valid?part:0.f;
@@ -503,7 +584,7 @@ bool drawRefresh(LiveNativeXr& st,const std::array<XrView,2>& views,XrTime time,
             out.write(row.data(),std::streamsize(row.size()));}}catch(...){}}).detach();}
     const auto n=++st.refreshLogs;
     if(n<=3||n%900==0||capture||shot){std::ostringstream o;o<<std::setprecision(6)<<"\"refresh\":"<<refresh<<",\"time\":"<<time<<",\"kept_frames\":["<<w.keptFrame(0)<<','<<w.keptFrame(1)<<"],\"from_other\":["
-        <<(eyes[0].fromOther?"true":"false")<<','<<(eyes[1].fromOther?"true":"false")<<"],\"carry\":"<<(carry?"true":"false")<<",\"part\":"<<part<<",\"motion_valid\":"<<(last&&last->valid?"true":"false")
+        <<(eyes[0].fromOther?"true":"false")<<','<<(eyes[1].fromOther?"true":"false")<<"],\"carry\":"<<(carry?"true":"false")<<",\"part\":"<<part<<",\"smooth_speed\":"<<smoothSpeed<<",\"smooth_turn\":"<<smoothTurn<<",\"smooth_short\":"<<smoothShort<<",\"last_turn_deg\":"<<(last?2.f*std::atan2(last->perFrame.orientation.y,last->perFrame.orientation.w)*57.29578f:0.f)<<",\"motion_valid\":"<<(last&&last->valid?"true":"false")
         <<",\"motion_move\":["<<(last?last->perFrame.position.x:0.f)<<','<<(last?last->perFrame.position.y:0.f)<<','<<(last?last->perFrame.position.z:0.f)<<"],\"motion_dt\":"<<(last?last->dt:0)
         <<",\"object_frames\":["<<eyes[0].keptMotion<<','<<eyes[1].keptMotion<<"],\"object_kept\":["<<(w.keptMotion(0)?"true":"false")<<','<<(w.keptMotion(1)?"true":"false")<<"],\"pairs\":"<<w.pairs<<",\"previous_wait_ms\":"<<w.waitMs<<",\"previous_wait_max_ms\":"<<w.waitMaxMs<<",\"waits_held\":"<<w.waitsHeld<<",\"gpu_ms\":"<<w.gpuMs<<",\"gpu_mean_ms\":"<<(w.gpuCount?w.gpuSum/double(w.gpuCount):-1.0)<<",\"gpu_max_ms\":"<<w.gpuMax<<",\"captured\":"<<(capture||shot?"true":"false")<<",\"shot\":"<<(shot?"true":"false");
         st.log->event("afw_fill",o.str());}
@@ -1349,7 +1430,7 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                 if(capture){++state.warpCaptures;const auto path=output+"/native-xr/warp-"+std::to_string(frame)+"-eye-"+std::to_string(eye)+".ppm";
                     std::filesystem::create_directories(std::filesystem::path(output)/"native-xr");state.warp->writePpm(path,bytes);}
                 if(n<=3||n%600==0||capture){const auto& k=state.warp->keptView(eye);std::ostringstream o;o<<std::setprecision(6)<<"\"frame\":"<<frame<<",\"eye\":"<<eye<<",\"warped_frames\":"<<n
-                    <<",\"from_self\":"<<(state.warp->lastFromSelf?"true":"false")<<",\"from_other\":"<<(state.warp->lastFromOther?"true":"false")<<",\"other_frame\":"<<state.warp->lastOtherFrame<<",\"gpu_ms\":"<<state.warp->gpuMs<<",\"gpu_mean_ms\":"<<(state.warp->gpuCount?state.warp->gpuSum/state.warp->gpuCount:-1.0)<<",\"gpu_max_ms\":"<<state.warp->gpuMax<<",\"kept_followed\":"<<state.warpFollowed<<",\"draws_from_other\":"<<state.warp->drawsFromOther<<",\"fills\":"<<state.warp->fills
+                    <<",\"from_self\":"<<(state.warp->lastFromSelf?"true":"false")<<",\"from_other\":"<<(state.warp->lastFromOther?"true":"false")<<",\"other_frame\":"<<state.warp->lastOtherFrame<<",\"gpu_ms\":"<<state.warp->gpuMs<<",\"gpu_mean_ms\":"<<(state.warp->gpuCount?state.warp->gpuSum/state.warp->gpuCount:-1.0)<<",\"gpu_max_ms\":"<<state.warp->gpuMax<<",\"kept_followed\":"<<state.warpFollowed<<",\"draws_from_other\":"<<state.warp->drawsFromOther<<",\"fills\":"<<state.warp->fills<<",\"own_draws\":"<<state.warp->ownDraws
                     <<",\"kept_frame\":"<<state.warp->keptFrame(eye)<<",\"kept_position\":["<<k.pose.position.x<<','<<k.pose.position.y<<','<<k.pose.position.z<<"],\"position\":["<<snapshot.views[eye].pose.position.x<<','<<snapshot.views[eye].pose.position.y<<','<<snapshot.views[eye].pose.position.z
                     <<"],\"captured\":"<<(capture?"true":"false");state.log->event("eye_warp",o.str());}
             }catch(const std::exception& e){state.warpFailed=true;state.log->event("eye_warp_failed","\"stage\":\"draw\",\"frame\":"+std::to_string(frame)+",\"eye\":"+std::to_string(eye)+",\"reason\":"+jsonString(e.what()));}

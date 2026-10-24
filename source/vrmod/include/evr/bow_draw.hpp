@@ -66,7 +66,7 @@ class BowDraw {
 public: enum Phase:unsigned {Idle=0,Blocked=1,Held=2,Cancelled=3,Aborted=4,Released=5};
 private:
  BowDrawSettings settings_{};Phase phase_=Blocked;BowPhysicalMetrics metrics_{};
- bool pressed_=false,bowMode_=false,fullDrawn_=false,strong_=false,byGrip_=false;float releasePull_=0;unsigned shots_=0;
+ bool pressed_=false,bowMode_=false,fullDrawn_=false,strong_=false,byGrip_=false,gripAsTrigger_=false;float releasePull_=0;unsigned shots_=0;
  uint64_t binding_=0,session_=0,origin_=0,heldMs_=0,releaseMs_=0,lastMs_=0,boundMs_=0;
  XrTime lastTime_=0;std::array<XrPath,2> profiles_{};
  static bool scope(const HandFrame& f,const BowPhysicalGeometry& g,bool allowed){
@@ -79,12 +79,15 @@ private:
 public:
  BowDraw()=default;explicit BowDraw(BowDrawSettings s):settings_(s){}
  void preAim(float range){settings_.preAimRange=range;}
+ // The string taken with the grip draws as with the trigger (LT, a normal shot), not the strong shot's RT: for the mod's
+ // bow (holster.hpp modBow) the game's hand is bare until the LT brings its bow - RT alone would be the fists' attack.
+ void gripAsTrigger(bool on){gripAsTrigger_=on;}
  Phase phase()const{return phase_;}const BowPhysicalMetrics& metrics()const{return metrics_;}
  float releasePull()const{return releasePull_;}unsigned shots()const{return shots_;}
  // The last release was the strong shot's (the string held with the right grip).
  bool strongRelease()const{return strong_;}
  // The string is held with the right grip now (the strong shot's draw: RT, not LT).
- bool strongDraw()const{return phase_==Held&&byGrip_;}
+ bool strongDraw()const{return phase_==Held&&byGrip_&&!gripAsTrigger_;}
  bool bowMode()const{return bowMode_;}
  // A refused shot or a screen that owns the triggers: let go, then require a new press.
  void abort(){if(phase_==Held||phase_==Released)phase_=Aborted;else if(phase_!=Aborted)phase_=Blocked;}
@@ -139,13 +142,13 @@ public:
    if(!pressed_&&!grip){
     if(now>=heldMs_&&now-heldMs_>=settings_.minimumHoldMs&&metrics_.pull>=settings_.minimumPull){
      phase_=Released;releaseMs_=lastMs_=now;releasePull_=metrics_.pull;++shots_;
-     strong_=byGrip_;
+     strong_=byGrip_&&!gripAsTrigger_;
      if(!strong_)pad.leftTrigger=pad.rightTrigger=255;
     }else phase_=Cancelled;
    }
   }
-  if(phase_==Held){if(byGrip_)pad.rightTrigger=255;else pad.leftTrigger=255;}
-  else if(phase_==Idle&&pressed_&&settings_.preAimRange>0&&metrics_.distance<=settings_.preAimRange)pad.leftTrigger=255;
+  if(phase_==Held){if(byGrip_&&!gripAsTrigger_)pad.rightTrigger=255;else pad.leftTrigger=255;}
+  else if(phase_==Idle&&(pressed_||(gripAsTrigger_&&grip))&&settings_.preAimRange>0&&metrics_.distance<=settings_.preAimRange)pad.leftTrigger=255;
   return pad;
  }
  float pullPercentage(const BowPhysicalGeometry& g)const{

@@ -213,7 +213,7 @@ void cmdStack(const char *kind, const std::string &detail) noexcept
 void giReprojectModuleDestroyed(VkShaderModule module) noexcept;void giReprojectPipelineDestroyed(VkPipeline pipeline) noexcept;
 #include "ui_pipeline_probe.hpp"
 void gpuTimingBegin(VkCommandBuffer cmd) noexcept;void gpuTimingEnd(VkCommandBuffer cmd) noexcept;void gpuTimingNote(VkCommandBuffer cmd,uint32_t kind,uint32_t width=0,uint32_t height=0) noexcept;void gpuTimingRenderBegin(VkCommandBuffer cmd,const VkRenderingInfo* info) noexcept;void gpuTimingRenderEnd(VkCommandBuffer cmd) noexcept;void gpuTimingBind(VkCommandBuffer cmd,VkPipelineBindPoint point,VkPipeline pipeline) noexcept;void gpuTimingDispatch(VkCommandBuffer cmd,uint32_t x,uint32_t y,uint32_t z) noexcept;void gpuTimingSets(VkCommandBuffer cmd,VkPipelineBindPoint point,uint32_t first,uint32_t count,const VkDescriptorSet* sets,uint32_t dynamicCount,const uint32_t* offsets) noexcept;void gpuTimingDescriptorWrites(uint32_t count,const VkWriteDescriptorSet* writes) noexcept;
-void giReprojectModule(VkShaderModule module,const VkShaderModuleCreateInfo* info) noexcept;void giReprojectPipeline(VkShaderModule module,VkPipeline pipeline) noexcept;void giReprojectWrites(uint32_t count,const VkWriteDescriptorSet* writes,uint32_t copies,const VkCopyDescriptorSet* copy) noexcept;void giReprojectReset(VkCommandBuffer c) noexcept;void giReprojectBind(VkCommandBuffer c,VkPipelineBindPoint point,VkPipeline pipeline) noexcept;void giReprojectSets(VkCommandBuffer c,VkPipelineBindPoint point,VkPipelineLayout layout,uint32_t first,uint32_t count,const VkDescriptorSet* sets,uint32_t dynamicCount,const uint32_t* offsets) noexcept;void giReprojectForget(VkDevice device,VkImage image) noexcept;void giReprojectDispatch(VkCommandBuffer c,uint32_t gx,uint32_t gy,uint32_t gz) noexcept;void giReprojectDestroy(VkDevice device) noexcept;
+void giReprojectModule(VkShaderModule module,const VkShaderModuleCreateInfo* info) noexcept;void giReprojectPipeline(VkShaderModule module,VkPipeline pipeline) noexcept;void giReprojectWrites(uint32_t count,const VkWriteDescriptorSet* writes,uint32_t copies,const VkCopyDescriptorSet* copy) noexcept;void giReprojectReset(VkCommandBuffer c) noexcept;void giReprojectBind(VkCommandBuffer c,VkPipelineBindPoint point,VkPipeline pipeline) noexcept;void giReprojectSets(VkCommandBuffer c,VkPipelineBindPoint point,VkPipelineLayout layout,uint32_t first,uint32_t count,const VkDescriptorSet* sets,uint32_t dynamicCount,const uint32_t* offsets) noexcept;void giReprojectForget(VkDevice device,VkImage image) noexcept;void giReprojectDispatch(VkCommandBuffer c,uint32_t gx,uint32_t gy,uint32_t gz) noexcept;void giReprojectAfterDispatch(VkCommandBuffer c,uint32_t gx,uint32_t gy,uint32_t gz) noexcept;void giReprojectDestroy(VkDevice device) noexcept;
 bool atmosphereShareCreate(const VkImageCreateInfo& in,VkImageCreateInfo& out) noexcept;void atmosphereShareBarrier(VkCommandBuffer c,uint32_t count,const VkImageMemoryBarrier* images) noexcept;void atmosphereShareBarrier2(VkCommandBuffer c,const VkDependencyInfo* info) noexcept;void atmosphereShareForget(VkImage image) noexcept;bool shadowShareCreate(const VkImageCreateInfo& in,VkImageCreateInfo& out) noexcept;void shadowShareBarrier(VkCommandBuffer c,uint32_t count,const VkImageMemoryBarrier* images) noexcept;void shadowShareBarrier2(VkCommandBuffer c,const VkDependencyInfo* info) noexcept;void shadowShareForget(VkImage image) noexcept;
 #include "render_trace.hpp"
 #include "ui_glyph.hpp"
@@ -991,11 +991,13 @@ VKAPI_ATTR void VKAPI_CALL evrCmdDispatch(VkCommandBuffer c, uint32_t x, uint32_
 {
     dispatches++;gpuTimingDispatch(c,x,y,z);cmdStack("dispatch","\"d\":0");giReprojectDispatch(c,x,y,z);
     deviceFn<PFN_vkCmdDispatch>(c, "vkCmdDispatch")(c, x, y, z);
+    giReprojectAfterDispatch(c,x,y,z);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdDispatchIndirect(VkCommandBuffer c, VkBuffer b, VkDeviceSize o)
 {
     dispatches++;gpuTimingNote(c,1);cmdStack("dispatch_indirect","\"d\":0");
     deviceFn<PFN_vkCmdDispatchIndirect>(c, "vkCmdDispatchIndirect")(c, b, o);
+    giReprojectAfterDispatch(c,0,0,0);
 }
 // Eye depth write sources (diagnostic, EVR_EYE_IMAGE_SWEEP=1): transfer writes into sweep depth images.
 VKAPI_ATTR void VKAPI_CALL evrCmdClearDepthStencilImage(VkCommandBuffer c,VkImage image,VkImageLayout layout,const VkClearDepthStencilValue* value,uint32_t count,const VkImageSubresourceRange* ranges){

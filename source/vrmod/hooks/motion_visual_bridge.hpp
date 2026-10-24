@@ -6,6 +6,9 @@ inline uintptr_t scene=0,view=0,resource=0;
 inline bool equipmentSwitchRequested=false,suspendOnEquipmentChange=false;
 inline bool bowAnimationRequested=false,rangedAnimationRequested=false;
 inline motion::BowPhysicalGeometry bowGeometry;
+// The draw's binding of a bow: the item and the shown model's source. The mod's bow (motion_mod_bow_visual.hpp) and the
+// game's bow its draw brings carry one ("MODB"), so a draw goes on through the change of model.
+inline uint64_t bowBinding(uint32_t item,uint32_t source){return (uint64_t(item)<<32)|(item&&controllerUiFixture::modBowItem.load()==item?controllerUiFixture::modBowTag:source);}
 // VHVR rotateBowOnPulling: set while this frame's bow was posed from both hands.
 inline bool bowDrawHeld=false;
 // The watering can's mount (weapon_mount.hpp mountCarriedTool): form 3, the can hangs under the fist with its spout
@@ -280,7 +283,7 @@ inline void prepare(uintptr_t s,uintptr_t v,const game::StableAnchor& anchor,uin
         // The frame on which the trigger comes up is still posed from both hands:
         // the frontend reads this frame's geometry when it turns the release into a shot.
         const auto now=GetTickCount64();const auto& right=hands.hands[1];
-        bowDrawHeld=state.held&&state.binding==((uint64_t(current.item)<<32)|current.handle)&&state.frame<=hands.frame&&hands.frame-state.frame<=8&&
+        bowDrawHeld=state.held&&state.binding==bowBinding(current.item,current.handle)&&state.frame<=hands.frame&&hands.frame-state.frame<=8&&
             state.milliseconds&&now>=state.milliseconds&&now-state.milliseconds<=200&&right.tracked();
         if(bowDrawHeld){
             trackedWeapon=motion::bowDrawnPose(trackedWeapon,right.grip.position,motion::BowPhysicalTrial::restString.y*scale.y);mountKind="native_left_bow_drawn";
@@ -397,7 +400,7 @@ inline void prepare(uintptr_t s,uintptr_t v,const game::StableAnchor& anchor,uin
                 "],\"written_age_ms\":"+std::to_string(f.at>=writtenAt?f.at-writtenAt:0)+",\"written_count\":"+std::to_string(writtenCount)+predicted+
                 ",\"writes\":"+std::to_string(attachmentObserver::followWrites.load())+",\"stale\":"+std::to_string(attachmentObserver::followStale.load())+",\"rejected\":"+std::to_string(attachmentObserver::followRejected.load()));}
     }
-    if(bowAnimated&&motion::bowDrawAsset(item,guid,rangedAnimationRequested&&controllerUiFixture::bowDrawRequested))bowGeometry={(uint64_t(item)<<32)|sourceHandle,hands.frame,trackedWeapon,scale,position,orientation,current.world,root.entity};
+    if(bowAnimated&&motion::bowDrawAsset(item,guid,rangedAnimationRequested&&controllerUiFixture::bowDrawRequested))bowGeometry={bowBinding(item,sourceHandle),hands.frame,trackedWeapon,scale,position,orientation,current.world,root.entity};
     // Native weapon categories (weapon_category.hpp): one-hand melee 0..3 and 13, two-hand melee 7..10.
     // The two-hand group takes VHVR's heavier swing requirement. Weapon models point along +Y.
     // A long tool is swung like a one-hand weapon: the swing presses the game's use button (mining, felling).

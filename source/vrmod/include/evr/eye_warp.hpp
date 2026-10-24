@@ -85,6 +85,19 @@ class EyeWarp {
 #define DECL(n) PFN_##n n=nullptr;
     EYE_WARP_API(DECL)
 #undef DECL
+    // The player's own things (2026-10-24; shaders/eye_warp.vert ownThing): nearer than near (m) and moved by themselves over their
+    // frame by motion pixels or more. A kept picture carried on by the walk (keptAt) leaves them out, and they are drawn after it
+    // from where they were drawn (they move with the player, not with the world). EVR_AFW_OWN_NEAR=<m> (0: off, everything
+    // carried as before), EVR_AFW_OWN_MOTION=<pixels> (0: by the distance alone).
+    struct Own {float within=2.f,moved=1.5f;};   // (near is a macro of windows.h, motion a namespace)
+    static Own ownSettings(){
+        static const Own own=[]{Own o;char v[16]{};auto n=GetEnvironmentVariableA("EVR_AFW_OWN_NEAR",v,sizeof v);
+            if(n&&n<sizeof v){const float f=std::strtof(v,nullptr);if(std::isfinite(f)&&f>=0.f&&f<=10.f)o.within=f;}
+            n=GetEnvironmentVariableA("EVR_AFW_OWN_MOTION",v,sizeof v);
+            if(n&&n<sizeof v){const float f=std::strtof(v,nullptr);if(std::isfinite(f)&&f>=0.f&&f<=100.f)o.moved=f;}
+            return o;}();
+        return own;
+    }
     static bool depthFormatOf(VkFormat f){return f==VK_FORMAT_D16_UNORM||f==VK_FORMAT_D32_SFLOAT||f==VK_FORMAT_X8_D24_UNORM_PACK32||f==VK_FORMAT_D16_UNORM_S8_UINT||f==VK_FORMAT_D24_UNORM_S8_UINT||f==VK_FORMAT_D32_SFLOAT_S8_UINT;}
     void barrier(VkCommandBuffer c,VkImage image,VkImageAspectFlags aspect,VkImageLayout oldLayout,VkImageLayout next,VkAccessFlags src,VkAccessFlags dst,VkPipelineStageFlags from,VkPipelineStageFlags to){
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.oldLayout=oldLayout;b.newLayout=next;b.srcAccessMask=src;b.dstAccessMask=dst;
@@ -196,10 +209,15 @@ class EyeWarp {
             // pixels takes the stretched place (0.75 until then); farther, each pixel walks its ray (a walk under 0.75 that finds nothing
             // keeps the stretched place). 0.3 by default: the self-check's error against the contrast 0.827 -> 0.755, the holes as
             // before (7 % while walking), the warp's GPU time the same (0.72 ms). EVR_EYE_WARP_FLAT=<0.1 .. 2>.
-            struct Special {int32_t sharp;float flat;};static const Special special=[]{const char* f=std::getenv("EVR_EYE_WARP_FLAT");const float v=f?float(std::atof(f)):0.3f;
-                return Special{sharpRead,v>=0.1f&&v<=2.f?v:0.3f};}();
-            const VkSpecializationMapEntry specialEntries[2]{{0,offsetof(Special,sharp),sizeof(int32_t)},{1,offsetof(Special,flat),sizeof(float)}};
-            VkSpecializationInfo sharpInfo{2,specialEntries,sizeof(Special),&special};stages[1].pSpecializationInfo=&sharpInfo;
+            // motionPick (2026-10-24, the mod's frames for every refresh while walking, Mock game-20261024-033215: the held tool's
+            // edges sawn and smeared a cell wide): a walk's step takes, of its cell's two motions, the one whose kept surface lies at the
+            // ray's distance (eye_warp.frag placeAtDistance). EVR_EYE_WARP_MOTION_PICK=0: by the middle of the cell's distances as before.
+            // ownNear / ownMotion (constants 3, 4; vertex and fragment): the player's own things (ownSettings, recordEye).
+            struct Special {int32_t sharp;float flat;int32_t motionPick;float ownNear;float ownMotion;int32_t ownCells;};static const Special special=[]{const char* f=std::getenv("EVR_EYE_WARP_FLAT");const float v=f?float(std::atof(f)):0.3f;
+                const char* m=std::getenv("EVR_EYE_WARP_MOTION_PICK");const Own own=EyeWarp::ownSettings();return Special{sharpRead,v>=0.1f&&v<=2.f?v:0.3f,m&&!std::strcmp(m,"0")?0:1,own.within>0.01f?own.within:0.01f,own.moved,[]{char c[4]{};return GetEnvironmentVariableA("EVR_AFW_OWN_CELLS",c,sizeof c)==1&&c[0]=='0'?0:1;}()};}();
+            const VkSpecializationMapEntry specialEntries[6]{{0,offsetof(Special,sharp),sizeof(int32_t)},{1,offsetof(Special,flat),sizeof(float)},{2,offsetof(Special,motionPick),sizeof(int32_t)},
+                {3,offsetof(Special,ownNear),sizeof(float)},{4,offsetof(Special,ownMotion),sizeof(float)},{5,offsetof(Special,ownCells),sizeof(int32_t)}};
+            VkSpecializationInfo sharpInfo{6,specialEntries,sizeof(Special),&special};stages[0].pSpecializationInfo=&sharpInfo;stages[1].pSpecializationInfo=&sharpInfo;
             VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
             VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};ia.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
             VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=vp.scissorCount=1;
@@ -273,7 +291,7 @@ class EyeWarp {
     // cells: the grid's cells along each side; near: the game's near plane (its depth = near / distance); far: the
     // distance shown where the depth is 0 (the sky).
     unsigned cells=96;float nearPlane=.01f,farDistance=1000.f;   // (near / far are macros of windows.h)
-    uint64_t keeps=0,draws=0,drawsFromOther=0,fills=0,historyDraws=0;bool lastFromOther=false,lastFromSelf=false;uint64_t lastOtherFrame=0;
+    uint64_t keeps=0,draws=0,drawsFromOther=0,fills=0,historyDraws=0,ownDraws=0;bool lastFromOther=false,lastFromSelf=false;uint64_t lastOtherFrame=0;
     // Drawn into the warp's command buffer after its picture, with the runtime image in TRANSFER_DST_OPTIMAL (as the
     // copy's afterCopy): the edge tint of the eye. True: it left the image in COLOR_ATTACHMENT_OPTIMAL.
     std::function<bool(VkCommandBuffer,uint32_t,const TransferImage&)> afterWarp;
@@ -415,11 +433,14 @@ class EyeWarp {
         return submitCommands(capture||wait,capture);
     }
     int shotEye=-1;uint64_t shotTag=0;   // the eye to copy into the next shot in the next draw, and the shot's tag (the refresh)
+    // the shots' size: the eye's divided by this each way (EVR_AFW_FILL_SHOTS_DIV, 1 .. 8; 4 by default; 1: the whole picture, for a
+    // look at the edges at the real pace - 2026-10-24, a picture read back each refresh held the Mock's game to about 10 frames a second)
+    uint32_t shotDiv=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_AFW_FILL_SHOTS_DIV",v,sizeof v);const int d=n==1?v[0]-'0':4;return uint32_t(d>=1&&d<=8?d:4);}();
     // The ring of shots (made once; count of them, a quarter of the eye's size each way).
     void prepareShots(size_t count){
         if(!shots.empty())return;
         shots.resize(count);
-        for(auto& sh:shots)makeImage(sh.image,sh.memory,width/4,height/4,format,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,"eye warp shot");
+        for(auto& sh:shots)makeImage(sh.image,sh.memory,width/shotDiv,height/shotDiv,format,VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT,"eye warp shot");
     }
     bool shotsFull()const{return !shots.empty()&&shotNext>=shots.size();}
     // A shot of an eye's runtime image as it is now (COLOR_ATTACHMENT_OPTIMAL, its draw or copy submitted before): for the
@@ -435,18 +456,18 @@ class EyeWarp {
         barrier(c,runtime.image,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT|VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
         barrier(c,sh.image,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
         VkImageBlit blit{};blit.srcSubresource=blit.dstSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
-        blit.srcOffsets[1]={int32_t(width),int32_t(height),1};blit.dstOffsets[1]={int32_t(width/4),int32_t(height/4),1};
+        blit.srcOffsets[1]={int32_t(width),int32_t(height),1};blit.dstOffsets[1]={int32_t(width/shotDiv),int32_t(height/shotDiv),1};
         vkCmdBlitImage(c,runtime.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,sh.image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&blit,VK_FILTER_LINEAR);
         barrier(c,sh.image,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
         barrier(c,runtime.image,VK_IMAGE_ASPECT_COLOR_BIT,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
     }
-    uint32_t shotWidth()const{return width/4;}uint32_t shotHeight()const{return height/4;}
+    uint32_t shotWidth()const{return width/shotDiv;}uint32_t shotHeight()const{return height/shotDiv;}
     // All shots taken, read back (waits for the GPU): their tags and RGBA8 pixels (width/4 x height/4); the ring is then spent.
     std::vector<std::pair<uint64_t,std::vector<uint8_t>>> collectShots(){
         std::vector<std::pair<uint64_t,std::vector<uint8_t>>> out;
         if(shots.empty())return out;
         waitAll();use(0);
-        const uint32_t sw=width/4,sh=height/4;const VkDeviceSize each=VkDeviceSize(sw)*sh*4;
+        const uint32_t sw=width/shotDiv,sh=height/shotDiv;const VkDeviceSize each=VkDeviceSize(sw)*sh*4;
         VkBuffer buffer{};VkDeviceMemory memory{};
         VkBufferCreateInfo b{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};b.size=each*shots.size();b.usage=VK_BUFFER_USAGE_TRANSFER_DST_BIT;
         vkCheck(v.vkCreateBuffer(v.device,&b,nullptr,&buffer),"eye warp shots buffer");VkMemoryRequirements req{};v.vkGetBufferMemoryRequirements(v.device,buffer,&req);
@@ -534,8 +555,12 @@ class EyeWarp {
         VkViewport viewport{0,0,float(width),float(height),0,1};VkRect2D scissor{{0,0},{width,height}};
         v.vkCmdSetViewport(c,0,1,&viewport);v.vkCmdSetScissor(c,0,1,&scissor);
         if(filled){
-            auto firstPush=constants(kept[first],now,1,firstAt,firstMotion);
-            const auto secondPush=constants(kept[second],now,2,secondAt,secondMotion);
+            // the player's own things (ownSettings): a kept picture carried on by the walk leaves them out (separation 1, or 3 by the
+            // distance alone when its frame gave no motion), and the first's are drawn after it, uncarried (separation 2 / 4)
+            const bool own=ownSettings().within>0.f;
+            const auto separation=[&](uint32_t k,const XrPosef* at,bool alone){return own&&at?float(4*((alone?2:1)+(kept[k].motionValid?0:2))):0.f;};
+            auto firstPush=constants(kept[first],now,1+separation(first,firstAt,false),firstAt,firstMotion);
+            const auto secondPush=constants(kept[second],now,2+separation(second,secondAt,false),secondAt,secondMotion);
             // The eye made from the other eye takes its own last picture where it shows the same surface (shaders/eye_warp.frag
             // withHistory; 2026-10-23). EVR_EYE_WARP_HISTORY=0: the other eye's picture alone, as before; 1: the own picture's
             // distance at the place alone must match (12:55); 2 (default): one of the 3 x 3 around it (the outlines).
@@ -555,6 +580,19 @@ class EyeWarp {
                 const float f=std::strtof(v,nullptr);return std::isfinite(f)&&f>=0.f&&f<=1000.f?f:-1.f;}();
             e[41]=historyBox;
             drawPass(c,first,firstPush,0,region);if(first!=eye)++drawsFromOther;
+            // without the depth test (the painter's order, pipeline): they lie before the world wherever they are found, and a world
+            // cell over their edge carries a depth blended between its corners - with the test it won over them along the edge (the
+            // staff's outline sawn a cell wide, Mock game-20261024-035430)
+            if(own&&firstAt){v.vkCmdBindPipeline(c,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
+                // EVR_AFW_OWN_SECOND=1: the other kept picture's own things under them (a test, 2026-10-24: a picture made from the
+                // other eye lacks the side of the staff only this eye sees; Mock game-20261024-044747: the edge no better, the GPU 2.22 ->
+                // 3.14 ms a refresh)
+                static const bool ownSecond=[]{char v[4]{};return GetEnvironmentVariableA("EVR_AFW_OWN_SECOND",v,sizeof v)==1&&v[0]=='1';}();
+                if(ownSecond&&secondAt)drawPass(c,second,constants(kept[second],now,1+separation(second,secondAt,true),nullptr,0),0,region);
+                // their history: the eye's own last picture, uncarried too (extras 44..59; shaders/eye_warp.frag withHistory)
+                auto ownPush=constants(kept[first],now,1+separation(first,firstAt,true),nullptr,0);
+                if(history>0&&second==eye){ownPush[31]=history;const auto still=oldToNew(kept[second].view.pose,now.pose);for(size_t i=0;i<16;++i)e[44+i]=still[i];}
+                drawPass(c,first,ownPush,0,region);++ownDraws;}
             // the holes: the other kept picture, each hole's ray checked against the first (mode 2, shaders/eye_warp.frag)
             v.vkCmdBindPipeline(c,VK_PIPELINE_BIND_POINT_GRAPHICS,fillPipeline);drawPass(c,second,secondPush,3,region);++fills;
         }else if(kept[first].valid){drawPass(c,first,constants(kept[first],now,0,firstAt,firstMotion),0,uint32_t(2*current+eye));if(first!=eye)++drawsFromOther;}

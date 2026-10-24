@@ -9,6 +9,7 @@
 #include <evr/quick_wheel_schedule.hpp>
 #include <evr/grip_router.hpp>
 #include <evr/holster.hpp>
+#include <evr/consumable_hand_catalog.hpp>
 #include <evr/room_sneak.hpp>
 #include <evr/swim_stroke.hpp>
 #include <evr/hit_stop.hpp>
@@ -22,6 +23,7 @@
 #include <evr/controller_motion_fixture.hpp>
 #include <evr/controller_menu_fixture.hpp>
 #include <evr/live_pad.hpp>
+#include <evr/left_trigger_tools.hpp>
 #include <evr/bow_input_trial.hpp>
 #include <evr/bow_physical_trial.hpp>
 #include <evr/bow_physical_release.hpp>
@@ -167,6 +169,9 @@ inline const uint64_t liveSpecialRtMs=[]{char v[16]{};const auto n=GetEnvironmen
 // hand (bombs, building pieces) and for the empty slot (item 0: bare hands).
 struct HandItem {bool valid=false;uint32_t item=0;unsigned count=0;uint8_t category=255,itemSlot=255,weaponType=255;bool typeKnown=false;};
 inline HandItem (*handItem)(uint64_t)=nullptr;
+// The equipment's bow the mod shows in the left hand (holster_actions.hpp, motion_mod_bow_visual.hpp); 0: none.
+inline std::atomic<uint32_t> modBowItem{0};
+constexpr uint32_t modBowTag=0x4d4f4442u;   // the low half of its draw's binding ("MODB", motion_visual_bridge.hpp bowBinding)
 // When the player's keen::ecs::NetworkFishing last named a float (live_equipment.hpp reads it about thirty times a
 // second): the float is out for as long as this is fresh.
 inline std::atomic<uint64_t> fishingFloatMs{0};
@@ -306,6 +311,9 @@ inline std::atomic<uint64_t> bowReleasedAt{0};
 inline std::atomic<uint64_t> bowEarlySpawnUntil{0};
 // A throw's spawn handed early (motion_event_selection_observer.hpp, the throw as a wand's swing): before the game's thrown state.
 inline std::atomic<uint64_t> throwEarlySpawnUntil{0};
+// A wand's shot handed early (the same, 2026-10-24): before the game's shot state 3 the hand's aim was refused (headset run
+// 20261024-151525: every wand shot "native_identity" at the state 2 - the spells did not fly to the white dot).
+inline std::atomic<uint64_t> rangedEarlySpawnUntil{0};
 // The string is held with the right grip (the strong shot's draw, BowDraw::strongDraw): the game does not aim then and
 // shows no arrow of its own, so motion_arrow_visual.hpp keeps its clone on the string for the whole draw.
 inline std::atomic<bool> bowStrongDrawing{false};
@@ -354,6 +362,7 @@ inline std::atomic<uint64_t> quickWheelChosenMs{0};
 inline std::atomic<uint32_t> consumableHeld{0};
 // A throwable in the hand (shown in it: motion_consumable_visual.hpp) and when the last one was thrown.
 inline std::atomic<uint32_t> throwableHeld{0};inline std::atomic<uint64_t> throwAtMs{0};
+inline std::atomic<uint32_t> foodInHand{0};   // a food the game put in the hand when chosen (below, at throwableHeld)
 inline std::atomic<bool> consumableUse{false};
 // The mouth (VHVR's mouth box: 6 cm under the eyes and 4 cm before them, docs/analysis/vhvr_spec_20261010/equipment_tools.md
 // 9.1): the hand within mouthReach of it uses the item; it has to leave past mouthLeave before it can use another.
@@ -464,6 +473,10 @@ inline evr::motion::HandFrame gestureHands;
 inline evr::motion::HeadGesture gestureMapper;inline evr::motion::GestureFeedback gestureFeedback;
 inline std::mutex gestureMutex;inline evr::motion::HeadGestureResult gestureResult;inline uint64_t gestureMs=0;
 inline evr::motion::GestureHead gestureHead;
+// The game's camera update of the moment (camera_control_observer.hpp's latest sample), wired by view_resource_probe.cpp - the
+// camera observer is not part of this header's own tests.
+struct CameraTurn {bool valid=false;uint8_t camera=255;float yaw=0;uint64_t ms=0,heldUntil=0;};
+inline CameraTurn (*cameraTurn)()=nullptr;
 inline bool gestureWieldGrip=false;inline uint64_t gestureBowBinding=0;
 inline void publishGuard(const evr::motion::LiveGuardEquipment& equipment,uint64_t frame,uint64_t now){
  std::lock_guard<std::mutex> lock(gestureMutex);gestureGuardEquipment=equipment;gestureGuardFrame=frame;gestureGuardMs=equipment.binding?now:0;
@@ -731,6 +744,12 @@ inline DWORD WINAPI state(DWORD user,XINPUT_STATE* output){
         {std::lock_guard<std::mutex> lock(liveMutex);*output=liveState;}
         if(output->Gamepad.wButtons&XINPUT_GAMEPAD_X)++liveAttackPolls;
         if(output->Gamepad.bRightTrigger>=128)++liveRtPolls;
+        // Each press of A as the game read it (2026-10-23, a player's report 124345: "the backpack's Actions needs 3 to 17 presses
+        // of A"): how many of its polls saw it, and how long, with the screen the controller took then.
+        {static bool aWas=false;static unsigned aPolls=0,aLogs=0;static uint64_t aSince=0;const bool a=(output->Gamepad.wButtons&XINPUT_GAMEPAD_A)!=0;const auto now=clockNow();
+         if(a){if(!aWas){aPolls=0;aSince=now;}++aPolls;}
+         else if(aWas&&aLogs<400){++aLogs;try{logFile->event("pad_a_polled","\"polls\":"+std::to_string(aPolls)+",\"ms\":"+std::to_string(now-aSince)+",\"screen\":"+std::to_string(liveLastScreen)+",\"packet\":"+std::to_string(output->dwPacketNumber));}catch(...){}}
+         aWas=a;}
         liveObserved=output->dwPacketNumber;liveLastPollMs=clockNow();return ERROR_SUCCESS;
     }
     if(wheelRequested){
@@ -974,8 +993,10 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 {static const bool menuLeftY=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_LT_Y",v,sizeof v);return !(n==1&&v[0]=='0');}();liveMapper.menuLeftTriggerY(menuLeftY);}
                 // A building hammer or a blueprint in the hand (the game's item category 10, Blueprints - 1.0 data
                 // docs/analysis/held_1_0_20261017: Tool_Quickbuilder_Hammer 693164685, _Improved 1468357474 and the walls and
-                // roofs): the left trigger is the game's LT, which enters building mode (include/evr/live_pad.hpp).
-                {bool blueprint=false;if(handItem&&screenKind==evr::motion::LiveScreen::Gameplay){const auto held=handItem(now);blueprint=held.valid&&held.item&&held.category==10;}
+                // roofs): the left trigger is the game's LT, which enters building mode (include/evr/live_pad.hpp). The same for the
+                // summoning staff and the screwdriver, whose LT enters their own modes (include/evr/left_trigger_tools.hpp; 2026-10-24).
+                {bool blueprint=false;if(handItem&&screenKind==evr::motion::LiveScreen::Gameplay){const auto held=handItem(now);
+                  blueprint=held.valid&&held.item&&(held.category==10||evr::motion::leftTriggerModeTool(held.item));}
                  liveMapper.leftTriggerGame(blueprint);
                  static bool wasBlueprint=false;if(blueprint!=wasBlueprint){wasBlueprint=blueprint;logFile->event("left_trigger_game_lt","\"on\":"+std::string(blueprint?"true":"false")+",\"milliseconds\":"+std::to_string(now));}}
                 // The VR button pictures (2026-10-21, include/evr/button_glyph_labels.hpp): the scene, what the hands hold and the
@@ -991,7 +1012,8 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         if(evr::motion::catalogBowItem(h.item))held=Held::Bow;
                         else if(const auto m=evr::motion::rangedAimModel(h.item))held=m->type==6?Held::Wand:Held::Staff;
                         else if(h.category==2)held=h.weaponType==12?Held::Throwable:Held::Weapon;
-                        else if(h.category==5)held=Held::Fishing;else if(h.category==6)held=Held::BuildTool;else if(h.category==10)held=Held::Hammer;else held=Held::Tool;}}
+                        else if(h.category==5)held=Held::Fishing;else if(h.category==10||evr::motion::leftTriggerModeTool(h.item))held=Held::Hammer;   // LT: the game's
+                        else if(h.category==6)held=Held::BuildTool;else held=Held::Tool;}}
                     // the Index alone binds the trackpad's force (include/evr/motion_actions.hpp)
                     const Family family=hands.hands[1].padForceActive||hands.hands[0].padForceActive?Family::Index:Family::Quest;
                     const uint32_t packed=uint32_t(family)|uint32_t(scene)<<4|uint32_t(held)<<8;
@@ -1481,6 +1503,12 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     static const bool throwTestAny=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_THROW_TEST_ANY_ITEM",v,sizeof v);return n==1&&v[0]=='1';}();
                     const bool throwable=gameplay&&((held.valid&&held.category==2&&held.typeKnown&&held.weaponType==12&&evr::motion::catalogThrowable(held.item))||throwTestAny);
                     throwableHeld.store(gameplay&&held.valid&&held.category==2&&held.typeKnown&&held.weaponType==12&&evr::motion::catalogThrowable(held.item)?held.item:0u);
+                    // A food the game puts in the hand when it is chosen (2026-10-24, user after the online run: "the fish chosen from the
+                    // quick slots did not show in the hand; the caught one does"): in both players' logs the raw fish 2004880509
+                    // (_Food_raw_bad_T1_fish_common_01) became the action bar's hand item (category 7) - no consume action, as the other
+                    // foods give (consumable_hold.hpp) - and the trigger's use (X) ate it 0.27 s later. Its model is shown in the hand as
+                    // a held consumable's (motion_consumable_visual.hpp heldNow), and the mouth uses it as the trigger does (below).
+                    foodInHand.store(gameplay&&held.valid&&held.category==7&&evr::motion::consumableHand(held.item)?held.item:0u);
                     // The guide: the left hand held forward while the throw is got ready shows where it goes and decides it
                     // (user 2026-10-18; ThrowGuide). Asked before the throw's own update, with the wind-up as it stood.
                     evr::motion::ThrowGuideResult guide;
@@ -1687,6 +1715,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     const bool hud=hudNow||(drawing&&screen==1&&hudLostAt&&now-hudLostAt<=bowHudGraceMs);
                     const bool allowed=hud&&!value.active;
                     // Menus and other native screens own their triggers: the draw lets go and the pad is left as mapped.
+                    if(bowDrawRequested)bowDraw.gripAsTrigger(bowGeometry.binding&&uint32_t(bowGeometry.binding)==modBowTag);
                     if(bowDrawRequested&&!hud)bowDraw.abort();
                     else pad=bowDrawRequested?bowDraw.update(pad,hands,bowGeometry,allowed,now):
                         bowPhysicalReleaseRequested?bowPhysicalRelease.update(pad,hands,bowGeometry,allowed,now):bowPhysicalTrial.update(pad,hands,bowGeometry,allowed);
@@ -1750,6 +1779,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 if(menuPointer::trigger.load())pad.rightTrigger=0;
                 if(menuPointer::secondary.load())pad.buttons&=~evr::motion::LivePadMapper::B;   // (not taken since 17:20: the left A is the pad's B)
                 if(menuPointer::primary.load())pad.buttons&=~evr::motion::LivePadMapper::A;     // the right A: the right click (the item's menu)
+                if(GetTickCount64()<menuPointer::padAUntil.load())pad.buttons|=evr::motion::LivePadMapper::A;   // the right A as the pad's A on what the ray points at (menu_pointer.hpp aPad, test)
                 // In menus the right trigger drags with the ray off the plate too: the pad's X, which picks up and drops an item
                 // as the left B did (2026-10-20 17:20, user: "the buttons change their role with the pointer on the screen or
                 // not - make them the same: if the trigger drags, it drags with the pointer off too"). A pull held into the
@@ -1825,16 +1855,42 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                  // Up and down (include/evr/swim_stroke.hpp up, include/evr/holster.hpp swim inputs): under the water a stroke
                  // that lifts presses the game's DiveAscend and one that sinks DiveDescend, as long as it carries (30 % of a
                  // full throw); on the surface one that sinks presses SwimStartDiving. EVR_SWIM_DIVE=0: off.
+                 // Thresholds (2026-10-24, user: "swimming forward I slowly rise - the rising is judged too widely; make forward and
+                 // diving come a little more easily"; headset log 20261024-125454: under water DiveAscend came from forward
+                 // strokes at 0.32..0.57 of a full throw, DiveDescend at -0.49..-1): rising from 50 % (was 30), sinking and
+                 // starting to dive from 20 % (was 30). EVR_SWIM_ASCEND_AT / EVR_SWIM_DESCEND_AT=<0.05..1>.
+                 // The stroke's direction too (2026-10-24 13:40, user: "still unnatural; in this log every stroke but the dives from the
+                 // surface was meant forward - take it as the measure of rising and sinking", headset log 20261024-130740, its hands
+                 // replayed through include/evr/swim_stroke.hpp - scratchpad swim_up_replay2.py, the same values as the log's): the
+                 // forward strokes' up reached a full throw (1.0) too, so its size cannot tell them apart; their direction can. The
+                 // carried velocity's angle above the horizontal (atan2 of up and the flat speed) was 6..39 degrees up in all 605
+                 // frames of the forward strokes over 20 % - a breaststroke pulls the hands down and back, so it lifts; the three
+                 // dives from the surface 37..87 degrees down from their second frame (their first -16, -17, -50). So rising needs
+                 // 55 degrees up, sinking and starting to dive 40 down, as well as the sizes above. EVR_SWIM_ASCEND_DEG /
+                 // EVR_SWIM_DESCEND_DEG=<0..89> (0: the size alone, as before).
                  {static const bool dive=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_SWIM_DIVE",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                  static const auto threshold=[](const char* name,float fallback){char v[16]{};const auto n=GetEnvironmentVariableA(name,v,sizeof v);
+                      const float x=n&&n<sizeof v?float(std::atof(v)):fallback;return std::isfinite(x)&&x>=.05f&&x<=1.f?x:fallback;};
+                  static const auto degrees=[](const char* name,float fallback){char v[16]{};const auto n=GetEnvironmentVariableA(name,v,sizeof v);
+                      const float x=n&&n<sizeof v?float(std::atof(v)):fallback;return std::isfinite(x)&&x>=0.f&&x<90.f?x:fallback;};
+                  static const float ascendAt=threshold("EVR_SWIM_ASCEND_AT",.5f),descendAt=threshold("EVR_SWIM_DESCEND_AT",.2f);
+                  static const float ascendDeg=degrees("EVR_SWIM_ASCEND_DEG",55.f),descendDeg=degrees("EVR_SWIM_DESCEND_DEG",40.f);
                   static uint64_t lastBits=0;static unsigned diveLines=0;
                   uint64_t bits=0;const unsigned water=inWater&&actorWater?actorWater(now):0u;
+                  const float strokeDeg=std::atan2(swim.up,std::hypot(swim.velocity.x,swim.velocity.z))*57.29578f;   // the carried stroke's angle above the horizontal
+                  const bool rising=swim.upStick>=ascendAt&&strokeDeg>=ascendDeg,sinking=swim.upStick<=-descendAt&&strokeDeg<=-descendDeg;
                   if(dive&&inWater){
-                    if(water&2){if(swim.upStick>=.3f)bits=evr::game::inputDiveAscend;else if(swim.upStick<=-.3f)bits=evr::game::inputDiveDescend;}
-                    else if(water&1){if(swim.upStick<=-.3f)bits=evr::game::inputSwimStartDiving;}}
+                    if(water&2){if(rising)bits=evr::game::inputDiveAscend;else if(sinking)bits=evr::game::inputDiveDescend;}
+                    else if(water&1){if(sinking)bits=evr::game::inputSwimStartDiving;}}
                   evr::game::swimInputBits.store(bits);if(bits)evr::game::swimInputUntilMs.store(now+120);
                   if(bits!=lastBits&&diveLines++<300){std::ostringstream s;s<<std::setprecision(3)<<"\"frame\":"<<hands.frame<<",\"water\":"<<water<<",\"up_m_s\":"<<swim.up<<",\"up_stick\":"<<swim.upStick
-                     <<",\"start_diving\":"<<((bits&evr::game::inputSwimStartDiving)?"true":"false")<<",\"ascend\":"<<((bits&evr::game::inputDiveAscend)?"true":"false")<<",\"descend\":"<<((bits&evr::game::inputDiveDescend)?"true":"false");
+                     <<",\"stroke_deg\":"<<strokeDeg<<",\"start_diving\":"<<((bits&evr::game::inputSwimStartDiving)?"true":"false")<<",\"ascend\":"<<((bits&evr::game::inputDiveAscend)?"true":"false")<<",\"descend\":"<<((bits&evr::game::inputDiveDescend)?"true":"false");
                      logFile->event("swim_dive",s.str());}
+                  // every 15th frame of a stroke that carries up or down (20 %), taken or not: the measure for the next tuning
+                  {static unsigned sampleLines=0,sampleFrames=0;
+                   if(inWater&&std::abs(swim.upStick)>=.2f&&sampleFrames++%15==0&&sampleLines<600){++sampleLines;std::ostringstream s;
+                     s<<std::setprecision(3)<<"\"frame\":"<<hands.frame<<",\"water\":"<<water<<",\"up_stick\":"<<swim.upStick<<",\"flat_m_s\":"<<std::hypot(swim.velocity.x,swim.velocity.z)
+                      <<",\"stroke_deg\":"<<strokeDeg<<",\"bits\":"<<bits;logFile->event("swim_up_sample",s.str());}}
                   lastBits=bits;}
                  const bool sample=swim.stroking&&strokeFrames++%30==0;
                  if((swim.moving!=wasMoving||sample)&&lines<600){++lines;
@@ -1875,6 +1931,41 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     if(right.triggerActive){pad.rightTrigger=0;pad.buttons&=~evr::motion::LivePadMapper::X;}
                  }else atMouth=false;
                  triggerWas=trigger;}
+                // The food in the hand (foodInHand): at the mouth the game's use (X) for 150 ms, as the trigger gives it.
+                {static bool foodAtMouth=false;static uint64_t foodUseUntil=0;static uint32_t foodBefore=0;
+                 const auto& right=hands.hands[1];const uint32_t food=foodInHand.load();
+                 if(food!=foodBefore){if(food)requestBowHaptic({0,.25f},{0,40});foodBefore=food;}
+                 if(food&&fresh&&mapped.valid&&screenKind==evr::motion::LiveScreen::Gameplay&&!value.active){
+                    evr::motion::GestureHead head;{std::lock_guard<std::mutex> lock(gestureMutex);head=gestureHead;}
+                    if((head.flags&15)==15&&right.gripActive){
+                        using evr::operator+;using evr::operator-;
+                        const evr::Vec3 mouth=head.pose.position+evr::rotate(head.pose.orientation,evr::Vec3{0,-.06f,-.04f});
+                        const float distance=evr::length(right.grip.position-mouth);
+                        if(!foodAtMouth&&distance<mouthReach){foodAtMouth=true;foodUseUntil=now+150;requestBowHaptic({0,.4f},{0,60});static unsigned lines=0;
+                            if(lines++<400)logFile->event("food_use_at_mouth","\"frame\":"+std::to_string(hands.frame)+",\"item\":"+std::to_string(food)+",\"mouth_distance_m\":"+std::to_string(distance));}
+                        else if(foodAtMouth&&distance>mouthLeave())foodAtMouth=false;
+                    }
+                 }else{foodAtMouth=false;foodUseUntil=0;}
+                 if(food&&now<foodUseUntil)pad.buttons|=evr::motion::LivePadMapper::X;}
+                // A turn the game does not take (2026-10-24, user after the online run: "while moving, sometimes for a moment only the
+                // stick turn stops, as if the camera were looking at something; the headset still turns"; Index): the right stick is
+                // sent turning but the game's camera update adds no turn (cameraControl: its weighted yaw, what turns the VR view).
+                // The start and the end of each such spell go on record with the camera, the player's flags and the buttons, and
+                // every change of the game's camera (guess to check: the game's target lock - its camera 5 was seen for 1.4 s at
+                // 690 s of that run, turned 30 degrees by the game itself).
+                {static int spell=0;static uint64_t since=0;static unsigned spells=0,changes=0;static uint8_t lastCamera=255;static uint32_t spellFlags=0;static uint8_t spellCamera=255;
+                 const CameraTurn c=cameraTurn?cameraTurn():CameraTurn{};
+                 const bool fresh=c.valid&&c.ms&&now>=c.ms&&now-c.ms<=200;
+                 if(fresh&&c.camera!=lastCamera){if(changes++<400)logFile->event("camera_id_change","\"from\":"+std::to_string(unsigned(lastCamera))+",\"to\":"+std::to_string(unsigned(c.camera))+
+                     ",\"player_flags\":"+std::to_string(menuPointer::playerFlags.load())+",\"buttons\":"+std::to_string(pad.buttons)+",\"right_x\":"+std::to_string(pad.rightX)+",\"frame\":"+std::to_string(hands.frame));lastCamera=c.camera;}
+                 const bool turning=screenKind==evr::motion::LiveScreen::Gameplay&&std::abs(int(pad.rightX))>=12000;
+                 const bool ignored=turning&&fresh&&std::abs(c.yaw)<1e-7f;
+                 if(ignored){if(++spell==4){since=now;spellFlags=menuPointer::playerFlags.load();spellCamera=c.camera;
+                     if(spells++<200)logFile->event("turn_ignored_begin","\"camera\":"+std::to_string(unsigned(c.camera))+",\"player_flags\":"+std::to_string(spellFlags)+
+                         ",\"buttons\":"+std::to_string(pad.buttons)+",\"right_x\":"+std::to_string(pad.rightX)+",\"held_until_ms\":"+std::to_string(c.heldUntil)+",\"frame\":"+std::to_string(hands.frame));}}
+                 else{if(spell>=4&&spells<=200)logFile->event("turn_ignored_end","\"camera\":"+std::to_string(unsigned(c.camera))+",\"began_camera\":"+std::to_string(unsigned(spellCamera))+
+                         ",\"ms\":"+std::to_string(now-since)+",\"frames\":"+std::to_string(spell)+",\"player_flags\":"+std::to_string(menuPointer::playerFlags.load())+",\"began_flags\":"+std::to_string(spellFlags)+",\"still_turning\":"+(turning?"true":"false")+",\"frame\":"+std::to_string(hands.frame));
+                     spell=0;}}
                 publishLive(pad);
                 liveWieldBusy.store(!fresh||screenKind!=evr::motion::LiveScreen::Gameplay||value.active||bool(pad.buttons&evr::motion::LivePadMapper::RB));
                 static uint64_t lastScope=0;if(!fresh&&lastScope&&now>lastScope)liveStaleMs+=std::min<uint64_t>(now-lastScope,1000);lastScope=now;

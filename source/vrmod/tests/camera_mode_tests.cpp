@@ -21,7 +21,9 @@ int main(){
  using P=game::CameraPresentation;
  check(game::cameraPresentation(25)==P::FirstPerson&&game::cameraPresentation(43)==P::FirstPerson&&game::cameraPresentation(44)==P::FirstPerson,"glider jump and falling remain first person");
  check(game::cameraPresentation(18)==P::FirstPerson,"the sneak attack's execute camera is the player's own attack (2026-10-21)");
- check(game::cameraPresentation(0)==P::NativeEvent&&game::cameraPresentation(30)==P::NativeEvent&&game::cameraPresentation(31)==P::NativeEvent,"entity camera dialogue and altar preserve native event camera");
+ {bool all=true;for(unsigned id=0;id<255;++id)all&=game::cameraPresentation(uint8_t(id))==P::FirstPerson;
+  check(all&&game::cameraPresentation(255)==P::Unknown,"every camera is first person (2026-10-24: the altar, the obelisk, the forge, the respawn too); 255 (no camera) is not known");}
+ check(game::cameraPresentation(30)==P::FirstPerson,"dialogue is first person (2026-10-24: talking turned it third person)");
  check(game::cameraPresentation(34)==P::FirstPerson&&game::cameraPresentation(35)==P::FirstPerson,"placing a flame altar or an area prop is first-person play (2026-10-19: the headset jumped to the game's camera)");
  check(game::cameraPresentation(39)==P::FirstPerson&&game::cameraPresentation(40)==P::FirstPerson&&game::cameraPresentation(41)==P::FirstPerson&&
        game::cameraPresentation(42)==P::FirstPerson,"fishing is first-person play, its victory camera too (2026-10-19)");
@@ -31,10 +33,8 @@ int main(){
  check(game::legacyCameraId(22)==25&&game::legacyCameraId(27)==30&&game::legacyCameraId(36)==38&&game::legacyCameraId(42)==42,"1.0 glider, dialogue, building third person and fishing victory read back to June's");
  check(game::legacyCameraId(1)==1&&game::legacyCameraId(3)==3&&game::legacyCameraId(32)==34&&game::legacyCameraId(33)==35,"1.0 loading cameras stay native events, the altar's building cameras native special");
  check(game::cameraPresentation(game::legacyCameraId(37))==P::FirstPerson&&game::cameraPresentation(game::legacyCameraId(43))==P::FirstPerson&&
-       game::cameraPresentation(game::legacyCameraId(29))==P::NativeEvent,"new 1.0 cameras: fly spark and wand aim are play, the mother flame an event");
- check(game::legacyCameraId(255)==255&&game::cameraPresentation(game::legacyCameraId(46))==P::Unknown,"no camera stays 255, a value beyond 1.0's table is unknown");
- bool unknown=true;for(unsigned id=45;id<256;++id)unknown&=game::cameraPresentation(uint8_t(id))==P::Unknown;
- check(unknown,"all unknown camera IDs fall back to native camera");
+       game::cameraPresentation(game::legacyCameraId(29))==P::FirstPerson,"new 1.0 cameras: fly spark and wand aim are play, the mother flame too");
+ check(game::legacyCameraId(255)==255&&game::legacyCameraId(46)==45&&game::cameraPresentation(game::legacyCameraId(46))==P::FirstPerson,"no camera stays 255, a value beyond 1.0's table is a later build's camera, first person");
  check(game::cameraModeFixture(99,19)==19&&game::cameraModeFixture(100,19)==30&&game::cameraModeFixture(399,19)==30&&
        game::cameraModeFixture(400,19)==34&&game::cameraModeFixture(449,19)==34&&game::cameraModeFixture(450,19)==255&&
        game::cameraModeFixture(499,19)==255&&game::cameraModeFixture(500,19)==19,"fixture boundaries cover event special unknown and first-person restoration");
@@ -85,7 +85,7 @@ int main(){
   }
   check(converge&&bounded,"the difference dies out and never exceeds where it began, for a correction arriving one to three updates late");
   bool cameras=true;for(unsigned id=0;id<64;++id){
-   const bool own=id==5||id==8||id==10||id==12||id==14||id==17||id==23||id==24||id==25||id==28||id==29;
+   const bool own=id==5||id==8||id==10||id==12||id==14||id==17||id==23||id==24||id==25||id==28||id==29||id<=3||(id>=30&&id<=33)||id>=45;
    cameras=cameras&&game::headingRealignCamera(uint8_t(id))==(game::cameraPresentation(uint8_t(id))==P::FirstPerson&&!own);}
   check(cameras&&game::headingRealignCamera(4)&&game::headingRealignCamera(19)&&game::headingRealignCamera(26)&&game::headingRealignCamera(27)&&game::headingRealignCamera(38)&&
         !game::headingRealignCamera(5)&&!game::headingRealignCamera(24)&&!game::headingRealignCamera(25)&&!game::headingRealignCamera(30)&&game::headingRealignCamera(34),

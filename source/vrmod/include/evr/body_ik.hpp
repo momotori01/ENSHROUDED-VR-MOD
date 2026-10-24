@@ -43,8 +43,20 @@ struct Skeleton {
 // kept at the double jump's second press (legsNow below; user 2026-10-22 23:45: "can the double jump's legs move as in the
 // first jump? suddenly standing straight bothers me a little"); toward the rest pose (swung back by legsBack) as the
 // weight falls, for the glider.
+// swimLegsFix (0..1, in the water only): the swim pelvis turned so that the animation's legs point behind and swimLegsDownDeg
+// below level (1) instead of where the animation has them - the dive's legs. User, 2026-10-24 14:00: "under the water, when the
+// dive (down) is given, the feet come beside the face"; headset log 20261024-135531: with DiveDescend the game leans the model
+// 82..90 degrees, the dive animation (stood upright) has its ankles 0.6..0.8 m above its hips, and the swim pelvis keeps the
+// animation's orientation under the upright chest - the ankles came to 1.62..1.78 m, the eyes at 1.60. The legs keep their
+// animated bend and kicking under the turned pelvis. The caller sets the weight from how far the animation's feet are above its
+// hips, eased in time (hooks/motion_body_ik.hpp).
 struct Targets {Pose head;std::array<Pose,2> socket;std::array<bool,2> hand{true,true};bool swim=false;bool hipsGiven=false;Pose hips=identityPose();float legsRest=0;float legsBack=0;
- const std::vector<Pose>* legsHeld=nullptr;float heldWeight=0;};
+ const std::vector<Pose>* legsHeld=nullptr;float heldWeight=0;float swimLegsFix=0;float swimLegsDownDeg=45;};
+// How far the animation's feet (the ankles' midpoint) are above its hips, metres (the caller's swimLegsFix).
+inline float feetAboveHips(const std::vector<Pose>& animatedGlobals,uint16_t hips=1,uint16_t leftAnkle=4,uint16_t rightAnkle=8){
+ if(animatedGlobals.size()<=std::max({hips,leftAnkle,rightAnkle}))throw std::invalid_argument("body ik joint");
+ return (animatedGlobals[leftAnkle].position.y+animatedGlobals[rightAnkle].position.y)*.5f-animatedGlobals[hips].position.y;
+}
 struct Settings {
  Vec3 eyeInHead{0,.0522f,.1f}; // head joint -> midpoint of the eye joints in the rest pose (measured)
  // Neck pivot -> eyes, in the head's frame. Fitted to the headset poses of the first real-device run (2026-10-11,
@@ -154,7 +166,17 @@ inline std::vector<Joint> solve(const std::vector<Joint>& animated,const std::ve
  if(t.hipsGiven){if(!finite(t.hips.position))throw std::invalid_argument("body ik hips");hips=t.hips.position;}
  r.hipsBelowAnimated=A[k.hips].position.y-hips.y;r.torso=t.swim?length(chest-hips)/torso:(chest.y-hips.y)/torso;r.pivot=pivot;
  const bool rigid=t.swim||t.hipsGiven;
- const Pose rigidHips{t.hipsGiven?normalized(t.hips.orientation):multiply(yaw,A[k.hips].orientation),hips};
+ // The dive's legs (swimLegsFix above): the turn taking the animation's leg direction (hips to the ankles' midpoint, turned to
+ // the heading as the legs are) onto behind-and-down, a part of it by the weight.
+ Quat swimFix{0,0,0,1};
+ if(t.swim&&!t.hipsGiven&&std::isfinite(t.swimLegsFix)&&t.swimLegsFix>0){
+  const auto legs=turned((A[k.ankle[0]].position+A[k.ankle[1]].position)*.5f-A[k.hips].position);
+  if(length(legs)>.05f){
+   const float down=(std::isfinite(t.swimLegsDownDeg)?std::clamp(t.swimLegsDownDeg,0.f,85.f):45.f)*3.14159265f/180;
+   swimFix=blend({0,0,0,1},motion::alignDirections(legs,turned({0,-std::sin(down),-std::cos(down)})),std::min(t.swimLegsFix,1.f));
+  }
+ }
+ const Pose rigidHips{t.hipsGiven?normalized(t.hips.orientation):multiply(swimFix,multiply(yaw,A[k.hips].orientation)),hips};
  const auto onHips=[&](uint16_t j){return rigid?compose(rigidHips,compose(inverse(R[k.hips]),R[j])):Pose{multiply(yaw,R[j].orientation),hips+turned(R[j].position-R[k.hips].position)};};
  put(k.hips,onHips(k.hips));
  for(auto j:k.spine){const float f=std::clamp((R[j].position.y-R[k.hips].position.y)/torso,0.f,1.f);const auto low=onHips(j),high=onChest(j);

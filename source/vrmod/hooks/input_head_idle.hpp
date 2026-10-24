@@ -315,6 +315,17 @@ inline void patch(const game::ClientInputBytes& source,game::ClientInputBytes& o
         evr::motion::HandFrame hands;{std::lock_guard<std::mutex> lock(controllerUiFixture::gestureMutex);hands=controllerUiFixture::gestureHands;}
         const auto& left=hands.hands[0];const float physical=left.stickActive?std::hypot(left.stick.x,left.stick.y):0.f;
         const auto root=value.head.anchor.root;
+        // EVR_WALK_TRACE=1 (diagnostic, 2026-10-24, user after the online run as a guest: "breaking pots, the feet seem to stop"):
+        // every 0.2 s while the stick is pushed, how far the player's root went and how long since the last stroke.
+        {static const bool trace=[]{char v[4]{};return GetEnvironmentVariableA("EVR_WALK_TRACE",v,sizeof v)==1&&v[0]=='1';}();
+         thread_local uint64_t at=0;thread_local WorldPositionQ32 was{};thread_local unsigned traced=0;
+         if(trace&&traced<3000){
+            if(std::max(physical,std::hypot(native[0],native[1]))<.5f)at=0;
+            else if(!at){at=now;was=root;}
+            else if(now-at>=200){const double m=std::hypot(relativeQ32(root.x,was.x),relativeQ32(root.z,was.z));const auto stroke=controllerUiFixture::liveCooldown.from;
+                std::ostringstream o;o<<std::setprecision(4)<<"\"ms\":"<<now-at<<",\"metres\":"<<m<<",\"speed\":"<<m*1000.0/double(now-at)<<",\"since_stroke_ms\":"<<(stroke&&now>=stroke?int64_t(now-stroke):-1)<<",\"tick\":"<<tick;
+                logFile->event("walk_trace",o.str());++traced;at=now;was=root;}
+         }}
         if(std::max(physical,std::hypot(native[0],native[1]))<.5f){since=0;told=false;}
         else if(!since){since=now;from=root;}
         else{

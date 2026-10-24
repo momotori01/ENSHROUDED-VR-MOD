@@ -26,8 +26,13 @@ inline uint8_t legacyCameraId(uint8_t id){
 // presentation policy, not a claim that every named state is a cutscene.
 enum class CameraPresentation { FirstPerson, NativeEvent, NativeSpecial, Unknown };
 inline CameraPresentation cameraPresentation(uint8_t id){
-    if(id>=45)return CameraPresentation::Unknown;
-    if(id<=3||(id>=30&&id<=33))return CameraPresentation::NativeEvent;
+    // Every camera of the game is first person (2026-10-24 15:55, user: "the altar's, the obelisk's, the shroud forge's cameras -
+    // and the others too: make every camera first person"). Until then the event cameras kept the game's own view in the headset:
+    // 0 EntityCamera, 1 / 2 the spawning, 3 the respawning (also the teleports and being revived), 31 the altar, 32 the obelisk,
+    // 33 the shroud forge; 30 the dialogue was made first person an hour before (user: "talking to someone turns it third person";
+    // log 20261024-151525: 4 -> 30 on each talk). Cameras of a later build (45, legacyCameraId) as well. Only 255 - no camera of
+    // the player yet - is not known. The game keeps steering these cameras itself: headingRealignCamera leaves them alone.
+    if(id==255)return CameraPresentation::Unknown;
     // 18 (PlayerCameraExecute) is the sneak attack from behind - the game's camera of the stab, about 2 m behind the
     // player - kept the game's own until 2026-10-21 (user: "a backstab from a sneak attack switches to the third-person
     // camera"). It is the player's own attack: first person, as VHVR attacks.
@@ -110,6 +115,7 @@ public:
 // Cameras the game steers by itself for as long as they last are left alone; the difference is taken out afterwards.
 inline bool headingRealignCamera(uint8_t id){
     if(id==5||id==8||id==10||id==12||id==14||id==17)return false; // the ...Target cameras: the game keeps them on the locked target
+    if(id<=3||(id>=30&&id<=33)||id>=45)return false;   // the event cameras the game steers (above), and those of a later build
     return cameraPresentation(id)==CameraPresentation::FirstPerson&&id!=23&&id!=24&&id!=25&&id!=28&&id!=29; // Climbing, HookShot, Glider, HeadDiving
 }
 // The cameras of a locked combat target (June ids): DefaultTarget 5 and the bow's / staff's / hipfire's ...Target ones.

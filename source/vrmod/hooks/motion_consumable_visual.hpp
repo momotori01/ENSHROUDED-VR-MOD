@@ -81,11 +81,12 @@ inline void retire(const char* event,const std::string& detail){
     if(!invalid||!released)throw std::runtime_error("consumable retirement failed");
 }
 // How the item lies in the hand (consumable_hand_catalog.hpp; not listed: on the palm, 13 cm), EVR_CONSUMABLE_SIZE_CM overriding the size.
-struct Hold {evr::motion::ConsumableHold hold=evr::motion::ConsumableHold::Palm;float size=.13f;bool along=false,skinned=false;};
+struct Hold {evr::motion::ConsumableHold hold=evr::motion::ConsumableHold::Palm;float size=.13f;bool along=false,skinned=false,heaped=false,turnedKnown=false;Quat turn{0,0,0,1};Vec3 turnedLo{},turnedHi{};};
 inline Hold holdOf(uint32_t id){
     static const float forced=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_CONSUMABLE_SIZE_CM",v,sizeof v);const float cm=n&&n<sizeof v?float(std::atof(v)):0.f;
         return std::isfinite(cm)&&cm>=3&&cm<=60?cm/100:0.f;}();
-    Hold h;if(const auto* c=evr::motion::consumableHand(id)){h.hold=evr::motion::ConsumableHold(c->hold);h.size=c->sizeMm/1000.f;h.along=c->alongLongest;h.skinned=c->skinned;}
+    Hold h;if(const auto* c=evr::motion::consumableHand(id)){h.hold=evr::motion::ConsumableHold(c->hold);h.size=c->sizeMm/1000.f;h.along=c->alongLongest;h.skinned=c->skinned;h.heaped=c->heaped;h.turn=normalized(Quat{c->turn[0],c->turn[1],c->turn[2],c->turn[3]});
+        const auto& b=c->turnedBounds;h.turnedLo={b[0],b[1],b[2]};h.turnedHi={b[3],b[4],b[5]};h.turnedKnown=h.turnedHi.x>h.turnedLo.x&&h.turnedHi.y>h.turnedLo.y&&h.turnedHi.z>h.turnedLo.z;}
     if(forced>0)h.size=forced;return h;
 }
 // The item in the hand: the consumable held from the wheel, else a throwable in the hand (no model of its own in the game;
@@ -101,6 +102,7 @@ inline uint32_t shownForTest(){
 inline uint32_t heldNow(){
     if(const auto shown=shownForTest())return shown;
     if(const auto c=controllerUiFixture::consumableHeld.load())return c;
+    if(const auto f=controllerUiFixture::foodInHand.load())return f;   // a food the game put in the hand (controller_ui_fixture.hpp)
     const auto t=controllerUiFixture::throwableHeld.load();const auto at=controllerUiFixture::throwAtMs.load();const auto now=GetTickCount64();
     return t&&!(at&&now>=at&&now-at<400)?t:0;
 }
@@ -109,9 +111,25 @@ inline uint32_t heldNow(){
 inline evr::motion::ConsumableMount place(const Hold& how,Pose gameGrip,Vec3 lo,Vec3 hi,bool& onPalm){
     if(how.hold==evr::motion::ConsumableHold::Tail){onPalm=false;motionHandVisual::rightCurl=.85f;   // the fist round the thin tail
         return evr::motion::mountByTail(gameGrip,lo,hi,how.size,-motionVisual::weaponPitchDegrees);}
-    const auto r=how.along?evr::motion::longestAlong(lo,hi,how.hold):Quat{0,0,0,1};Vec3 tlo,thi;evr::motion::turnedBounds(r,lo,hi,tlo,thi);
+    // turn (consumable_hand_catalog.hpp; 2026-10-24, user: "the mushroom is fitted the wrong way round", then "the grilled
+    // brown one is right - the other mushrooms that way too"): each single mushroom on its side, the cap toward the fingers.
+    auto r=how.along?evr::motion::longestAlong(lo,hi,how.hold):Quat{0,0,0,1};r=normalized(multiply(r,how.turn));
+    // The bounds as it lies turned: from its vertices where the catalog has them (mushroom_axes.py) - the corners of its box
+    // turned make a larger box when the turn is not a quarter one, the mushroom off the palm and smaller than its size.
+    Vec3 tlo,thi;evr::motion::turnedBounds(r,lo,hi,tlo,thi);
+    if(how.turnedKnown&&!how.along){tlo=how.turnedLo;thi=how.turnedHi;}
     Pose palmLocal;const bool palmKnown=motionHandVisual::palmInSocket(1,palmLocal);onPalm=how.hold==evr::motion::ConsumableHold::Palm&&palmKnown;
     auto mount=onPalm?evr::motion::mountOnPalm(compose(gameGrip,palmLocal),tlo,thi,how.size):evr::motion::mountConsumable(gameGrip,tlo,thi,how.size,-motionVisual::weaponPitchDegrees);
+    // A heap (nuts, popcorn, berries: consumable_hand_catalog.hpp heaped) lies toward the fingers, in the palm's hollow (2026-10-24,
+    // user: "too far toward the wrist - 5 cm more toward the fingers"; then "it sinks well into the palm - 1 cm out of the
+    // palm"); then "too far toward the thumb - 2 cm toward the little finger, its middle between the middle and the ring
+    // finger" (the mushrooms lie there too). The palm's +Z runs from the fingers to the wrist, its +Y out of the palm, and
+    // its +X toward the little finger (consumable_model.hpp palmFrame: x = -(index - little) for the right hand).
+    // EVR_CONSUMABLE_HEAP_FORWARD_CM / _UP_CM / _SIDE_CM=<0..10>: other distances (5, 1, 2).
+    static const auto heapCm=[](const char* name,float fallback){char v[16]{};const auto n=GetEnvironmentVariableA(name,v,sizeof v);const float cm=n&&n<sizeof v?float(std::atof(v)):fallback;
+        return std::isfinite(cm)&&cm>=0&&cm<=10?cm/100:fallback/100;};
+    static const float heapForward=heapCm("EVR_CONSUMABLE_HEAP_FORWARD_CM",5.f),heapUp=heapCm("EVR_CONSUMABLE_HEAP_UP_CM",1.f),heapSide=heapCm("EVR_CONSUMABLE_HEAP_SIDE_CM",2.f);
+    if(onPalm&&how.heaped)mount.pose.position=mount.pose.position+rotate(compose(gameGrip,palmLocal).orientation,Vec3{heapSide,heapUp,-heapForward});
     if(!onPalm){
         // A thick thing in the fist (Mock game-20261023-180416: the 26 cm potion's middle in the grip sank half into the hand):
         // it lies against the palm - its middle out from the grip (a weapon's handle, about 2 cm thick) by what it is thicker -

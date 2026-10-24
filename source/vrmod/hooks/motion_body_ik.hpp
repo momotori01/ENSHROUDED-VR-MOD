@@ -157,16 +157,47 @@ inline bool holdFish(uintptr_t s,uint32_t fish,const std::vector<hand::Joint>& a
             const float yaw=std::atan2(ahead.x,ahead.z);
             const Quat o=normalized(Quat{0,std::sin(yaw/2),0,std::cos(yaw/2)});
             const Vec3 gripScaled{grip.x*scale.x,grip.y*scale.y,grip.z*scale.z};
-            const auto origin=palm-rotate(o,gripScaled);
+            auto origin=palm-rotate(o,gripScaled);
+            // The catch's own joint (2026-10-24, user after the online run 20261024-012838: "a treasure was caught; in its net,
+            // shaped like a boot, it hung turned toward the body"): every vertex of the two catch models is on joint 3, and the
+            // game's catch animation may turn that joint (guess: the catch shown toward the player) - the hang above is the
+            // rest shape's. The joint's place now against its rest (the model's own pose: its local joints with the
+            // hierarchy's parents and rest) is D = G3 * inverse(R3) in the model's space; the model is put at H * inverse(D),
+            // H the hang above, so that the rest shape at joint 3 is what hangs. EVR_CATCH_JOINT=0: the root only, as before.
+            static const bool byJoint=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_CATCH_JOINT",v,sizeof v);return !(n==1&&v[0]=='0');}();
+            Quat rootQ=o;float jointTurnDeg=-1;Vec3 jointShift{};
+            if(byJoint)try{
+                const auto poseId=read<uint32_t>(object+layout::modelPose);
+                const auto record=poseId?handPoseMetadata::pose(s,poseId):0;const auto owner=record?read<uintptr_t>(record):0;
+                const auto hierarchy=owner?read<uintptr_t>(owner+layout::poseOwnerHierarchy):0;
+                const auto count=hierarchy?read<uint32_t>(hierarchy+48):0u;
+                if(count>3&&count<=16&&read<uint32_t>(record+12)==count){
+                    const auto parents=motionHandVisual::array<uint16_t>(hierarchy+24,count);
+                    const auto defaults=read<uint32_t>(hierarchy+64+4);
+                    auto rest=motionHandVisual::array<hand::Joint>(hierarchy+64,defaults);rest.resize(count);
+                    const auto first=read<uint32_t>(record+8);const auto data=read<uintptr_t>(s+layout::sceneJoints);const auto capacity=read<uint64_t>(s+layout::sceneJointCapacity);
+                    if(data&&capacity<=1000000&&uint64_t(first)+count<=capacity){
+                        const auto bytes=motionHandVisual::snapshot(data+size_t(first)*48,count*48);
+                        std::vector<hand::Joint> now(count);std::memcpy(now.data(),bytes.data(),bytes.size());
+                        const auto g=bodyik::globals(now,parents)[3],r=bodyik::globals(rest,parents)[3];
+                        const auto d=compose(g,inverse(r));
+                        if(finite(d.position)&&length(d.position)<2.f){
+                            rootQ=normalized(multiply(o,inverse(d.orientation)));
+                            origin=origin-rotate(rootQ,Vec3{d.position.x*scale.x,d.position.y*scale.y,d.position.z*scale.z});
+                            jointTurnDeg=2.f*std::acos(std::min(1.f,std::abs(normalized(d.orientation).w)))*57.29578f;jointShift=d.position;
+                        }
+                    }
+                }
+            }catch(const std::exception&){rootQ=o;origin=palm-rotate(o,gripScaled);jointTurnDeg=-2;}
             if(finite(origin)&&length(origin)<4.f){
                 WorldPositionQ32 q{modelPosition.x+int64_t(double(origin.x)*4294967296.),modelPosition.y+int64_t(double(origin.y)*4294967296.),modelPosition.z+int64_t(double(origin.z)*4294967296.)};
-                auto pose=m.pose;std::memcpy(pose.data(),&q,24);std::memcpy(pose.data()+24,&o,16);
+                auto pose=m.pose;std::memcpy(pose.data(),&q,24);std::memcpy(pose.data()+24,&rootQ,16);
                 auto handle=m.handle;std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&handle),1},poses{reinterpret_cast<uintptr_t>(pose.data()),1};
                 motionVisual::change(reinterpret_cast<void*>(s),ids.data(),poses.data());
                 {std::lock_guard<std::mutex> lock(attachmentObserver::followMutex);if(auto* f=attachmentObserver::fishModelOf(fish,false))f->written=pose;}
                 static unsigned hangLogs=0;if(hangLogs++<8||hangLogs%600==0)logFile->event("fishing_catch_hung","\"fish\":"+std::to_string(fish)+",\"character\":"+std::to_string(character)+
                     ",\"bounds_min\":["+std::to_string(lo.x)+","+std::to_string(lo.y)+","+std::to_string(lo.z)+"],\"bounds_max\":["+std::to_string(hi.x)+","+std::to_string(hi.y)+","+std::to_string(hi.z)+
-                    "],\"grip\":["+std::to_string(grip.x)+","+std::to_string(grip.y)+","+std::to_string(grip.z)+"],\"swum_m\":"+std::to_string(m.swimMetres)+",\"yaw_deg\":"+std::to_string(yaw*57.29578f)+",\"holds\":"+std::to_string(hangLogs));
+                    "],\"grip\":["+std::to_string(grip.x)+","+std::to_string(grip.y)+","+std::to_string(grip.z)+"],\"swum_m\":"+std::to_string(m.swimMetres)+",\"yaw_deg\":"+std::to_string(yaw*57.29578f)+",\"joint3_turn_deg\":"+std::to_string(jointTurnDeg)+",\"joint3_shift\":["+std::to_string(jointShift.x)+","+std::to_string(jointShift.y)+","+std::to_string(jointShift.z)+"],\"holds\":"+std::to_string(hangLogs));
                 return true;}
         }
     }catch(const std::exception&){}
@@ -306,6 +337,20 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
      if((before==0)!=(weight==0)&&logs++<200)logFile->event("motion_body_ik_jump_legs","\"frame\":"+std::to_string(liveFrame.frame)+",\"resting\":"+(weight>0?"true":"false")+
          ",\"gliding\":"+(gliding?"true":"false")+",\"jump_count\":"+std::to_string(inputActor::localJump::count.load())+",\"jump_type\":"+std::to_string(inputActor::localJump::type.load()));}
     if(leaning)bodyik::lean(animated,parents,leanQ);
+    // The dive's legs (include/evr/body_ik.hpp swimLegsFix): in the water, as the animation's feet rise above its hips (0.05 m:
+    // none, 0.3 m: all; the swim's own feet are 0.3..0.45 m below its hips, the dive's 0.6..0.8 m above - log 20261024-135531),
+    // the legs are turned behind and down; in over 0.15 s, out over 0.3 s. EVR_BODY_IK_DIVE_LEGS=0: the animation's legs as
+    // before; EVR_BODY_IK_DIVE_LEGS_DEG=<0..85>: how far below level behind (45).
+    {static const bool wanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_BODY_IK_DIVE_LEGS",v,sizeof v);return !(n==1&&v[0]=='0');}();
+     static const float downDeg=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_BODY_IK_DIVE_LEGS_DEG",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):45.f;return std::isfinite(f)?std::clamp(f,0.f,85.f):45.f;}();
+     static float weight=0;static uint64_t last=0;static unsigned logs=0;const auto now=GetTickCount64();
+     const float dt=last&&now>last?std::min(float(now-last)/1000.f,.1f):0.f;last=now;
+     float above=0,goal=0;
+     if(wanted&&targets.swim){above=bodyik::feetAboveHips(bodyik::globals(animated,parents));goal=std::clamp((above-.05f)/.25f,0.f,1.f);}
+     const float before=weight;weight=goal>weight?std::min(goal,weight+dt/.15f):std::max(goal,weight-dt/.3f);
+     targets.swimLegsFix=weight;targets.swimLegsDownDeg=downDeg;
+     if(((before==0)!=(weight==0)||(before<1)!=(weight<1))&&logs++<300){std::ostringstream o;o<<std::setprecision(4)<<"\"frame\":"<<liveFrame.frame<<",\"weight\":"<<weight
+         <<",\"feet_above_hips_m\":"<<above<<",\"model_lean_deg\":"<<leanRadians*57.29578f<<",\"down_deg\":"<<downDeg;logFile->event("motion_body_ik_dive_legs",o.str());}}
     bodyik::Report report;
     auto joints=bodyik::solve(animated,rig.neutral(),parents,targets,{},{},&report);
     const auto upright=joints; // in the solver's space, for the record below
@@ -409,7 +454,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t renderSerial){
             <<",\"shoulders\":["<<v(g[40].position)<<','<<v(g[70].position)<<"],\"elbows\":["<<v(g[42].position)<<','<<v(g[72].position)<<"],\"wrists\":["<<v(g[44].position)<<','<<v(g[74].position)
             <<"],\"sockets\":["<<v(g[64].position)<<','<<v(g[94].position)<<"],\"knees\":["<<v(g[3].position)<<','<<v(g[7].position)<<"],\"ankles\":["<<v(g[4].position)<<','<<v(g[8].position)
             <<"],\"animated_ankles\":["<<v(a[4].position)<<','<<v(a[8].position)<<"],\"torso\":"<<report.torso<<",\"hips_below_animated\":"<<report.hipsBelowAnimated
-            <<",\"swim\":"<<(targets.swim?"true":"false")<<",\"legs_rest\":"<<targets.legsRest<<",\"model_lean_deg\":"<<leanRadians*57.29578f<<",\"solved_upright\":"<<(leaning?"true":"false")
+            <<",\"swim\":"<<(targets.swim?"true":"false")<<",\"dive_legs\":"<<targets.swimLegsFix<<",\"legs_rest\":"<<targets.legsRest<<",\"model_lean_deg\":"<<leanRadians*57.29578f<<",\"solved_upright\":"<<(leaning?"true":"false")
             <<",\"socket_error\":["<<report.socketError[0]<<','<<report.socketError[1]<<"],\"arm_stretch\":["<<report.armStretch[0]<<','<<report.armStretch[1]
             <<"],\"leg_short\":["<<report.legShort[0]<<','<<report.legShort[1]<<"],\"native_pose_unchanged\":true";
         logFile->event("motion_body_ik_pose",o.str());

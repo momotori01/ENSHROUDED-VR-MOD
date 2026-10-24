@@ -21,10 +21,22 @@ constexpr uintptr_t rva=0x21f6f0,callerRva=0x21ed52;
 constexpr const char* pattern="48 8b c4 48 81 ec d8 00 00 00 f3 0f 10 25 ? ? ? ? 4c 8b d1 f3 0f 10";
 struct Scope{Scope(){callbacks.fetch_add(1);}~Scope(){callbacks.fetch_sub(1);}};
 inline void failure(const std::exception& e);
+// The bow flies where the hand aims while locked on too (2026-10-24, user after the headset: "while locked on, the bow flies to the
+// locked target - make it always fly where aimed; the wand and the staff do the same, and those are fine as they are"). Headset log
+// 20261024-151525: 24 bow shots, the tracked aim applied on all 11 without a lock (camera 7) and was never asked on the 13 locked
+// ones (camera 5) - no call of the crosshair placement (0x21f6f0, from 0x21ed52) at all. The spawn dispatch (0x21e810) takes the
+// placement by the ranged weapon's shallPlayerTurnTowardsTarget (+0xc4, inputRanged::rangedTurn): 0x21ed78 cmp [weapon+0xc4],0 ->
+// the crosshair (0x21f6f0) when clear, the locked target's (0x21f9c0) when set. For a bow's shot of the own player (or another
+// player's, whose mod sends its aim) the flag is cleared for the dispatch alone and put back right after it: the crosshair placement
+// runs, with the hand's aim (observe below). EVR_LOCKED_BOW_TO_HAND=0: the game's way (to the locked target).
+struct TargetFlagAside {uintptr_t at=0;uint8_t was=0;~TargetFlagAside(){if(at)*reinterpret_cast<volatile uint8_t*>(at)=was;}};
+inline void lockedBowAside(uintptr_t callerRva,const void* context,TargetFlagAside& aside) noexcept;
 __declspec(noinline) bool __fastcall dispatchObserve(void* out,void* nativeContext,const void* context,uint8_t mode,const void* event,const void* other){
  const Scope scope;const auto saved=parent;
  parent={reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress,context,event};parent.mode=mode;
- const bool result=dispatchOriginal(out,nativeContext,context,mode,event,other);
+ bool result=false;
+ {TargetFlagAside aside;lockedBowAside(parent.caller,context,aside);
+  result=dispatchOriginal(out,nativeContext,context,mode,event,other);}
  {const ObserverLastError preserve;if(parent.sample){try{
   const auto value=read<std::array<uint8_t,240>>(reinterpret_cast<uintptr_t>(out));
   const bool same=parent.crosshairOk&&!std::memcmp(value.data()+0x18,parent.transform.data(),52);
@@ -84,6 +96,22 @@ constexpr uintptr_t staffParentRva=0x224c68;
 constexpr float aimFocusLimit=3.f;
 // Other players' shots (observe below). EVR_REMOTE_SHOTS=0: as before (a guest's arrow went the tracked branch).
 inline const bool remoteShotsWanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_SHOTS",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline const bool lockedBowToHand=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_LOCKED_BOW_TO_HAND",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline std::atomic<unsigned> lockedBowShots{0};
+inline void lockedBowAside(uintptr_t callerRva,const void* context,TargetFlagAside& aside) noexcept {
+ if(!lockedBowToHand||!accepting.load()||callerRva!=spawnParentRva||!context)return;
+ try{
+  const auto c=reinterpret_cast<uintptr_t>(context);const auto weapon=read<uintptr_t>(c+0xb8);if(!weapon)return;
+  const auto flag=weapon+inputRanged::rangedTurn;const uint8_t was=read<uint8_t>(flag);if(!was)return;
+  const uint32_t item=read<uint32_t>(weapon+inputRanged::rangedItem);
+  if(!(item==327157552u||motion::catalogBowItem(item)))return;   // bows only: the wand and the staff keep the game's way
+  const bool own=inputRanged::bowIdentity(read<uintptr_t>(c+0x88),weapon).world!=0;
+  if(!(own?controllerUiFixture::bowTrackedAimRequested:remoteShotsWanted))return;
+  aside.at=flag;aside.was=was;*reinterpret_cast<volatile uint8_t*>(flag)=0;   // put back by aside's end, right after the dispatch
+  const auto n=++lockedBowShots;
+  try{if(n<=20||n%50==0)logFile->event("bow_locked_shot_to_hand","\"shots\":"+std::to_string(n)+",\"item\":"+std::to_string(item)+",\"own\":"+(own?"true":"false")+",\"target_flag\":"+std::to_string(unsigned(was)));}catch(...){}
+ }catch(...){}
+}
 // A host without VR (view_resource_probe.cpp onlineFlat, 2026-10-22): every shot is looked at for the other players' aims,
 // and the staff's casts too - the own ones keep the game's aim (no tracked hands).
 inline bool remoteAlways=false;
@@ -112,7 +140,10 @@ inline bool rangedAim(uint32_t nativeItem,const inputRanged::BowNativeIdentity& 
  twoHanded=false;
  const auto* weapon=motion::rangedAimModel(nativeItem);if(!weapon){reason="item";return false;}
  const auto now=GetTickCount64();uint32_t cachedItem=0;std::memcpy(&cachedItem,identity.bytes.data()+inputRanged::rangedItem,4);
- if(!identity.world||!identity.entity||!identity.milliseconds||now<identity.milliseconds||now-identity.milliseconds>100||cachedItem!=nativeItem||nativeState!=3){reason="native_identity";return false;}
+ // The game's shot state (3); a wand's shot the mod handed early (motion_event_selection_observer.hpp) comes before it, in the
+ // state the game had (as the bow's and the throw's early ones).
+ const bool early=now<=controllerUiFixture::rangedEarlySpawnUntil.load()&&nativeState==identity.bytes[0];
+ if(!identity.world||!identity.entity||!identity.milliseconds||now<identity.milliseconds||now-identity.milliseconds>100||cachedItem!=nativeItem||(nativeState!=3&&!early)){reason="native_identity";return false;}
  motion::HandFrame hands;motion::BowPhysicalGeometry g;uint32_t item=0;uint64_t received=0;bool both=false;
  {std::lock_guard<std::mutex> lock(controllerUiFixture::gestureMutex);hands=controllerUiFixture::gestureHands;g=controllerUiFixture::gestureRangedGeometry;item=controllerUiFixture::gestureRangedItem;received=controllerUiFixture::gestureRangedMs;both=controllerUiFixture::gestureRangedTwoHanded;}
  frame=hands.frame;const auto& right=hands.hands[1];
@@ -223,11 +254,15 @@ __declspec(noinline) bool __fastcall observe(void* output,void* nativeContext,co
       ",\"effective_camera_bytes\":"+jsonString(nativeImpactComponents::asHex(effectiveCamera))+
       ",\"original_input_bytes\":"+jsonString(nativeImpactComponents::asHex(sourceInput))+
       ",\"private_input_bytes\":"+jsonString(nativeImpactComponents::asHex(privateInput)));
-    }else if(controllerUiFixture::rangedAimRequested&&evt[0x148]==1&&motion::rangedAimModel(nativeItem)){
+    }else if(controllerUiFixture::rangedAimRequested&&motion::rangedAimModel(nativeItem)&&(evt[0x148]==1||motion::rangedAimModel(nativeItem)->type!=6)){
      // Wand: same spawn event as the bow. No token: the pointer ray of the moment the game spawns the shot.
+     // A staff's cast comes this way in 1.0 too, without the projectile flag (headset run 20261024-151525: its spawn by this
+     // parent, isProjectile 0; the staff's own parent 0x224c68 never came) - "the spells do not fly to the white dot" (user,
+     // 2026-10-24): it takes the hand's aim as well, its event read as the staff's (bowAimCamera without the flag).
      motion::BowWorldAim aim;uint64_t aimFrame=0;const char* reason="";bool bothHands=false;
-     if(rangedAim(nativeItem,identity,nativeWeapon[0],camera,aim,aimFrame,reason,bothHands)){
-      effectiveCamera=motion::bowAimCamera(aim,evt);
+     bool usable=rangedAim(nativeItem,identity,nativeWeapon[0],camera,aim,aimFrame,reason,bothHands);
+     if(usable)try{effectiveCamera=motion::bowAimCamera(aim,evt,evt[0x148]==1);}catch(const std::exception&){usable=false;reason="event";}
+     if(usable){
       sourceInput=read<decltype(sourceInput)>(input);privateInput=sourceInput;privateContext=ctx;
       std::memcpy(privateInput.data()+0x28,effectiveCamera.data(),44);
       const auto pointer=reinterpret_cast<uintptr_t>(privateInput.data());std::memcpy(privateContext.data()+0x88,&pointer,8);

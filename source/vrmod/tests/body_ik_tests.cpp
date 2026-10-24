@@ -175,7 +175,33 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(near(globals(close,parents)[1].position,within,1e-5f)&&near(gc[1].position,within,1e-4f)&&std::abs(c.torso-.9f)<1e-3f);
   // On land the same animation is solved the standing way: upright hips, legs solved.
   Targets land=atRest;const auto solved=solve(swim,rest,parents,land,k,s);const auto gl=globals(solved,parents);
-  ck(std::abs(gl[1].position.x-G[1].position.x)<1e-4f&&std::abs(gl[1].position.z-G[1].position.z)<1e-4f&&angle(gl[1].orientation,R[1].orientation)<.05f&&angle(solved[2].orientation,swim[2].orientation)>1);}
+  ck(std::abs(gl[1].position.x-G[1].position.x)<1e-4f&&std::abs(gl[1].position.z-G[1].position.z)<1e-4f&&angle(gl[1].orientation,R[1].orientation)<.05f&&angle(solved[2].orientation,swim[2].orientation)>1);
+  // The swim's own feet are below its hips: no dive legs from them (2026-10-24).
+  ck(feetAboveHips(W)<0);
+  // The dive (2026-10-24, user: "the feet come beside the face"): the animation head down, its legs above its hips. With the
+  // animation's legs they reach above the hips under the upright chest; swimLegsFix 1 turns the pelvis so that the legs point
+  // behind and 45 degrees down, keeping their length and bend; a half weight lies between; head, chest and arms stay.
+  auto dive=rest;dive[1].orientation=normalized(multiply(pitchDown(170),rest[1].orientation));dive[1].position={0,.55f,.1f};
+  const auto D=globals(dive,parents);ck(feetAboveHips(D)>.5f);
+  Targets dt=atRest;dt.swim=true;const auto plain=globals(solve(dive,rest,parents,dt,k,s),parents);
+  const auto mid=[](const std::vector<Pose>& g){return (g[4].position+g[8].position)*.5f;};
+  ck(mid(plain).y>plain[1].position.y+.5f);
+  dt.swimLegsFix=1;dt.swimLegsDownDeg=45;const auto fixed=globals(solve(dive,rest,parents,dt,k,s),parents);
+  const Vec3 behindDown{0,-std::sqrt(.5f),-std::sqrt(.5f)};
+  ck(dot(unit(mid(fixed)-fixed[1].position,{}),behindDown)>.999f&&std::abs(length(mid(fixed)-fixed[1].position)-length(mid(plain)-plain[1].position))<1e-4f);
+  for(auto j:{2,3,4,6,7,8})ck(near(dive[size_t(j)].position,solve(dive,rest,parents,dt,k,s)[size_t(j)].position,0));   // the legs' own bend is the animation's
+  for(auto j:{15,16,17,40,70,42,72,44,74,64,94})ck(near(fixed[size_t(j)].position,plain[size_t(j)].position,1e-5f));
+  ck(near(fixed[1].position,plain[1].position,1e-5f));
+  dt.swimLegsFix=.5f;const auto half=globals(solve(dive,rest,parents,dt,k,s),parents);
+  const auto up=unit(mid(plain)-plain[1].position,{}),h=unit(mid(half)-half[1].position,{});
+  ck(dot(h,behindDown)>dot(up,behindDown)+.2f&&dot(h,behindDown)<.99f);
+  // The heading turns it: looking along +X (the model's), behind is -X.
+  {const auto q=turnY(90);Targets tv{{q,rotate(q,eye)},{Pose{multiply(q,R[64].orientation),rotate(q,R[64].position)},Pose{multiply(q,R[94].orientation),rotate(q,R[94].position)}}};
+   tv.swim=true;tv.swimLegsFix=1;const auto gq=globals(solve(dive,rest,parents,tv,k,s),parents);
+   ck(dot(unit(mid(gq)-gq[1].position,{}),rotate(q,behindDown))>.999f);}
+  // Another player's body takes the pelvis given (the owner's, with its turn already): the weight does nothing there.
+  {Targets other=dt;other.swimLegsFix=1;other.hipsGiven=true;Report rr;solve(dive,rest,parents,dt,k,s,&rr);other.hips=rr.hips;
+   const auto seen=globals(solve(dive,rest,parents,other,k,s),parents);ck(near(seen[4].position,half[4].position,3e-4f));}}
 
  // Another player's body: head, hands and the pelvis its owner's solve gave. The same animation gives the same body
  // again, on land and in the water; another animation (the walk cycle is at another place) changes the legs only.

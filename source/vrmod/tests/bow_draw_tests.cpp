@@ -58,6 +58,12 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  f.hands[1].grab=false;p=step(0,.35f);ck(t.phase()==BowDraw::Released&&t.strongRelease()&&!p.rightTrigger);
  reset();step(0,0);step(1,0);step(1,.35f,500);p=step(0,.35f);ck(t.phase()==BowDraw::Released&&!t.strongRelease()&&p.rightTrigger==255&&p.leftTrigger==255);
  {reset();BowDrawSettings off;off.strongByGrip=false;t=BowDraw{off};f.hands[1].grabActive=f.hands[1].grab=true;step(0,0);p=step(0,0);ck(t.phase()==BowDraw::Idle&&!p.rightTrigger&&!p.leftTrigger);}
+ // The mod's bow: the grip draws as the trigger does (LT, a normal shot), and it brings the game's bow on the way too.
+ reset();t.gripAsTrigger(true);step(0,0);f.hands[1].grabActive=f.hands[1].grab=true;
+ p=at(0,BowPhysicalTrial::restString+Vec3{.4f,0,0});ck(t.phase()==BowDraw::Idle&&p.leftTrigger==255&&!p.rightTrigger);
+ p=step(0,0);ck(t.phase()==BowDraw::Held&&!t.strongDraw()&&p.leftTrigger==255&&!p.rightTrigger);
+ p=step(0,.35f,500);ck(p.leftTrigger==255&&!p.rightTrigger);
+ f.hands[1].grab=false;p=step(0,.35f);ck(t.phase()==BowDraw::Released&&!t.strongRelease()&&p.rightTrigger==255&&p.leftTrigger==255);
  // Off the model axis the pull is still the handle-to-hand distance behind the string,
  // so a bow hand held at an angle neither shortens the draw nor cancels the release.
  {const Vec3 off{.3f,BowPhysicalTrial::restString.y,.5f};const float expected=std::sqrt(.34f)-BowPhysicalTrial::restString.z;

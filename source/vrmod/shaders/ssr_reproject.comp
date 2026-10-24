@@ -1,0 +1,70 @@
+#version 450
+// The water's screen-space reflections shared between the eyes (layer/gi_reproject.hpp ssr*, 2026-10-24; the user: the far
+// water reflects other things in each eye - "the right eye shows the sky where the trees should be"; headset capture
+// game-20261024-120935: the eyes' water had the same places, heights and normals, but each eye's reflection trace hits
+// only what is on its own screen, and the eyes' screens differ - one pond 75 % hits in the left eye, 89 % in the right).
+// Recorded just after the game's resolve of the reflections (shader 7a45c485, set 0 binding 0 its view constants, set 1
+// binding 5 the half-width depth, binding 8 the result: rgba16f, 667 x 1432 on the headset).
+// mode 0 (the first eye): its result and depth are kept in the layer's images, its screen-to-world matrix in a buffer.
+// mode 1 (the second eye): every pixel of its result (where its trace ran) takes the first eye's result at the same point
+// of the world, when the first eye saw that point (its depth agrees) and had a result there; otherwise it keeps its own.
+// The view constants' first four rows M map (ndc.x, ndc.y, depth, 1) to the world (homogeneous; ndc.y up, the picture's
+// rows down). M's third column is m * (camera, 1) (m about 100) and its last row (0, 0, m, e), so the point relative to the
+// camera is (b0 * nx + b1 * ny + t - e * camera) / (m * depth + e) - small numbers only (b0, b1, t: M's columns 0, 1, 3).
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(constant_id=0) const uint mode=0u;
+layout(set=0,binding=0) uniform View {vec4 rows[4];} view;
+layout(set=0,binding=1) uniform texture2D depthImage;
+layout(set=0,binding=2) uniform sampler nearestSampler;
+layout(set=0,binding=3,rgba16f) uniform image2D result;
+layout(set=0,binding=4,rgba16f) uniform image2D keptResult;
+layout(set=0,binding=5,r32f) uniform image2D keptDepth;
+layout(set=0,binding=6,std430) buffer Kept {vec4 rows[4];} kept;
+
+struct Camera {vec3 b0,b1,k,position;float m,e;};
+Camera cameraOf(vec4 r0,vec4 r1,vec4 r2,vec4 r3){
+    Camera c;c.b0=vec3(r0.x,r1.x,r2.x);c.b1=vec3(r0.y,r1.y,r2.y);c.m=r3.z;c.e=r3.w;
+    c.position=vec3(r0.z,r1.z,r2.z)/c.m;
+    c.k=vec3(r0.w,r1.w,r2.w)-c.e*c.position;
+    return c;
+}
+// the point of a pixel centre (uv in 0..1, rows down) at a depth, relative to the camera
+vec3 relative(Camera c,vec2 uv,float depth){
+    const vec2 ndc=vec2(uv.x*2.0-1.0,(1.0-uv.y)*2.0-1.0);
+    return (c.b0*ndc.x+c.b1*ndc.y+c.k)/(c.m*depth+c.e);
+}
+void main(){
+    const ivec2 size=imageSize(result);const ivec2 p=ivec2(gl_GlobalInvocationID.xy);
+    if(mode==0u){
+        if(p==ivec2(0))for(int i=0;i<4;i++)kept.rows[i]=view.rows[i];
+        if(any(greaterThanEqual(p,size)))return;
+        imageStore(keptResult,p,imageLoad(result,p));
+        imageStore(keptDepth,p,vec4(texelFetch(sampler2D(depthImage,nearestSampler),p,0).x));
+        return;
+    }
+    if(any(greaterThanEqual(p,size))||any(greaterThanEqual(p,imageSize(keptResult))))return;
+    const vec4 own=imageLoad(result,p);
+    if(all(equal(own,vec4(0.0))))return;   // no water here: the trace did not run
+    const Camera second=cameraOf(view.rows[0],view.rows[1],view.rows[2],view.rows[3]);
+    const Camera first=cameraOf(kept.rows[0],kept.rows[1],kept.rows[2],kept.rows[3]);
+    const float depth=texelFetch(sampler2D(depthImage,nearestSampler),p,0).x;
+    if(depth<=0.0)return;
+    const vec2 uv=(vec2(p)+0.5)/vec2(size);
+    const vec3 r=relative(second,uv,depth)+(second.position-first.position);   // the point, relative to the first eye
+    const float distance=length(r);if(distance<=0.0)return;
+    // the first eye's (nx, ny, W |r|) from b0 nx + b1 ny - W |r| (r / |r|) = -k (W: that eye's m depth + e)
+    const mat3 a=mat3(first.b0,first.b1,-r/distance);
+    if(abs(determinant(a))<1e-8)return;
+    const vec3 s=inverse(a)*(-first.k);
+    if(s.z<=0.0)return;
+    const vec2 uvFirst=vec2(s.x*0.5+0.5,1.0-(s.y*0.5+0.5));
+    if(any(lessThan(uvFirst,vec2(0.0)))||any(greaterThanEqual(uvFirst,vec2(1.0))))return;
+    const ivec2 q=min(ivec2(uvFirst*vec2(size)),size-1);
+    const float depthFirst=imageLoad(keptDepth,q).x;
+    if(depthFirst<=0.0)return;
+    const vec3 seen=relative(first,(vec2(q)+0.5)/vec2(size),depthFirst);
+    if(length(seen-r)>0.02*distance+0.05)return;   // the first eye saw something else there
+    const vec4 taken=imageLoad(keptResult,q);
+    if(all(equal(taken,vec4(0.0))))return;   // the first eye had no reflection there
+    imageStore(result,p,taken);
+}

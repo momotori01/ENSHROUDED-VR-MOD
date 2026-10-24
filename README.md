@@ -88,12 +88,13 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 
 ### Weapons and tools
 - **Holsters:** left shoulder + left grip = bow, right shoulder + right grip = your current weapon, left hip + left grip = shield. A short vibration tells you it switched.
+- **Bow from the shoulder:** if your equipped bow is not on the action bar, the mod puts it in your left hand. The game only takes it out while you draw the string, so you walk at full speed, and drawing in the air still uses the bow's air skills. Put it away at the left shoulder again to get your weapon back.
 - **Quick slots:** hold right B, point your hand at the slot you want and let go.
 - **Tools** (pickaxe, axe, ...): swing them like weapons. You aim with your right hand's direction.
 
 ### Food, potions and other items
 - Choosing a consumable on the quick slots puts it in your right hand (a short vibration) instead of using it at once. Bring it to your mouth or pull the right trigger to use it.
-- Each item is held the way it would be in life: bottles, cups and bombs in the closed hand, plates, bowls and handfuls (berries, nuts, popcorn) on the open palm, a whole fish by its tail.
+- Each item is held the way it would be in life: bottles, cups and bombs in the closed hand, plates, bowls and handfuls (berries, nuts, popcorn, mushrooms) on the open palm, a whole fish by its tail.
 - Other players with the mod see the item in your hand.
 
 ### Fishing
@@ -123,8 +124,11 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 
 ### Menus
 - The title screen and the menus appear on a panel in front of you. Point at it with the controller and pull the trigger to click.
-- Hold a hand against your temple: the right stick becomes the D-pad, pressing the right stick opens the menu, pressing the left stick goes back.
+- With the pointer on a menu, right A is the game's A on what is selected (pull the trigger to select something first): craft, unlock a skill, fast travel from a picked map location, and so on. In the backpack, right A works on the slot you point at.
+- Hold a hand against your temple until the controller buzzes briefly, then press: the right stick becomes the D-pad, pressing the right stick opens the inventory, pressing the left stick opens the start menu. A stick already pressed before the buzz does not count.
 - **Building:** with the building hammer, hold left B to choose what to build (choose with the right stick, let go to confirm).
+- **Left trigger with tools:** with the building hammer the left trigger enters building mode; with the summoning staff it enters summoning.
+- **Camera:** every game camera stays first person in VR (talking to NPCs, altars and the like).
 
 ### More
 - **Reset the view:** look at both palms in front of your face for 3 seconds (the headset's own reset works too).

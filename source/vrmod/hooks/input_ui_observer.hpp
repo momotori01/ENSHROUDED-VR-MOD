@@ -11,6 +11,7 @@
 // +0x5f8 (all from the new build's disassembly of the same code; tools/match_functions.py --disp).
 #include "input_gamepad_probe.hpp"
 #include "controller_ui_fixture.hpp"
+#include "ui_memory_scan.hpp"
 extern "C" void evr_input_ui_stub();
 namespace inputUi {
 using Set=void(__fastcall*)(void*,uint8_t);
@@ -89,9 +90,28 @@ inline void gate(void* sub,uint8_t value,void* frontend,uintptr_t returnAddress)
                 const auto values=read<std::array<uint8_t,3>>(controller+screenOffset);
                 const auto ui=read<uintptr_t>(owner+uiOffset),device=read<uintptr_t>(owner+deviceOffset),localDevice=read<uintptr_t>(controller+localDeviceOffset);
                 if(ui){s.uiMode=read<uint8_t>(ui+9);s.uiBytes=read<std::array<uint8_t,16>>(ui);}
+                // an item menu open in the backpack (hooks/menu_pointer.hpp aPad 3): frontend+0x33a57, 0 with the menu and 7 without (Mock
+                // 2026-10-24 -054815, -094956). ui+0x2d2c73 (1 with the menu in the Mock) never rose on the headset (log 20261024-091911).
+                if(menuPointer::aPad==3){const auto mark=read<uint8_t>(owner+0x33a57);menuPointer::itemMenuMark=mark;menuPointer::itemMenuOpen=mark==0;
+                    // what it reads on the chests and the backpack (2026-10-24: 0 on the start menu too, Mock -133659; a chest's not known)
+                    static uint8_t lastMark=255,lastScreen=255;static unsigned markLines=0;const uint8_t screenNow=values[0];
+                    if((screenNow==4||screenNow==21||screenNow==22)&&(mark!=lastMark||screenNow!=lastScreen)&&markLines<300){++markLines;
+                        logFile->event("item_menu_mark","\"screen\":"+std::to_string(unsigned(screenNow))+",\"mark\":"+std::to_string(unsigned(mark))+",\"tab\":"+std::to_string(unsigned(read<uint8_t>(owner+0x325a0))));}
+                    lastMark=mark;lastScreen=screenNow;}
+                // the menu's tab (frontend+0x325a0: 1 world map, 2 journal, 3 craft, 4 backpack; tab_diff over 7 copies, Mock -060907)
+                menuPointer::menuTab=menuPointer::aPad==3?read<uint8_t>(owner+0x325a0):uint8_t(255);
                 if(device)s.deviceBytes=read<std::array<uint8_t,16>>(device);
                 if(localDevice)s.localBytes=read<std::array<uint8_t,16>>(localDevice);
                 if(device)s.deviceMode=read<uint8_t>(device);
+                // diagnostic (2026-10-24): EVR_UI_SELECT_LOG=1 - the backpack's pad choice (frontend+0x325d8) at each change, with the
+                // menu pointer's posted moves and buttons (does a button's down move it?)
+                {static const bool selectLog=[]{char v[4]{};return GetEnvironmentVariableA("EVR_UI_SELECT_LOG",v,sizeof v)==1&&v[0]=='1';}();
+                 if(selectLog){static uint32_t lastSlot=0xffffffffu;static uint64_t lastClicks=0;static uint16_t lastPop=0xffff;const auto slot=read<uint32_t>(owner+0x325d8);const auto clicks=menuPointer::clicks.load();
+                  const uint16_t pop=uint16_t((ui?read<uint8_t>(ui+0x2d2c73):0xf)|(read<uint8_t>(owner+0x33a57)<<8));   // candidates: an item menu open (ui+0x2d2c73: 1 open / 0 closed in Mock, never 1 on the headset; frontend+0x33a57: 0 open / 7 closed, Mock 054815)
+                  if(slot!=lastSlot||clicks!=lastClicks||pop!=lastPop){lastSlot=slot;lastClicks=clicks;lastPop=pop;try{logFile->event("ui_select","\"slot\":"+std::to_string(slot)+",\"popup_bytes\":"+std::to_string(pop)+",\"tab\":"+std::to_string(unsigned(menuPointer::menuTab.load()))+",\"device_mode\":"+std::to_string(s.deviceMode)+
+                      ",\"moves\":"+std::to_string(menuPointer::moves.load())+",\"clicks\":"+std::to_string(clicks)+",\"sample\":"+std::to_string(s.number));}catch(...){}}}}
+                // The right A as the pad's A (hooks/menu_pointer.hpp aPad, test): the game in its pad mode for the button's up and the pad's A
+                if(device&&menuPointer::forcePad.load()&&menuPointer::installed&&s.deviceMode!=1){*reinterpret_cast<volatile uint8_t*>(device)=1;s.deviceMode=1;}
                 // A pull of the menu pointer: the game's mouse mode before its button (hooks/menu_pointer.hpp wantMouse) -
                 // the device mode and the local one, both 0 as the game's own first click leaves them.
                 if(device&&s.deviceMode!=0&&menuPointer::wantMouse.load()&&menuPointer::installed){
@@ -107,6 +127,7 @@ inline void gate(void* sub,uint8_t value,void* frontend,uintptr_t returnAddress)
                         const auto n=++menuPointer::padKept;if(n<=5||n%300==0)try{logFile->event("menu_pointer_pad_kept","\"count\":"+std::to_string(n)+",\"since_post_ms\":"+std::to_string(now-posted));}catch(...){}}
                 }
                 if(localDevice)s.localMode=read<uint8_t>(localDevice);
+                uiScan::maybe(owner,state,controller,ui,device,localDevice);   // diagnostic, EVR_UI_SCAN_FRAMES
                 s.screen=values[0];s.secondary=values[1];s.auxiliary=values[2];s.readable=true;
                 s.stable=values==read<std::array<uint8_t,3>>(controller+screenOffset)&&
                     s.world==read<uintptr_t>(controller+worldOffset)&&controller==read<uintptr_t>(state+controllerOffset)&&
@@ -146,6 +167,7 @@ inline void verify(){
     if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+rva),reinterpret_cast<void*>(&evr_input_ui_stub),reinterpret_cast<void**>(&original))!=MH_OK||
        MH_EnableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("frontend input observer hook failed");
     enabled=true;accepting=true;
+    uiScan::install();
     logFile->event("input_ui_observer_enabled","\"rva\":"+hex(rva)+",\"caller\":\"0x84741f\",\"setter\":true,\"screen_offset\":"+std::to_string(screenOffset)+",\"auxiliary_offset\":"+std::to_string(screenOffset+2)+",\"read_only\":true");
 }
 inline void observe(unsigned sample,uint32_t entity,uint32_t tick,uintptr_t senderContext){

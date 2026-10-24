@@ -7,6 +7,10 @@ inline bool catalogShields=false;inline unsigned retired=0;
 inline uint32_t handle=0,sourceHandle=0,item=0;inline uintptr_t resource=0,scene=0;
 inline uint64_t serial=0,frame=0,updates=0;inline DWORD thread=0;
 inline std::array<uint64_t,2> payloadSerial{};
+// Put aside while the mod's bow is in the left hand (motion_mod_bow_visual.hpp; the game puts the shield away while its
+// own bow is out): the game's shield is kept out of the eyes (head_visibility_bridge.hpp) and no copy is shown.
+inline uint32_t stowedSource=0;inline uint64_t stowedSerial=0,stowedFrame=0;
+inline bool stowed(uint64_t s){return stowedSource&&stowedSerial==s&&stowedFrame==liveFrame.frame;}
 inline void prepare(const game::StableAnchor& anchor,uint64_t currentSerial){
     if(!requested)return;ready=false;
     if(!motionVisual::contextReady||motionVisual::contextSerial!=currentSerial||motionVisual::contextFrame!=liveFrame.frame||
@@ -15,6 +19,7 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t currentSerial){
     const auto current=attachmentObserver::shieldAppearance(root.entity,motionVisual::scene,motionVisual::view,root.world,GetTickCount64());
     if(!current.entity||!(motion::reviewedShieldMount(current.item,current.modelGuid,current.slot)||(catalogShields&&motion::catalogShieldMount(current.item,current.modelGuid,current.slot))))return;
     const auto source=motionVisual::currentObject(current.handle);if(!source)return;
+    if(controllerUiFixture::modBowItem.load()){stowedSource=current.handle;stowedSerial=currentSerial;stowedFrame=liveFrame.frame;return;}
     const auto res=read<uintptr_t>(source+layout::modelResource);
     if(!res||read<uint8_t>(res+0x14)!=1||read<uint16_t>(res+layout::resourceModel)!=current.model||read<std::array<uint32_t,4>>(res+24)!=current.modelGuid||
        !read<uint32_t>(source+layout::modelMask)||read<uint32_t>(source+layout::modelPose))return;

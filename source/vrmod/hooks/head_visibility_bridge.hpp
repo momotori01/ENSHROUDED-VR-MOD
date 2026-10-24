@@ -82,7 +82,7 @@ inline void onCopy(uintptr_t rsp) noexcept {
                 throw std::runtime_error("head and body share a model handle");
             indices.push_back(index);
         }
-        head::Payload payload{};uint32_t hand=UINT32_MAX,extra=UINT32_MAX,shield=UINT32_MAX,handMask=0;bool arrowShown=false,offhandShown=false,consumableShown=false;
+        head::Payload payload{};uint32_t hand=UINT32_MAX,extra=UINT32_MAX,shield=UINT32_MAX,handMask=0;bool arrowShown=false,offhandShown=false,consumableShown=false,modBowShown=false;
         // Gloves: where the equipment covers a body part the game does not draw that part - the part's model has
         // the mask 0 (run game-20261013-084345: the parts with mask 0 are exactly the bits of the equipment's hide
         // mask 0x407fda at +300 - hair, beard, neck, chest .. feet, the hands among them - and the parts that are
@@ -137,6 +137,19 @@ inline void onCopy(uintptr_t rsp) noexcept {
             if(!handle||hand>=cpuCount||hand>=objectBytes/0x1b0||hand>=generationCount||read<uint8_t>(generations+hand)!=(handle>>24))throw std::runtime_error("local hand ownership/generation unavailable");
             const auto object=objects+uintptr_t(hand)*0x1b0,resource=read<uintptr_t>(object+layout::modelResource);handMask=read<uint32_t>(object+layout::modelMask);
             if(!resource||s.ready[11]!=1||read<uint8_t>(resource+0x14)!=1||read<uint16_t>(resource+layout::resourceModel)!=s.models[11]||handMask!=s.masks[11])throw std::runtime_error("local hand resource changed");
+            }
+            // The mod's bow (motion_mod_bow_visual.hpp) takes the hand item's private slot: the game's hand is bare meanwhile.
+            if(hand==UINT32_MAX&&motionModBow::shown(pair.serial)){
+                const auto model=motionVisual::object(motionModBow::handle);const auto index=motionModBow::handle&0xffffff;
+                if(read<uintptr_t>(model+layout::modelResource)!=motionModBow::resource||read<uint32_t>(model+layout::modelMask)||read<uint32_t>(model+layout::modelSdf))
+                    throw std::runtime_error("private mod bow culling invariant differs");
+                if(index<cpuCount){hand=index;modBowShown=true;}
+            }
+            // ... and the game's shield is out of the eyes meanwhile (motion_shield_visual.hpp stowed).
+            if(motionShieldVisual::requested&&motionShieldVisual::stowed(pair.serial)){
+                const auto sourceIndex=motionShieldVisual::stowedSource&0xffffff;
+                if(motionVisual::currentObject(motionShieldVisual::stowedSource)&&sourceIndex<cpuCount&&indices.size()<body::maximumModels-1&&
+                   std::find(indices.begin(),indices.end(),sourceIndex)==indices.end())indices.push_back(sourceIndex);
             }
             // The consumable held in the right hand (motion_consumable_visual.hpp) takes the weapon's private slot - the hand
             // item is put away while one is held - or the third one while the weapon is still in the hand.
@@ -221,6 +234,10 @@ inline void onCopy(uintptr_t rsp) noexcept {
         if(consumableShown&&motionConsumableVisual::payloadSerial[eye]!=pair.serial){
             motionConsumableVisual::payloadSerial[eye]=pair.serial;
             static unsigned told=0;if(told++<12)logFile->event("consumable_model_eye_payload",out.str()+",\"frame\":"+std::to_string(liveFrame.frame)+",\"consumable_instance\":"+std::to_string(motionConsumableVisual::handle&0xffffff));
+        }
+        if(modBowShown&&motionModBow::payloadSerial[eye]!=pair.serial){
+            motionModBow::payloadSerial[eye]=pair.serial;
+            static unsigned told=0;if(told++<12)logFile->event("mod_bow_eye_payload",out.str()+",\"frame\":"+std::to_string(liveFrame.frame)+",\"bow_instance\":"+std::to_string(motionModBow::handle&0xffffff));
         }
         if(offhandShown&&motionOffhandVisual::payloadSerial[eye]!=pair.serial){
             motionOffhandVisual::payloadSerial[eye]=pair.serial;

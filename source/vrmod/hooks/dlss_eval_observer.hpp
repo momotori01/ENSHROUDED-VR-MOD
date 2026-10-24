@@ -91,6 +91,15 @@ inline uintptr_t fixMotion(void* command,uintptr_t p){
         ",\"frame\":"+std::to_string(liveFrame.frame)+",\"motion_format\":"+std::to_string(read<uint32_t>(motion+0x24))+",\"failures\":"+std::to_string(motionFailures.load()));
     return motion;
 }
+// The water's left/right difference of the main mode (2026-10-24; the right eye's far water reflects a brighter sky; gone after
+// a fast travel). Everything checked feeds both eyes' DLSS alike (colour, motion and the reactive mask at the 10-20 spot, jitter,
+// no reset, the same pre-exposure and exposure scale: Mock game-20261024-101422), so either the right eye's DLSS history holds
+// it or the picture before DLSS differs where no capture looked. EVR_DLSS_RESET_RIGHT=<seconds> (diagnostic, for the headset):
+// every so many seconds the right eye's evaluation (its feature handle, rightFeature, view_resource_probe.cpp) is made with
+// reset set (+0x38) for that call only - the right eye loses its history for a frame (a visible pop). If the difference goes
+// with each pop and grows back, the history carries it; if it stays, the picture before DLSS does.
+inline const double resetRightEvery=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_DLSS_RESET_RIGHT",v,sizeof v);const double s=n&&n<sizeof v?std::strtod(v,nullptr):0;return std::isfinite(s)&&s>=0.2&&s<=600?s:0.0;}();
+inline std::atomic<uintptr_t> rightFeature{0};inline std::atomic<uint64_t> rightResets{0};inline uint64_t lastRightReset=0;
 struct CallbackScope {CallbackScope(){++callbacks;}~CallbackScope(){--callbacks;}};
 inline std::string resource(uintptr_t r){
     if(!r)return "null";
@@ -110,7 +119,11 @@ __declspec(noinline) int __fastcall evaluate(void* command,void* handle,void* pa
                 <<",\"color\":"<<resource(read<uintptr_t>(p))<<",\"output\":"<<resource(read<uintptr_t>(p+8))
                 <<",\"depth\":"<<resource(read<uintptr_t>(p+0x18))<<",\"motion\":"<<resource(read<uintptr_t>(p+0x20))
                 <<",\"jitter\":["<<read<float>(p+0x28)<<','<<read<float>(p+0x2c)<<"],\"subrect\":["<<read<uint32_t>(p+0x30)<<','<<read<uint32_t>(p+0x34)
-                <<"],\"reset\":"<<read<int32_t>(p+0x38)<<",\"mv_scale\":["<<read<float>(p+0x3c)<<','<<read<float>(p+0x40)<<']';
+                <<"],\"reset\":"<<read<int32_t>(p+0x38)<<",\"mv_scale\":["<<read<float>(p+0x3c)<<','<<read<float>(p+0x40)<<']'
+                // 2026-10-24 (the water's left/right difference: each eye's own exposure in the upscaler?): the transparency mask +0x48,
+                // the exposure texture +0x50, the bias mask +0x58, the pre-exposure +0x90 and the exposure scale +0x94 (NGX SDK layout)
+                <<",\"transparency\":"<<resource(read<uintptr_t>(p+0x48))<<",\"exposure\":"<<resource(read<uintptr_t>(p+0x50))<<",\"bias\":"<<resource(read<uintptr_t>(p+0x58))
+                <<",\"pre_exposure\":"<<read<float>(p+0x90)<<",\"exposure_scale\":"<<read<float>(p+0x94);
             fields=o.str();
         }catch(...){++failures;}
     }
@@ -153,7 +166,16 @@ __declspec(noinline) int __fastcall evaluate(void* command,void* handle,void* pa
     // evaluation reads the layer's corrected copy.
     uintptr_t savedMotion=0;
     if(motionFix&&from==caller&&(liveFrame.eyeMask==1||liveFrame.eyeMask==2))try{savedMotion=fixMotion(command,reinterpret_cast<uintptr_t>(eval));}catch(...){savedMotion=0;++motionFailures;}
+    int32_t savedReset=0;bool resetSet=false;
+    if(resetRightEvery>0&&from==caller&&handle&&reinterpret_cast<uintptr_t>(handle)==rightFeature.load()&&liveFrame.eyeMask==3)try{
+        const auto now=GetTickCount64();
+        if(!lastRightReset)lastRightReset=now;
+        else if(now-lastRightReset>=uint64_t(resetRightEvery*1000)){lastRightReset=now;const auto p=reinterpret_cast<uintptr_t>(eval);savedReset=read<int32_t>(p+0x38);
+            *reinterpret_cast<int32_t*>(p+0x38)=1;resetSet=true;const auto n=++rightResets;
+            if(n<=3||n%100==0)logFile->event("dlss_right_reset","\"count\":"+std::to_string(n)+",\"frame\":"+std::to_string(liveFrame.frame)+",\"every_s\":"+std::to_string(resetRightEvery)+",\"feature\":"+hex(reinterpret_cast<uintptr_t>(handle)));}
+    }catch(...){resetSet=false;}
     const int result=original(command,handle,parameters,eval);
+    if(resetSet)*reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(eval)+0x38)=savedReset;
     if(savedMotion)*reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(eval)+0x20)=savedMotion;
     if(scaled){const auto p=reinterpret_cast<uintptr_t>(eval);*reinterpret_cast<float*>(p+0x3c)=savedScale[0];*reinterpret_cast<float*>(p+0x40)=savedScale[1];}
     if(!fields.empty()){

@@ -123,12 +123,18 @@ inline void create(State& s,uintptr_t scene){
             ",\"memory_offset\":"+std::to_string(read<uint64_t>(owned+0x20)));
     }
 }
-inline void fill(State& s,unsigned eye,uintptr_t graph,uint32_t first,uint32_t count){
+inline void fill(State& s,unsigned eye,uintptr_t graph,uint32_t first,uint32_t count,uint32_t value=0xffffffffu){
     if(!graph||!count||uint64_t(first)+count>s.slots)throw std::runtime_error("culling history reset outside allocation");
     using Fill=void(__fastcall*)(void*,const void*,uint64_t,uint64_t,uint32_t);
-    reinterpret_cast<Fill>(baseAddress+0x7cb10)(reinterpret_cast<void*>(graph),s.handles[eye].data(),uint64_t(first)*4,uint64_t(count)*4,0xffffffffu);
+    reinterpret_cast<Fill>(baseAddress+0x7cb10)(reinterpret_cast<void*>(graph),s.handles[eye].data(),uint64_t(first)*4,uint64_t(count)*4,value);
     ++s.resets[eye];
 }
+// Diagnostic (2026-10-24, the pop-in of distant things): EVR_CULLING_HISTORY_ZERO_AT=<XR frame> fills both eyes' history with 0
+// ("never visible") once at that frame. Whether the game then fades the things in again tells whether the history drives
+// its fade-in. Never in play.
+inline uint64_t zeroAt(){static const uint64_t at=[]{char v[24]{};const auto n=GetEnvironmentVariableA("EVR_CULLING_HISTORY_ZERO_AT",v,sizeof v);
+    return n&&n<sizeof v?std::strtoull(v,nullptr,10):0ull;}();return at;}
+inline std::array<bool,2> zeroed{};
 void* __fastcall get(void* output,void* manager){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());auto result=originalGet(output,manager);const ObserverLastError preserve;
     if(!requested||!current||currentEye<0||!prepareGraph||caller!=baseAddress+hooks[0].caller)return result;
@@ -143,6 +149,8 @@ void* __fastcall get(void* output,void* manager){
         std::array<uint8_t,32> replacement{};
         reinterpret_cast<Get>(baseAddress+0x1013460)(replacement.data(),s.handles[currentEye].data());
         if(!s.initialized[currentEye]){fill(s,unsigned(currentEye),prepareGraph,0,s.slots);s.initialized[currentEye]=true;}
+        if(zeroAt()&&liveFrame.frame>=zeroAt()&&!zeroed[currentEye]){zeroed[currentEye]=true;fill(s,unsigned(currentEye),prepareGraph,0,s.slots,0u);
+            logFile->event("culling_history_zeroed","\"eye\":"+std::to_string(currentEye)+",\"frame\":"+std::to_string(liveFrame.frame)+",\"diagnostic\":true");}
         if(fillOnly){++prepareGets;
             if(!s.fillOnlyObserved[currentEye]){s.fillOnlyObserved[currentEye]=true;
                 logFile->event("culling_history_fill_only","\"eye\":"+std::to_string(currentEye)+",\"descriptor_unchanged\":true");}

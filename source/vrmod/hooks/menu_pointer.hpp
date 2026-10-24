@@ -68,6 +68,47 @@ inline std::atomic<bool> mouseHeld{false};          // a pull is being given to 
 // slot under it is taken in the mouse mode), and the button comes after. EVR_MENU_POINTER_MOUSE_FIRST=0: not asked.
 inline bool mouseFirst=true;
 inline std::atomic<bool> wantMouse{false};
+inline bool aMiddle=false;     // diagnostic: EVR_MENU_POINTER_A_BUTTON=middle - the right A on the plate is the middle button (does a click move the pad's choice only?)
+inline unsigned aHold=0;       // diagnostic (2026-10-24): EVR_MENU_POINTER_A_HOLD=<frames> - the right A's button held that many frames after its down (does the down alone move the pad's choice, and does the game act on the down or the up?)
+inline bool hoverMouse=false;   // diagnostic (ui_memory_scan.hpp): EVR_MENU_POINTER_HOVER_MOUSE=1 holds the game's mouse mode while the ray is on the plate
+// The right A as the game's A on the plate (2026-10-24; user 10-23: "with the ray on the screen the key map changes - fix it").
+// Mock game-20261024-052201 (EVR_MENU_POINTER_A_HOLD=30): the right button's down alone moved the pad's choice to the slot under
+// the cursor (backpack slot 13 -> 14) and closed the open item menu; its up opened the item's menu. So (test, EVR_MENU_POINTER_A_PAD
+// =1 with the right button, 2 with the left): the button's down in the game's mouse mode, then the game back in its pad mode
+// (forcePad, input_ui_observer.hpp), the up there, and the pad's A for a moment (padAUntil, controller_ui_fixture.hpp) - the A of
+// the thing pointed at.
+// Mock -053617 / -053931: the right button's down does not move the pad's choice onto a row of an open item menu (it passes to
+// the slot behind and the menu closes), the left button's does (its Delete row then deleted the item, as the pad's A on it); on
+// the map (the world tab) the left button's down and the move away dragged the map far off (-055636). So 3 (auto): the left
+// button while an item menu is open (itemMenuOpen, input_ui_observer.hpp: ui+0x2d2c73, 1 with the menu, 0 without - found by
+// popup_diff over 8 memory copies, Mock -054815, and the same in -060059), the right button else.
+// The map (the world tab) with either button's down and the move away: the map ran far off (-060533; with the right click as
+// before it stayed, -060907). So 3 does it in the backpack's tab only (menuTab 4, frontend+0x325a0, input_ui_observer.hpp); the
+// other tabs and screens keep the right click. EVR_MENU_POINTER_A_PAD=3 (test only), 1 / 2 the right / left button on every screen.
+// 2026-10-24 09:40, the user after the headset: "with an item selected, A to open its menu (split, delete) acts like A pressed twice:
+// the menu's top row - often Delete - is chosen at once; stop at the menu opening". Mock game-20261024-094956: on the item already
+// chosen, the right button's down itself opens its menu (the mark below at once), and the pad's A then took the top row (the ring
+// equipped). So the pad's A is not given when the menu was shut at the press and is open after the button (openAtPress). The item
+// menu's mark is frontend+0x33a57 (0 open, 7 shut); ui+0x2d2c73 (1 open in the Mock) never rose on the headset (log 20261024-091911).
+// The default (the user: "the way itself is right"); EVR_MENU_POINTER_A_PAD=0: the right click everywhere as before.
+inline unsigned aPad=3;inline std::atomic<uint8_t> itemMenuMark{255};
+inline std::atomic<uint8_t> menuTab{255};
+inline std::atomic<bool> forcePad{false},itemMenuOpen{false};inline std::atomic<uint64_t> padAUntil{0},padAPulses{0};
+// 2026-10-24 13:40, the user after the headset (log 20261024-130740): "in the left menu (the start menu, screen 2) and the item
+// box (the chests, 21 / 22) the buttons do nothing while the pointer is there". The right A was the right click there: 20 presses on
+// the start menu (on the game's rows and on the mod's bug report button) and 14 on the box, none of them did anything.
+// The start menu's rows do not take the right button's down as a choice (Mock game-20261024-133659: the right A on "Difficulty" by
+// the backpack's way gave the pad's A to "Back to the game", which was chosen, and the menu closed), so there the right A is the left
+// click at the pointed place, as the trigger (startMenuA; Mock -134334: "Difficulty" opened). The chests: the right A is the pad's A
+// as it is, on the slot the game has chosen, nothing to the mouse (chestA). The backpack's way (the down at the pointed place first)
+// asks the item menu's mark frontend+0x33a57 (7 shut / 0 open in the bag), and the mark read 0 on the start menu with no item menu
+// (the same Mock) - what it reads on a chest is not known (three Mock tries did not open a chest: the left trigger took the flame
+// altar beside the spawn, -134758), and a wrong "open" there would pick the item up with the left button and drag it off the window.
+// EVR_MENU_POINTER_A_PAD_SCREENS=0: the backpack's tab only, the right click elsewhere, as before.
+inline bool aPadScreens=true;
+struct PadA {unsigned stage=0,frames=0;bool left=false,openAtPress=false,items=false;};inline PadA padA;
+inline bool overlayRight=false;   // the right A pressed a button of the mod's own (the start menu's VR settings and bug report)
+inline bool aAsLeft=false;        // the right A is giving the left click (the start menu)
 inline std::atomic<unsigned> mouseModeSet{0};
 // A button's way to the game (keepPad): the place first, the button down after the lead frames, up at least
 // minimumDownFrames after its down (2026-10-20 17:40, user: "with the pointer the stack's menu needs several presses -
@@ -111,6 +152,11 @@ inline void install(){
     {char value[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_POINTER_GAME",value,sizeof value);gameMouse=!(n==1&&value[0]=='0');}
     {char value[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_POINTER_KEEP_PAD",value,sizeof value);keepPad=!(n==1&&value[0]=='0');}
     {char value[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_POINTER_MOUSE_FIRST",value,sizeof value);mouseFirst=!(n==1&&value[0]=='0');}
+    {char value[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_POINTER_HOVER_MOUSE",value,sizeof value);hoverMouse=n==1&&value[0]=='1';}
+    {char value[16]{};const auto n=GetEnvironmentVariableA("EVR_MENU_POINTER_A_BUTTON",value,sizeof value);aMiddle=n==6&&std::string(value)=="middle";}
+    {char value[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_POINTER_A_HOLD",value,sizeof value);if(n&&n<sizeof value)aHold=unsigned(std::min(300ul,std::strtoul(value,nullptr,10)));}
+    {char value[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_POINTER_A_PAD",value,sizeof value);if(n==1&&value[0]>='0'&&value[0]<='3')aPad=unsigned(value[0]-'0');}
+    {char value[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_POINTER_A_PAD_SCREENS",value,sizeof value);aPadScreens=!(n==1&&value[0]=='0');}
     if(auto layer=GetModuleHandleW(L"evr_diagnostic.dll")){showCursor=reinterpret_cast<CursorFn>(GetProcAddress(layer,"evrSetUiCursor"));setPlate=reinterpret_cast<PlateFn>(GetProcAddress(layer,"evrSetUiPlate"));}
     installed=true;
     logFile->event("menu_pointer_enabled",std::string("\"game_mouse\":")+(gameMouse?"true":"false")+",\"keep_pad\":"+(keepPad?"true":"false")+",\"mouse_mode_first\":"+(mouseFirst?"true":"false")+",\"b_is_the_pads\":true"+",\"messages_to_the_game_window_only\":true,\"system_cursor_moved\":false,\"dot_in_ui_image\":"+(showCursor?"true":"false")+",\"menu_plate_fixed_in_space\":"+(setPlate?"true":"false"));
@@ -149,6 +195,19 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
         // in 1.0 (LogicEditor came in at 20): the building mode 28 -> 29, the summoner 33 -> 37, and 33 is now the
         // screwdriver's building mode (ScrewdriverMultiToolBuildingMode), which aims at the world as the building mode.
         const bool menu=(open!=1&&open!=29&&open!=33&&open!=37&&open!=255)||(open==1&&uiCover(now));   // + the death screen (uiCover)
+        // The world tab (the map, menuTab 1) as the chests (2026-10-24, user after the headset: "on the world screen the buttons
+        // change with the pointer and without it"; then, with the left click at the pointed place: "clicking a location drags the
+        // map; and with a location picked, A is not taken unless the pointer is on it - dragging is fine, but with a location
+        // picked A should always bring its choices (fast travel and the like)"): the right A is the pad's A as it is, on the
+        // location the game has picked, nothing to the mouse; the trigger's left click moves the map.
+        const bool worldTab=(open==4&&menuTab.load()==1)||open==5;   // + the map of its own (screen 5, the map key; Mock -183453)
+        // Every other screen the same (2026-10-24, user after the headset: "in the craft screen too, with the pointer there A
+        // does not make anything - every UI has this, go through all of them"): the right A is the game's A on what the game has
+        // chosen - the trigger's left click chooses - but for the backpack's tab (its own way: the slot pointed at, then the
+        // pad's A; user "UI OK" 10-24) and the start menu (the left click at the pointed place: its rows take no pad's A on the
+        // row pointed at, Mock -133659). Before: the right click everywhere else.
+        const bool bagTab=open==4&&menuTab.load()==4;
+        const bool startMenuA=aPadScreens&&aPad&&open==2,chestA=aPadScreens&&aPad&&menu&&open!=2&&!bagTab;   // the right A there (aPadScreens above)
         const auto& hand=f.hands[1];
         const bool headTracked=(head.flags&15)==15&&evr::finite(head.pose.position);
         const bool tracked=f.focused&&hand.aimActive&&(hand.aimFlags&15)==15&&headTracked;
@@ -209,6 +268,12 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
         if(overlayPress&&buttons.left&&!change.leftDown&&spot.on&&overlayButtonDrag&&client.right>0&&client.bottom>0)
             overlayButtonDrag(float(shown.pixelX)/float(client.right),float(shown.pixelY)/float(client.bottom));
         if(change.leftUp&&overlayPress&&overlayButtonRelease)overlayButtonRelease();
+        // The right A on a button of the mod's own presses it as the trigger does (2026-10-24: the user pressed the right A on the
+        // bug report's button eight times, log 20261024-130740 frames 8845-8923); nothing of it goes to the game.
+        const bool rightOverlay=change.rightDown&&onOverlay&&!overlayPress;
+        if(rightOverlay){overlayRight=true;if(overlayButtonPress)overlayButtonPress();logFile->event("menu_pointer_overlay_press","\"screen\":"+std::to_string(unsigned(open))+",\"by\":\"right_a\",\"frame\":"+std::to_string(f.frame));}
+        const bool rightOverlayUp=change.rightUp&&overlayRight;
+        if(rightOverlayUp){overlayRight=false;if(overlayButtonRelease)overlayButtonRelease();}
         if(!gameMouse){if(change.leftUp)overlayPress=false;}
         else if(h&&lastClient.x>=0){
             const auto place=MAKELPARAM(lastClient.x,lastClient.y);
@@ -222,21 +287,56 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
                 if(pressed){b=Posted{};
                     if(keepPad){PostMessageW(h,WM_MOUSEMOVE,0,place);++moves;b.downIn=leadFrames;mouseHeld=true;wantMouse=mouseFirst;postedAt=now;}
                     else{PostMessageW(h,downMessage,keys()|mask,place);++clicks;b.down=true;postedAt=now;}}
-                else if(b.downIn){if(--b.downIn==0){PostMessageW(h,downMessage,keys()|mask,place);++clicks;b.down=true;b.sinceDown=0;postedAt=now;
-                    if(b.upLater){b.upLater=false;b.upIn=minimumDownFrames;}}}
+                // The place once more right before the button (2026-10-23, a player's report 124345: "the backpack's item menu
+                // needs 3 to 17 presses of the right A"; replayed in Mock game-20261023-201858: presses 1 to 6 opened nothing, the
+                // 7th did; with this every press opened it, -202434). The right button had its place only at the press, six frames
+                // before its down; the left button has a move on every frame of its lead. Why the earlier place was not enough is
+                // not known (no WM_MOUSELEAVE reached the game's window in Mock -204728).
+                else if(b.downIn){if(--b.downIn==0){PostMessageW(h,WM_MOUSEMOVE,keys()&~mask,place);++moves;PostMessageW(h,downMessage,keys()|mask,place);++clicks;b.down=true;b.sinceDown=0;postedAt=now;
+                    if(b.upLater){b.upLater=false;b.upIn=aHold&&mask==MK_RBUTTON?aHold:minimumDownFrames;}}}
                 else if(b.down&&b.sinceDown<1000)++b.sinceDown;
-                if(released){if(b.downIn)b.upLater=true;else if(b.down&&b.sinceDown<minimumDownFrames)b.upIn=minimumDownFrames-b.sinceDown;else upNow=true;}
+                const unsigned least=aHold&&mask==MK_RBUTTON?aHold:minimumDownFrames;   // EVR_MENU_POINTER_A_HOLD (diagnostic)
+                if(released){if(b.downIn)b.upLater=true;else if(b.down&&b.sinceDown<least)b.upIn=least-b.sinceDown;else upNow=true;}
                 if(upNow&&b.down){PostMessageW(h,upMessage,keys()&~mask,place);++clicks;b=Posted{};postedAt=now;
                     if(!leftPosted.busy()&&!rightPosted.busy()&&!buttons.left&&!buttons.right){mouseHeld=false;wantMouse=false;}}
             };
-            const bool leftPress=change.leftDown&&!onOverlay&&!overlayPress;
+            // the start menu: the right A is the left click at the pointed place (startMenuA above), when the trigger is not giving one
+            const bool rightAsLeft=startMenuA&&change.rightDown&&ray&&!rightOverlay&&!buttons.left&&!leftPosted.busy();
+            const bool leftPress=(change.leftDown&&!onOverlay&&!overlayPress)||rightAsLeft;
             if(change.leftDown&&onOverlay)leftPosted=Posted{};
             bool leftRelease=change.leftUp;if(change.leftUp&&overlayPress){overlayPress=false;leftRelease=false;}
+            if(rightAsLeft){aAsLeft=true;logFile->event("menu_pointer_a_left_click","\"screen\":"+std::to_string(unsigned(open))+",\"pixel\":["+std::to_string(lastClient.x)+","+std::to_string(lastClient.y)+"],\"frame\":"+std::to_string(f.frame));}
+            else if(change.rightUp&&aAsLeft){aAsLeft=false;leftRelease=true;}
             run(leftPosted,leftPress,leftRelease,WM_LBUTTONDOWN,WM_LBUTTONUP,MK_LBUTTON);
-            run(rightPosted,change.rightDown,change.rightUp,WM_RBUTTONDOWN,WM_RBUTTONUP,MK_RBUTTON);
+            // aPad 3: the backpack's tab; items: the screens with an item menu
+            const bool items=open==4&&menuTab.load()==4;
+            const bool padHere=aPad&&(aPad!=3||items);
+            if((startMenuA||chestA)&&!padA.stage){}   // the start menu: the right A's left click above; the chests: the pad's A (primary below)
+            else if(padA.stage||(padHere&&change.rightDown&&ray&&!rightOverlay&&!rightPosted.busy())){   // the right A as the pad's A on what is pointed at (aPad above); frames of this thread
+                const bool left=padA.left;
+                const UINT down=left?WM_LBUTTONDOWN:WM_RBUTTONDOWN,up=left?WM_LBUTTONUP:WM_RBUTTONUP;const WPARAM mk=left?MK_LBUTTON:MK_RBUTTON;
+                auto stage=[&](unsigned s){const bool l=padA.left,o=padA.openAtPress,it=padA.items;padA={s,0,l,o,it};try{logFile->event("menu_pointer_pad_a","\"stage\":"+std::to_string(s)+",\"screen\":"+std::to_string(unsigned(open))+",\"left_button\":"+(l?"true":"false")+",\"item_menu_mark\":"+std::to_string(unsigned(itemMenuMark.load()))+",\"pixel\":["+std::to_string(lastClient.x)+","+std::to_string(lastClient.y)+"],\"device_mode\":"+std::to_string(unsigned(deviceMode.load()))+",\"frame\":"+std::to_string(f.frame));}catch(...){}};
+                if(change.rightDown&&ray&&padHere&&!rightOverlay&&(padA.stage==0||padA.stage>=3)){PostMessageW(h,WM_MOUSEMOVE,0,place);++moves;mouseHeld=true;wantMouse=true;forcePad=false;postedAt=now;   // (not while its down waits for its up)
+                    padA.items=items;padA.openAtPress=items&&itemMenuOpen.load();padA.left=aPad==2||(aPad==3&&padA.openAtPress);stage(1);}
+                else if(padA.stage){++padA.frames;
+                    // the up in the mouse mode but away from the plate (outside the window): a click is not made (Mock game-20261024-053135:
+                    // an up in the pad mode was not taken - the game's button stayed down and the next down moved nothing)
+                    if(padA.stage==1&&padA.frames>=leadFrames){PostMessageW(h,WM_MOUSEMOVE,0,place);++moves;PostMessageW(h,down,mk,place);++clicks;postedAt=now;stage(2);}
+                    else if(padA.stage==2&&padA.frames>=2){const auto away=MAKELPARAM(-60,-60);PostMessageW(h,WM_MOUSEMOVE,mk,away);++moves;PostMessageW(h,up,0,away);++clicks;postedAt=now;stage(3);}
+                    else if(padA.stage==3&&padA.frames>=2){wantMouse=false;forcePad=true;stage(4);}
+                    else if(padA.stage==4&&padA.frames>=2){
+                        // the menu opened by the button itself (an item chosen already): no pad's A, it would take the menu's top row
+                        if(aPad==3&&padA.items&&!padA.openAtPress&&itemMenuOpen.load()){try{logFile->event("menu_pointer_pad_a_withheld","\"reason\":\"the item menu opened by the button\",\"frame\":"+std::to_string(f.frame));}catch(...){}}
+                        else{padAUntil=GetTickCount64()+120;++padAPulses;}
+                        stage(5);}
+                    else if(padA.stage==5&&padA.frames>=20){forcePad=false;if(!leftPosted.busy()&&!buttons.left)mouseHeld=false;padA={};}}
+            }
+            else if(aMiddle)run(rightPosted,change.rightDown&&!rightOverlay,change.rightUp&&!rightOverlayUp,WM_MBUTTONDOWN,WM_MBUTTONUP,MK_MBUTTON);   // diagnostic: EVR_MENU_POINTER_A_BUTTON=middle
+            else run(rightPosted,change.rightDown&&!rightOverlay,change.rightUp&&!rightOverlayUp,WM_RBUTTONDOWN,WM_RBUTTONUP,MK_RBUTTON);
             if(change.leftUp&&!leftPosted.busy()&&!rightPosted.busy()&&!buttons.right){mouseHeld=false;wantMouse=false;}
         }
-        trigger=buttons.takesTrigger();primary=gameMouse&&buttons.takesSecondary();secondary=false;
+        if(hoverMouse&&gameMouse)wantMouse=ray||leftPosted.busy()||rightPosted.busy();
+        trigger=buttons.takesTrigger();primary=gameMouse&&buttons.takesSecondary()&&!(chestA&&!overlayRight&&!rightPosted.busy());secondary=false;   // the chests: the right A goes to the game as its A
         // The dot: where the cursor is (a held click keeps its place), larger and green while a button is down. Only
         // where it can press something - on the mod's own buttons (user 2026-10-18 12:40: "if the pointer cannot work the
         // menu, do not show it - it is confusing"; 11:00 to 12:40 it showed over the whole plate).

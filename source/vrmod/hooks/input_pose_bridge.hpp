@@ -53,5 +53,8 @@ inline void observe(uint32_t entity,uint32_t tick,unsigned sample,const std::arr
     out<<",\"geometry_preview_only\":true,\"gameplay_state_validated\":false,\"applied\":false";
     logFile->event("input_pose_sample",out.str());
 }
-inline void close(){channel.close();}
+// The token goes with it (2026-10-24): the XR session kept for the plate keeps its generation and the origin its epoch, so the
+// eyes begun again after a failure brought the same token; it was not reset, and the channel closed here refused every publication
+// ("input pose publication identity/clock rejected" on every try - trial auto-start-20261024-144618: VR never came back).
+inline void close(){channel.close();token={};}
 }

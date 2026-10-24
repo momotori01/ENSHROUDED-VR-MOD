@@ -254,6 +254,12 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/gi_reproject_capture.h"
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/fog_reproject.h"
  COMMAND "${UI_GLSLANG}" -V --target-env vulkan1.2 --vn fogReproject -o "${CMAKE_BINARY_DIR}/generated/fog_reproject.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fog_reproject.comp"
  DEPENDS shaders/fog_reproject.comp)
+add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/ssr_reproject.h"
+ COMMAND "${UI_GLSLANG}" -V --target-env vulkan1.2 --vn ssrReproject -o "${CMAKE_BINARY_DIR}/generated/ssr_reproject.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/ssr_reproject.comp"
+ DEPENDS shaders/ssr_reproject.comp)
+add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/fsr_exposure_copy.h"
+ COMMAND "${UI_GLSLANG}" -V --target-env vulkan1.2 --vn fsrExposureCopy -o "${CMAKE_BINARY_DIR}/generated/fsr_exposure_copy.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/fsr_exposure_copy.comp"
+ DEPENDS shaders/fsr_exposure_copy.comp)
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/gi_reproject_apply.h"
  COMMAND "${UI_GLSLANG}" -V --target-env vulkan1.2 --vn giReprojectApply -o "${CMAKE_BINARY_DIR}/generated/gi_reproject_apply.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/gi_reproject_apply.comp"
  DEPENDS shaders/gi_reproject_apply.comp)
@@ -269,7 +275,7 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_motion_fix.h"
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h"
  COMMAND "${UI_GLSLANG}" -V --vn eyeDepthCopyFragment -o "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/eye_depth_copy.frag"
  DEPENDS shaders/eye_depth_copy.frag)
-add_custom_target(evr_ui_transfer_shaders DEPENDS "${CMAKE_BINARY_DIR}/generated/eye_motion_fix.h" "${CMAKE_BINARY_DIR}/generated/fog_reproject.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_capture.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_apply.h" "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_vertex.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_fragment.h" "${CMAKE_BINARY_DIR}/generated/vfx_decal_writeback.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_vertex.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_fragment.h" "${CMAKE_BINARY_DIR}/generated/edge_tint_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_mark_fragment.h")
+add_custom_target(evr_ui_transfer_shaders DEPENDS "${CMAKE_BINARY_DIR}/generated/eye_motion_fix.h" "${CMAKE_BINARY_DIR}/generated/fog_reproject.h" "${CMAKE_BINARY_DIR}/generated/fsr_exposure_copy.h" "${CMAKE_BINARY_DIR}/generated/ssr_reproject.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_capture.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_apply.h" "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_vertex.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_fragment.h" "${CMAKE_BINARY_DIR}/generated/vfx_decal_writeback.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_vertex.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_fragment.h" "${CMAKE_BINARY_DIR}/generated/edge_tint_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_mark_fragment.h")
 add_library(evr_ui_transfer INTERFACE)
 add_dependencies(evr_ui_transfer evr_ui_transfer_shaders)
 target_link_libraries(evr_ui_transfer INTERFACE evr_core)

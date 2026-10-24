@@ -63,6 +63,16 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
    b.selected=8;b.selectedIsRanged=true;bo=holsterOrder(HolsterAct::Ranged,b,bm);ck(bo.change&&bo.select==2&&!bo.arm);   // away: the sword of slot 2 again
    b.selected=16;b.selectedIsRanged=false;bo=holsterOrder(HolsterAct::Ranged,b,bm);ck(bo.change&&bo.select==8&&!bo.arm);   // from bare hands too
    b.rangedBarSlot=0xff;bo=holsterOrder(HolsterAct::Ranged,b,bm);ck(bo.change&&bo.arm&&bo.select==-1);}                  // not on the bar: the key
+  // The mod's bow (not on the bar): bare hands, no ranged-combat bit; away gives back the slot it was taken from.
+  {HolsterGame b;b.known=true;b.selected=2;b.rangedWorn=true;b.modBow=true;HolsterMemory bm;
+   auto bo=holsterOrder(HolsterAct::Ranged,b,bm);ck(bo.change&&!bo.arm&&bo.select==16&&bm.modBow&&!bm.armed&&bm.bowFrom==2&&bm.slot==2);
+   b.selected=16;bo=holsterOrder(HolsterAct::Ranged,b,bm);ck(bo.change&&!bo.arm&&bo.select==2&&!bm.modBow);          // away: the sword of slot 2
+   bo=holsterOrder(HolsterAct::Ranged,b,bm);ck(bo.change&&!bo.arm&&bo.select==-1&&bm.modBow&&bm.bowFrom==16);         // from bare hands
+   bo=holsterOrder(HolsterAct::Ranged,b,bm);ck(bo.change&&!bo.arm&&bo.select==-1&&!bm.modBow);                        // ... away: bare hands still
+   bo=holsterOrder(HolsterAct::Ranged,b,bm);ck(bm.modBow);
+   bo=holsterOrder(HolsterAct::Weapon,b,bm);ck(bo.change&&!bo.arm&&bo.select==-1&&!bm.modBow);                        // the right shoulder: bare hands
+   bo=holsterOrder(HolsterAct::Weapon,b,bm);ck(bo.change&&bo.select==2);                                              // ... and the sword again
+   b.rangedBarSlot=5;bo=holsterOrder(HolsterAct::Ranged,b,bm);ck(bo.change&&bo.select==5&&!bm.modBow);}               // on the bar: its slot, as before
   o=holsterOrder(HolsterAct::Shield,g,m);ck(o.change&&o.shield==1&&o.select==-1);
   g.shieldWorn=false;o=holsterOrder(HolsterAct::Shield,g,m);ck(!o.change);
   g.shieldKept=true;o=holsterOrder(HolsterAct::Shield,g,m);ck(o.change&&o.shield==0);

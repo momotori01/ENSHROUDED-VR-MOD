@@ -31,6 +31,9 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   ck(near(rotate(palm.orientation,{0,1,0}),{0,-1,0}));ck(near(rotate(palm.orientation,{0,0,1}),{0,0,1}));ck(near(palm.position,{0,-.015f,-.0475f}));
   // the left hand (thumb to +X) palm down: down as well
   const auto left=palmFrame(wrist,{.03f,0,-.09f},middle,{-.04f,0,-.08f},false,.015f);ck(near(rotate(left.orientation,{0,1,0}),{0,-1,0}));
+  // The frame made with right=false (as for the right hand in the game's mirrored space, motion_hand_visual.hpp palmInSocket):
+  // +X toward the little finger (motion_consumable_visual.hpp: a heap 2 cm that way); with right=true toward the index.
+  ck(rotate(left.orientation,{1,0,0}).x<-.9f);ck(rotate(palm.orientation,{1,0,0}).x<-.9f);
   // popcorn on that palm: its bottom on the skin, its middle over the palm's
   const Vec3 plo{-.141f,-.005f,-.154f},phi{.141f,.178f,.157f};const auto on=mountOnPalm(palm,plo,phi,.13f);
   const auto base=on.pose.position+rotate(on.pose.orientation,Vec3{0,plo.y,(plo.z+phi.z)*.5f}*on.scale);ck(near(base,palm.position));

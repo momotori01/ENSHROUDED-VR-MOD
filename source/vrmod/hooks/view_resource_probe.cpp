@@ -28,6 +28,7 @@
 #include <evr/head_gesture_feedback.hpp>
 #include <evr/vertical_stick_mapping.hpp>
 #include <evr/live_pad.hpp>
+#include <evr/left_trigger_tools.hpp>
 #include <evr/bow_input_trial.hpp>
 #include <evr/bow_physical_trial.hpp>
 #include <evr/bow_physical_release.hpp>
@@ -588,6 +589,9 @@ inline const bool installed=(worldSharedStages::terrain::eyeOwnAllowed=&allow,tr
 #include "motion_collider_channel.hpp"
 #include "blocked_action_lifetime.hpp"
 #include "input_direction_observer.hpp"
+// The pad's turn watch reads the camera update's sample (controller_ui_fixture.hpp cameraTurn, 2026-10-24).
+const bool cameraTurnWired=[]{controllerUiFixture::cameraTurn=[]{controllerUiFixture::CameraTurn t;std::lock_guard<std::mutex> lock(cameraControl::mutex);
+    const auto& s=cameraControl::latest;t.valid=s.valid;t.camera=s.camera;t.yaw=s.weighted[0];t.ms=s.milliseconds;t.heldUntil=cameraControl::turnHeldUntil.load();return t;};return true;}();
 #include "bow_spawn_observer.hpp"
 #include "controller_backend_exit.hpp"
 #include "ui_state_observer.hpp"
@@ -621,6 +625,7 @@ bool finishEyeCpuTasks(uintptr_t scene,unsigned milliseconds=100);
 #include "live_actionbar_pages.hpp"
 #include "live_equipment.hpp"
 #include "holster_actions.hpp"
+#include "motion_mod_bow_visual.hpp"
 #include "motion_event_selection_observer.hpp"
 namespace inputActor {inline const bool clientTicksSet=[]{clientWorldTicks=[](uintptr_t w,uint32_t e){liveTargets::tick(w,e);liveActionbars::tick(w,e);liveEquipment::tick(w,e);fogTimer::tick(w,e);};return true;}();}
 #include "contact_quiescence_observer.hpp"
@@ -648,6 +653,7 @@ namespace inputActor {inline const bool clientTicksSet=[]{clientWorldTicks=[](ui
 #include "gi_share_bridge.hpp"
 #include "object_watch.hpp"
 #include "status_vignette.hpp"
+#include "combat_camera_override.hpp"
 #include "bug_report.hpp"
 #include <tlhelp32.h>
 #include "data_watch.hpp"
@@ -1463,6 +1469,8 @@ void submitLiveFrame(PairResources& pair){
                 logFile->event("captured_game_camera",f.str());
             }
         }
+        // The right eye's DLSS feature handle (dlssEval::resetRightEvery, diagnostic).
+        if(dlssEval::resetRightEvery>0)try{const auto ctx=read<uintptr_t>(pair.created[1]+layout::viewUpscaler+0x10);dlssEval::rightFeature=ctx?read<uintptr_t>(ctx+0xe8):0;}catch(...){dlssEval::rightFeature=0;}
         if(pair.pairedFrames==10||pair.pairedFrames==300){
             // Read-only upscaler ownership snapshot (2026-10-05 DLSS investigation): View+9b0 kind
             // (1 FSR3, 2 DLSS, 3 XeSS), +9b8 FSR object, +9c0 DLSS context, +9c8 XeSS context.
@@ -1589,7 +1597,10 @@ inline void disable() noexcept {
 // Read-only. docs/analysis/view_state_20261021.
 namespace viewCompare {
 inline bool wanted(){static const bool on=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_VIEW_COMPARE",v,sizeof v);return n==1&&v[0]=='1';}();return on;}
-constexpr std::array<uint64_t,4> serials{600,601,602,1500};
+constexpr std::array<uint64_t,5> serials{600,601,602,603,1500};   // 603 since 2026-10-24: four pairs in a row (a field that alternates)
+// the bytes taken at each differing pointer (EVR_VIEW_COMPARE_BYTES=<hex>, 0x100 by default; 2026-10-24 the water: what alternates
+// frame by frame in the left eye's objects and not in the right eye's)
+inline size_t pointedBytes(){static const size_t n=[]{char v[16]{};const auto k=GetEnvironmentVariableA("EVR_VIEW_COMPARE_BYTES",v,sizeof v);const auto x=k&&k<sizeof v?size_t(std::strtoull(v,nullptr,16)):0x100;return std::clamp<size_t>(x,0x100,0x10000);}();return n;}
 inline std::vector<uint8_t> bytesAt(uintptr_t address,size_t n){
     std::vector<uint8_t> data(n);for(size_t at=0;at<n;at+=0x100){SIZE_T got=0;const auto k=std::min<size_t>(0x100,n-at);
         if(!address||!ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(address+at),data.data()+at,k,&got))std::fill_n(data.data()+at,k,uint8_t(0));}
@@ -1615,7 +1626,7 @@ inline void dump(uint64_t,uintptr_t left,uintptr_t right,uintptr_t desktop) noex
             if(!pointerLike(l)||!pointerLike(r))continue;
             ++pointers;
             out<<"{\"offset\":\""<<hex(at)<<"\",\"left\":\""<<hex(l)<<"\",\"right\":\""<<hex(r)<<"\",\"desktop\":\""<<hex(d)
-               <<"\",\"left_bytes\":\""<<hexOf(bytesAt(l,0x100))<<"\",\"right_bytes\":\""<<hexOf(bytesAt(r,0x100))<<"\"}\n";}
+               <<"\",\"left_bytes\":\""<<hexOf(bytesAt(l,pointedBytes()))<<"\",\"right_bytes\":\""<<hexOf(bytesAt(r,pointedBytes()))<<"\",\"desktop_bytes\":\""<<hexOf(bytesAt(d,pointedBytes()))<<"\"}\n";}
         logFile->event("view_compare_written","\"serial\":"+std::to_string(serial)+",\"pointers_differing\":"+std::to_string(pointers));
     }catch(...){}
 }
@@ -2212,6 +2223,50 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         logFile->event("gi_dump",f.str());
     }catch(const std::exception& e){logFile->event("gi_dump_failure","\"reason\":"+jsonString(e.what()));}
 }
+// Back to the plate and on into VR again after a failure (2026-10-24 14:40; a player: "deep in the shroud, VR fell back to 2D -
+// I have to restart the game for VR, and all the enemies I killed are back"; the user: "go back to the plate and return to VR").
+// Before, one frame's failure ended the VR session for the rest of the start: the loader leaves its loop on a session's failure
+// (loader.cpp vrWorker), and the same world cannot make a new pair while the failed one is kept (probe()). Now the frame's eyes are
+// given up (the XR session is kept for the plate, as when a world is left: evrCloseNativeXr), the pair is marked sound again and
+// the eyes begin again - at once after a first failure; while failures follow each other within 10 s, after 0.25, 0.5, 1, 2, 4,
+// then every 5 s. Meanwhile the headset shows the game's own picture on the plate and the original View is drawn as without the
+// mod. The reason stays in the log (calibration_series_failure, then world_frame_recovered). The hands' and weapons' models of
+// the mod, when they were what failed, are tried again three times a session; after that VR goes on without them.
+// EVR_RECOVER_FAILURES=0 in the game's environment: the session ends at the first failure, as before.
+namespace failureRecovery {
+inline const bool wanted=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_RECOVER_FAILURES",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline std::atomic<uint64_t> holdUntil{0};inline uint64_t lastFailure=0,count=0;inline unsigned streak=0,motionRetries=0;
+inline bool held(){const auto until=holdUntil.load();return until&&GetTickCount64()<until;}
+// Test only: EVR_TEST_FAIL_AT=<n>[-<last>],... fails the eyes' recording on those attempts (counted from 1 in the session: XR frame
+// numbers start again with a new XR session, and a failing attempt does not make a pair); EVR_TEST_MOTION_FAIL_AT the same for the
+// hands' and weapons' models (motionVisual).
+inline uint64_t attempts=0,motionAttempts=0;   // motionAttempts: the models' preparations, counted from 1
+inline std::vector<std::pair<uint64_t,uint64_t>> spans(const char* name){
+    std::vector<std::pair<uint64_t,uint64_t>> out;char v[512]{};const auto n=GetEnvironmentVariableA(name,v,sizeof v);if(!n||n>=sizeof v)return out;
+    std::stringstream in(v);std::string part;
+    while(std::getline(in,part,',')){const auto dash=part.find('-');try{const uint64_t a=std::stoull(part.substr(0,dash)),b=dash==std::string::npos?a:std::stoull(part.substr(dash+1));if(b>=a)out.push_back({a,b});}catch(...){}}
+    return out;
+}
+inline bool due(const std::vector<std::pair<uint64_t,uint64_t>>& at,uint64_t frame){for(const auto& s:at)if(frame>=s.first&&frame<=s.second)return true;return false;}
+inline const auto failAt=spans("EVR_TEST_FAIL_AT");inline const auto motionFailAt=spans("EVR_TEST_MOTION_FAIL_AT");
+}
+bool recoverPair(PairResources& pair){
+    if(!failureRecovery::wanted||!worldSession||sessionStop.load()||done.load())return false;
+    selectView(pair.scene,pair.originalView);
+    const auto now=GetTickCount64();
+    auto& r=failureRecovery::streak;r=failureRecovery::lastFailure&&now-failureRecovery::lastFailure<=10000?r+1:1;
+    failureRecovery::lastFailure=now;++failureRecovery::count;
+    const uint64_t hold=r<=1?0:std::min<uint64_t>(5000,250ull<<std::min(r-2,5u));
+    failureRecovery::holdUntil=now+hold;
+    const bool motionAgain=motionVisual::failed&&motionVisual::validated&&failureRecovery::motionRetries<3;
+    if(motionAgain){motionVisual::failed=false;++failureRecovery::motionRetries;}
+    sharedRenderDeferredFrames=0;
+    pair.failed=false;pair.pairPending=false;pair.frameReady=false;
+    logFile->event("world_frame_recovered","\"frame\":"+std::to_string(liveFrame.frame)+",\"recoveries\":"+std::to_string(failureRecovery::count)+
+        ",\"streak\":"+std::to_string(r)+",\"plate_ms\":"+std::to_string(hold)+",\"paired_frames\":"+std::to_string(pair.pairedFrames)+
+        ",\"motion_visual_again\":"+(motionAgain?"true":"false")+",\"motion_visual_off\":"+(motionVisual::failed?"true":"false"));
+    return true;
+}
 void finishPair() noexcept {
     auto* pointer=retainedPair.load(std::memory_order_acquire);
     if(!pointer)return;
@@ -2241,7 +2296,7 @@ void finishPair() noexcept {
                 }
             }
         }
-        if(liveXr){if(pair.failed)closeLiveFrame(pair.originalView);else if(!pair.frameReady){skipLiveFrame(pair);pair.pairPending=false;return;}else submitLiveFrame(pair);}
+        if(liveXr){if(pair.failed){closeLiveFrame(pair.originalView);if(recoverPair(pair))return;}else if(!pair.frameReady){skipLiveFrame(pair);pair.pairPending=false;return;}else submitLiveFrame(pair);}
         pair.pairPending=false;
         if(!pair.failed&&pair.pairedFrames<calibrationFrames&&!pair.sessionFinal)return;
         if(retainCalibration){
@@ -2301,6 +2356,7 @@ void __fastcall destroyOwner(void* ownerAddress){
             motionArrowVisual::dispose(scene);
             motionOffhandVisual::dispose(scene);
             motionConsumableVisual::dispose(scene);
+            motionModBow::dispose(scene);
             itemGallery::dispose(scene);
             onlineSync::dispose(scene);
             motionBodyIk::dispose(scene);
@@ -2671,7 +2727,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
     // the initial private View lifecycle has succeeded. This is opt-in while
     // validating native queue ordering; the first warmup retains bootstrap order.
     bool earlyPrepared=false;
-    if(earlyWorldXr&&active.load()&&pair&&!pair->failed&&!done.load()&&
+    if(earlyWorldXr&&active.load()&&pair&&!pair->failed&&!done.load()&&!failureRecovery::held()&&
        reinterpret_cast<uintptr_t>(view)==pair->originalView&&
        read<uint64_t>(read<uintptr_t>(reinterpret_cast<uintptr_t>(context)+8)+0x18)!=pair->serial&&
        read<uint64_t>(read<uintptr_t>(reinterpret_cast<uintptr_t>(context)+8)+0x18)!=pair->xrAttemptSerial){
@@ -2727,7 +2783,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
             if(loadingEvents++<64)logFile->event("desktop_skip_loading","\"loading\":"+std::string(loadingWorld?"true":"false")+",\"frame\":"+std::to_string(liveFrame.frame)+",\"paired_frames\":"+std::to_string(pair->pairedFrames)+",\"player_not_ready_for_gameplay\":"+(notReady?"true":"false")+",\"original_view_rendered_every_frame\":"+(loadingWorld&&!skipWhileLoading?"true":"false")+",\"skip_kept_for_comparison\":"+(skipWhileLoading?"true":"false"));}
         if(skipWhileLoading)loadingWorld=false;
     }
-    if(desktopSkip&&!loadingWorld&&!desktopCompareRender&&!sharedRenderDeferredFrames&&active.load()&&pair&&!pair->failed&&!done.load()&&reinterpret_cast<uintptr_t>(view)==pair->originalView&&
+    if(desktopSkip&&!loadingWorld&&!desktopCompareRender&&!sharedRenderDeferredFrames&&active.load()&&pair&&!pair->failed&&!done.load()&&!failureRecovery::held()&&reinterpret_cast<uintptr_t>(view)==pair->originalView&&
        pair->pairedFrames>=desktopSkipWarmupPairs){
         const auto serial=read<uint64_t>(read<uintptr_t>(reinterpret_cast<uintptr_t>(context)+8)+0x18);
         const bool begunEarly=earlyPrepared&&serial==pair->xrAttemptSerial;
@@ -2824,6 +2880,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
         try{const auto sample=rootCamera::snapshot();
             const auto input=reinterpret_cast<uintptr_t>(parameters);
             const auto anchor=sceneryAnchor(rootCamera::renderAnchor(sample,read<WorldPositionQ32>(input+0x38),read<Quat>(input+0x50)));
+            if(motionVisual::validated&&!motionVisual::failed&&failureRecovery::due(failureRecovery::motionFailAt,++failureRecovery::motionAttempts))throw std::runtime_error("test failure (EVR_TEST_MOTION_FAIL_AT)");   // as a failure inside the models' preparation
             motionVisual::prepare(pair->scene,pair->originalView,anchor,sharedStage.serial);
             motionHandVisual::prepare(anchor,sharedStage.serial);
             motionBowVisual::prepare(sharedStage.serial);
@@ -2832,6 +2889,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
             motionOffhandVisual::prepare(anchor,sharedStage.serial);
             motionOffhandVisual::fishInHand(anchor);
             motionConsumableVisual::prepare(anchor,sharedStage.serial);
+            motionModBow::prepare(anchor,sharedStage.serial);
             itemGallery::tick(anchor,sharedStage.serial);
             liveThrowAim::prepare(anchor);
             motionFist::prepare(anchor);
@@ -2854,8 +2912,10 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
                 // The measured-contact trial claims the right grip while it holds. With the VHVR entry the
                 // hold needs the left grip only, so the right grip stays the quick wheel.
                 gesture=controllerUiFixture::publishGesture(liveFrame.hands,head,GetTickCount64(),motionVisual::poseReady&&motionHandVisual::ready&&motionVisual::wieldPose.active&&!motionVisual::wieldState.vhvrEntry(),
-                    motionVisual::poseReady&&motionHandVisual::ready&&motion::bowDrawAsset(motionVisual::item,motionVisual::guid,motionVisual::rangedAnimationRequested&&controllerUiFixture::bowDrawRequested)?((uint64_t(motionVisual::item)<<32)|motionVisual::sourceHandle):0,
-                    motionVisual::poseReady&&motionHandVisual::ready?motionVisual::bowGeometry:motion::BowPhysicalGeometry{});
+                    motionVisual::poseReady&&motionHandVisual::ready&&motion::bowDrawAsset(motionVisual::item,motionVisual::guid,motionVisual::rangedAnimationRequested&&controllerUiFixture::bowDrawRequested)?motionVisual::bowBinding(motionVisual::item,motionVisual::sourceHandle):
+                    motionModBow::drawable(sharedStage.serial)?motionModBow::geometry.binding:0,
+                    motionVisual::poseReady&&motionHandVisual::ready&&motionVisual::bowGeometry.binding?motionVisual::bowGeometry:
+                    motionModBow::drawable(sharedStage.serial)&&motionHandVisual::ready?motionModBow::geometry:motion::BowPhysicalGeometry{});
                 menuPointer::frame(liveFrame.hands,head,GetTickCount64());
                 bugReport::frame(liveFrame.hands,head,GetTickCount64());
                 {const bool held=motionVisual::poseReady&&motionHandVisual::ready;
@@ -2869,7 +2929,8 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
                     if(motionVisual::contextReady&&motionVisual::contextFrame==liveFrame.frame){
                         const auto root=rootCamera::snapshot();
                         const auto shield=attachmentObserver::shieldAppearance(root.entity,motionVisual::scene,motionVisual::view,root.world,GetTickCount64());
-                        if(shield.entity&&shield.item){guard.binding=(uint64_t(shield.item)<<32)|shield.handle;guard.shield=true;}
+                        // The mod's bow in the left hand: the shield is put aside meanwhile (motion_shield_visual.hpp), no guard with it.
+                        if(shield.entity&&shield.item&&!controllerUiFixture::modBowItem.load()){guard.binding=(uint64_t(shield.item)<<32)|shield.handle;guard.shield=true;}
                         else if(motionVisual::poseReady&&motionHandVisual::ready&&motionVisual::meleeWeapon.binding&&motionVisual::meleeWeapon.twoHanded){
                             guard.binding=motionVisual::meleeWeapon.binding;guard.twoHandWeapon=true;guard.weaponForward=motionVisual::meleeWeapon.forward;}
                     }
@@ -3067,7 +3128,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
     if(worldNativeDiagnostic)worldSharedStages::write(sharedStage);
     pair=retainedPair.load(std::memory_order_acquire);
     if(active.load(std::memory_order_acquire) && !claimed.exchange(true))probe(view,context,parameters,target);
-    else if(active.load()&&pair&&!pair->failed&&!done.load()&&!originalDeferred&&(calibrationFrames>1||worldNativeDiagnostic)&&reinterpret_cast<uintptr_t>(view)==pair->originalView&&
+    else if(active.load()&&pair&&!pair->failed&&!done.load()&&!originalDeferred&&!failureRecovery::held()&&(calibrationFrames>1||worldNativeDiagnostic)&&reinterpret_cast<uintptr_t>(view)==pair->originalView&&
             read<uint64_t>(read<uintptr_t>(reinterpret_cast<uintptr_t>(context)+8)+0x18)!=pair->serial){
         try{
             bool ready=true;
@@ -3077,6 +3138,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
                 else{pair->xrAttemptSerial=serial;ready=beginLiveFrame(pair->originalView);
                     if(!ready)logFile->event("world_tracking_frame_deferred","\"frame\":"+std::to_string(liveFrame.frame)+",\"serial\":"+std::to_string(serial));}
             }
+            if(ready&&failureRecovery::due(failureRecovery::failAt,++failureRecovery::attempts))throw std::runtime_error("test failure (EVR_TEST_FAIL_AT)");
             if(ready)recordPair(*pair,context,parameters,target);
         }
         catch(const std::exception& e){pair->failed=true;selectView(pair->scene,pair->originalView);logFile->event("calibration_series_failure","\"reason\":"+jsonString(e.what()));}
@@ -3655,6 +3717,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         if(bodyUpload::requested)optional("body_upload",[&]{bodyUpload::install();},[&]{bodyUpload::requested=false;});
         if(sharedPointLights::requested)optional("shared_point_lights",[&]{sharedPointLights::install();},[&]{sharedPointLights::requested=false;});
         if(liveXr)optional("eye_exposure",[&]{eyeExposure::install();},[&]{});
+        if(liveXr)optional("combat_camera_override",[&]{combatCameraOverride::install();},[&]{});   // the fog dragon's camera kept off in VR
         if(sharedCullingCamera||desktopSkipVfx||stableFrustumBridge::observeEyes)optional("stable_frustum",[&]{stableFrustumBridge::install();},[&]{});
         if(desktopSkipVfx)optional("vfx_culling",[&]{vfxCulling::install();},[&]{});
         if(giShare::requested||giShare::borrowScreen)optional("gi_share",[&]{giShare::install();},[&]{giShare::requested=false;});
@@ -3757,6 +3820,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             // kept on the ticks of the event selection hook, which the early Impact (world-live-melee-contact.txt) installs.
             aimMark::reachOf=&liveTargets::aimReach;   // the ground of the feet always; creatures when their list is kept
             if(targetGate){controllerUiFixture::liveMeleeTargetGate=true;liveTargets::requested=true;targetMark::install();
+                {char v[4]{};if(GetEnvironmentVariableA("EVR_MELEE_TARGET_GATE",v,sizeof v)==1&&v[0]=='0')controllerUiFixture::liveMeleeTargetGate=false;}   // diagnostic: strokes attack without a target, the list kept
                 controllerUiFixture::targetHealth=&liveTargets::healthNow;
                 controllerUiFixture::hitWatchNear=[](const evr::motion::LiveMeleeWeapon& w,float radius,controllerUiFixture::HitNear* out,size_t maximum,uint64_t now){
                     std::array<liveTargets::NearBlade,16> nearby{};const auto n=liveTargets::nearBlade(w,radius,nearby.data(),std::min(maximum,nearby.size()),now);
@@ -3923,6 +3987,9 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                 consumableHoldInput::consumableAt=&liveActionbars::consumableAt;consumableHoldInput::selectedSlot=&liveActionbars::selectedSlot;
                 // Its model in the right hand (motion_consumable_visual.hpp): with the tracked hands drawn. EVR_CONSUMABLE_MODEL=0: off.
                 motionConsumableVisual::requested=motionConsumableVisual::wanted()&&motionVisual::requested&&motionHandVisual::requested;
+                // The equipment's bow not on the action bar is shown by the mod (motion_mod_bow_visual.hpp), with the draw route. EVR_MOD_BOW=0: off.
+                motionModBow::requested=holsters::modBowWanted()&&motionVisual::requested&&motionHandVisual::requested&&motionVisual::rangedAnimationRequested&&controllerUiFixture::bowDrawRequested;
+                holsters::modBowEnabled=motionModBow::requested;
                 itemGallery::configure();
                 // keen::actor::StateFlag FloatingOnWater (43) / UnderWater (44) of the local actor within the last half second.
                 controllerUiFixture::actorSwimming=[](uint64_t now){std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;
@@ -4133,7 +4200,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             require(MH_EnableHook(destroyOwnerTarget),"MH_EnableHook scene lifecycle");destroyOwnerEnabled=true;
             logFile->event("calibration_scene_hook_enabled","\"rva\":\"0xf39d0\",\"pattern\":\"40 53 48 83 EC 20 48 8B 19 48 85 DB\"");
         }
-        if(dlssEval::requested||(dlssEval::depthNotes&&liveXr))dlssEval::install();
+        if(dlssEval::requested||((dlssEval::depthNotes||dlssEval::resetRightEvery>0)&&liveXr))dlssEval::install();
         active=true; require(MH_EnableHook(target),"MH_EnableHook");enabled=true;renderWasEnabled=true;
         logFile->event("view_resource_hook_enabled","\"mode\":"+jsonString(detailFactoryProbe?"unused_detail_factory":renderCalibration?"native_retained_calibration":"unused_view_lifecycle_only")+",\"rva\":\"0x129fc0\"");
         const unsigned budgetSeconds=worldSession?(sessionMinutes?sessionMinutes*60:400u*86400u):worldEndurance?420:renderCalibration?60:preparedSessionProbe?40:10;
@@ -4208,6 +4275,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         giShare::uninstall();
         objectWatch::uninstall();
         statusVignette::uninstall();
+        combatCameraOverride::uninstall();
         if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
         vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowUpdateOnce::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
         shadowProjection::disable();
@@ -4256,6 +4324,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             giShare::uninstall();
             objectWatch::uninstall();
             statusVignette::uninstall();
+            combatCameraOverride::uninstall();
             if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
             vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowUpdateOnce::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
             try{equipmentObserver::disable();}catch(...){}

@@ -20,10 +20,12 @@ layout(set = 0, binding = 2) uniform Extra {
     vec4 ownTan;       // tan of that picture's fov
     vec4 history;      // x: the share of the other eye's new colour mixed into the own history (EVR_EYE_WARP_HISTORY_MIX); y: the
                        // box widened by this many times its size on each side (EVR_EYE_WARP_HISTORY_BOX; 0: as it is), below 0 no box
+    mat4 ownToNewStill;  // the own last picture's view space -> this frame's, not carried by the walk: the player's own things' history
 } extra;
 layout(set = 0, binding = 3) uniform sampler2D motionTex;    // the things' own motion (eye_warp.vert)
 layout(set = 1, binding = 0) uniform sampler2D otherColor;   // mode 2: the other eye's picture of this frame
 layout(set = 1, binding = 1) uniform sampler2D otherDepth;   // mode 2: the other eye's depth of this frame
+layout(set = 1, binding = 3) uniform sampler2D otherMotion;  // that picture's things' own motion (the player's own things, ownThing)
 layout(push_constant) uniform Warp {
     mat4 oldToNew;
     vec4 oldTan;
@@ -43,6 +45,9 @@ layout(location = 0) out vec4 outColor;
 // bilinear read as before.
 layout(constant_id = 0) const int sharpRead = 3;
 layout(constant_id = 1) const float flatPixels = 0.3;   // include/evr/eye_warp.hpp, EVR_EYE_WARP_FLAT
+layout(constant_id = 2) const int motionPick = 1;      // include/evr/eye_warp.hpp, EVR_EYE_WARP_MOTION_PICK (placeAtDistance)
+layout(constant_id = 3) const float ownNear = 2.0;     // the player's own things (eye_warp.vert ownThing; EVR_AFW_OWN_NEAR)
+layout(constant_id = 4) const float ownMotion = 1.5;   // EVR_AFW_OWN_MOTION
 // sharpRead = 3 (the default since 2026-10-23): Lanczos-3 over 6 x 6 texels, never below 0. The six weights of an axis
 // from three sines: sin(pi (i - f)) = -(-1)^i sin(pi f), sin(pi (i - f) / 3) by the angle difference (the first form, with
 // two sines a tap, cost the Mock about 5 frames a second).
@@ -88,6 +93,20 @@ vec3 colourAt(sampler2D tex, vec2 at) {
     return mix(texture(tex, at).rgb, max(c, vec3(0.0)), 0.8);
 }
 float toDistance(float d) { return min(d > 1e-7 ? warp.params.y / d : warp.params.z, warp.params.z); }
+// The player's own things (eye_warp.vert, 2026-10-24): params.w = mode + 4 x separation.
+float modeOf() { return mod(warp.params.w, 4.0); }
+int separationOf() { int s = int(warp.params.w / 4.0 + 0.01); return s >= 3 ? s - 2 : s; }
+bool ownByDistance() { return int(warp.params.w / 4.0 + 0.01) >= 3; }
+bool ownIn(sampler2D depth, sampler2D motion, vec2 at) {
+    if (toDistance(textureLod(depth, at, 0.0).r) >= ownNear) return false;
+    if (ownByDistance()) return true;
+    vec2 m = textureLod(motion, at, 0.0).xy * vec2(textureSize(motion, 0));
+    return dot(m, m) >= ownMotion * ownMotion;
+}
+bool ownThing(vec2 at) { return ownIn(depthTex, motionTex, at); }
+// whether this pass takes the kept surface at the place: the world alone leaves the player's own things out, and they alone the world
+bool wanted(vec2 at) { int s = separationOf(); return s == 0 || (s == 1) != ownThing(at); }
+vec2 motionAt(vec2 at) { return separationOf() == 1 && ownThing(at) ? vec2(0.0) : textureLod(motionTex, at, 0.0).xy; }
 // The kept depth between its texels (bilinear; the reversed depth is linear over a plane), so that the walk along the
 // ray crosses a surface at one place and not at a texel's step: the crossing's place, and the colour taken there,
 // are then true to a fraction of a pixel (with the nearest texel the strip beside an edge sat up to a pixel off).
@@ -109,15 +128,23 @@ vec2 placeIn(vec3 p, vec4 tan) {
 }
 // The kept picture's place whose thing has moved on to the place `at` (its own motion carried on, eye_warp.vert): one step
 // back along the motion found there (the motion is smooth within a thing).
-vec2 sourceOf(vec2 at) { return warp.motion.x != 0.0 ? at + textureLod(motionTex, at, 0.0).xy * warp.motion.x : at; }
+vec2 sourceOf(vec2 at) { return warp.motion.x != 0.0 ? at + motionAt(at) * warp.motion.x : at; }
 vec2 place(vec3 p) { return sourceOf(placeIn(p, warp.oldTan)); }
 // A grid cell's walk (2026-10-23): a point of the ray at distance s looks for the kept picture's place whose thing has moved
 // there by the motion of the cell's corner at that depth - its nearest corner's near, its farthest's far (a thing moving
 // by itself in front of the world: the staff in the hand, carried on with the player while the world is carried by the walk).
+// motionPick (2026-10-24, the held tool's edges sawn a cell wide while walking): of the two motions, the one whose place holds the
+// kept surface at the ray's distance - the thing in front where the ray meets it, the world behind elsewhere, per pixel. Before,
+// the middle of the cell's distances chose, the same for the whole cell.
 vec2 placeAtDistance(vec3 p, float s) {
     if (warp.motion.x == 0.0) return placeIn(p, warp.oldTan);
+    vec2 base = placeIn(p, warp.oldTan);
+    if (motionPick != 0) {
+        vec2 a = base + cellMotion.xy, b = base + cellMotion.zw;
+        return abs(distanceAt(a) - s) <= abs(distanceAt(b) - s) ? a : b;
+    }
     float t = cellRange.y > cellRange.x ? clamp((s - cellRange.x) / (cellRange.y - cellRange.x), 0.0, 1.0) : 0.0;
-    return placeIn(p, warp.oldTan) + mix(cellMotion.xy, cellMotion.zw, step(0.5, t));
+    return base + mix(cellMotion.xy, cellMotion.zw, step(0.5, t));
 }
 bool inside(vec2 at) { return all(greaterThanEqual(at, vec2(0.0))) && all(lessThanEqual(at, vec2(1.0))); }
 // The eye's own last drawn picture where it shows the same surface (2026-10-23, the user: "max still shakes - not usable
@@ -130,12 +157,16 @@ bool inside(vec2 at) { return all(greaterThanEqual(at, vec2(0.0))) && all(lessTh
 // space, at: its place in the kept picture, made: the colour read there.
 vec3 withHistory(vec3 p, vec2 at, vec3 made) {
     vec3 n = (warp.oldToNew * vec4(p, 1.0)).xyz;
-    mat3 Rh = mat3(extra.ownToNew);
-    vec3 o = (n - extra.ownToNew[3].xyz) * Rh;   // Rh^T (n - Th)
+    mat4 ownTo = separationOf() == 2 ? extra.ownToNewStill : extra.ownToNew;   // the player's own things: uncarried
+    mat3 Rh = mat3(ownTo);
+    vec3 o = (n - ownTo[3].xyz) * Rh;   // Rh^T (n - Th)
     float d = -o.z;
     if (d < 0.02) return made;
     vec2 h = placeIn(o, extra.ownTan);
     if (!inside(h)) return made;
+    // the own picture's player's own things (carried with the world here, so not where they now are)
+    if (separationOf() == 1 && ownIn(otherDepth, otherMotion, h)) return made;
+    if (separationOf() == 2 && !ownIn(otherDepth, otherMotion, h)) return made;
     // something else lies there in the own picture (moved, or hidden then). warp.motion.w 2: the own picture's distances
     // around the place - an edge's pixel has the colour of both sides and the depth of one, and the outlines kept the other
     // eye's colour (2026-10-23, the user: "the outlines still shake, even standing"; Mock: what flickered still were the
@@ -175,9 +206,9 @@ vec3 withHistory(vec3 p, vec2 at, vec3 made) {
 vec3 pointAt(vec2 at, float d) {
     return vec3((warp.oldTan.x + (warp.oldTan.y - warp.oldTan.x) * at.x) * d, (warp.oldTan.w - (warp.oldTan.w - warp.oldTan.z) * at.y) * d, -d);
 }
-bool ownHistory() { return warp.motion.w > 0.5 && warp.params.w > 0.5 && warp.params.w < 1.5; }
+bool ownHistory() { return warp.motion.w > 0.5 && modeOf() > 0.5 && modeOf() < 1.5; }
 // the place a walk looks at: the grid's by its cell's corners, the hole fill's (mode 2) by the motion found there
-vec2 walkPlace(vec3 p, float s) { return warp.params.w > 1.5 ? place(p) : placeAtDistance(p, s); }
+vec2 walkPlace(vec3 p, float s) { return modeOf() > 1.5 ? place(p) : placeAtDistance(p, s); }
 // the point of the ray p(s) = ((-s - b.z) / a.z) * a + b at the kept eye's distance s
 vec3 along(vec3 a, vec3 b, float s) { return ((-s - b.z) / a.z) * a + b; }
 // Walks on from step i (even in 1 / s, steps of a pixel): the distance of the next crossing of the ray with the kept
@@ -197,10 +228,12 @@ float nextCrossing(vec3 a, vec3 b, float iNear, float iFar, int steps, inout int
         // when the next step would be past it.
         if (!behind && front && warp.motion.y > 0.5 && i <= steps) {
             float sNext = 1.0 / mix(iNear, iFar, float(i) / float(steps));
-            if (there < sNext && abs(there - distanceAt(walkPlace(along(a, b, there), there))) <= 0.02 * there + 0.003) {
+            vec2 pt = walkPlace(along(a, b, there), there);
+            if (there < sNext && abs(there - distanceAt(pt)) <= 0.02 * there + 0.003) {
                 front = false;
                 sPrev = s;
-                return there;
+                if (wanted(pt)) return there;
+                continue;
             }
         }
         if (behind && front) {
@@ -212,8 +245,10 @@ float nextCrossing(vec3 a, vec3 b, float iNear, float iFar, int steps, inout int
             float m = 0.5 * (lo + hi);
             front = false;
             sPrev = s;
-            // a crossing: the surface holds the ray's distance at the place - not the edge of something nearer
-            if (abs(m - distanceAt(walkPlace(along(a, b, m), m))) <= 0.02 * m + 0.003) return m;
+            // a crossing: the surface holds the ray's distance at the place - not the edge of something nearer (and of this pass:
+            // the world's or the player's own things', wanted)
+            vec2 pm = walkPlace(along(a, b, m), m);
+            if (abs(m - distanceAt(pm)) <= 0.02 * m + 0.003 && wanted(pm)) return m;
             continue;
         }
         front = !behind;
@@ -265,7 +300,7 @@ void main() {
     vec3 rn = vec3(warp.newTan.x + (warp.newTan.y - warp.newTan.x) * f.x, warp.newTan.w - (warp.newTan.w - warp.newTan.z) * f.y, -1.0);
     mat3 R = mat3(warp.oldToNew);
     vec3 a = rn * R, b = -(warp.oldToNew[3].xyz * R);   // R^T rn, -R^T T
-    if (warp.params.w > 1.5) {
+    if (modeOf() > 1.5) {
         vec4 plain = vec4(colourAt(colorTex, f), 1.0);   // the picture as it is: the last resort
         if (a.z >= -1e-3) { outColor = plain; return; }
         float sNear = 0.12, sFar = warp.params.z;
@@ -275,7 +310,7 @@ void main() {
             float s = distanceAt(place(along(a, b, 1.0)));
             s = distanceAt(place(along(a, b, s)));
             vec3 p = along(a, b, s);
-            outColor = hiddenFromOther(p) ? vec4(colourAt(colorTex, place(p)), 1.0) : beyondTheOccluder(rn, plain);
+            outColor = hiddenFromOther(p) && wanted(place(p)) ? vec4(colourAt(colorTex, place(p)), 1.0) : beyondTheOccluder(rn, plain);
             return;
         }
         int steps = clamp(int(ceil(gap)), 2, 128);
@@ -297,6 +332,7 @@ void main() {
     float gap = 0.0;
     if (stepped) gap = length((walkPlace(along(a, b, sFar), sFar) - walkPlace(along(a, b, sNear), sNear)) * size);   // how far the ray's places in the kept picture lie apart
     if (gap < flatPixels) {   // one surface: the stretched place is the right one
+        if (!wanted(uv)) discard;
         vec3 c = colourAt(colorTex, uv);
         outColor = vec4(ownHistory() ? withHistory(pointAt(uv, dist), uv, c) : c, 1.0);
         return;
@@ -316,6 +352,7 @@ void main() {
     }
     // a walk below the old tolerance (0.75 pixel) that found no surface keeps the stretched place, as before 2026-10-23,
     // instead of a hole: only the places the walk finds are taken more exactly (EVR_EYE_WARP_FLAT)
-    if (warp.params.w > 0.5 && gap >= max(0.75, warp.motion.z)) discard;
+    if (modeOf() > 0.5 && gap >= max(0.75, warp.motion.z)) discard;
+    if (!wanted(uv)) discard;
     outColor = vec4(colourAt(colorTex, uv), 1.0);
 }

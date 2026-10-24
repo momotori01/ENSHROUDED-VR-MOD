@@ -78,8 +78,11 @@ struct HolsterGame {
     bool shieldKept=false;        // a shield lies in the player's inventory, to be worn again
     uint8_t weaponSlot=0xff;      // the slot last selected with something other than a ranged weapon in it
     uint8_t rangedBarSlot=0xff;   // the action bar's slot that holds the equipment's ranged weapon (0xff: none)
+    bool modBow=false;            // the equipment's bow (none on the bar) is shown by the mod, not held by the ranged-combat bit
 };
-struct HolsterMemory {bool armed=false;uint8_t slot=0xff;};
+// modBow: the mod shows the equipment's bow in the left hand while the game's hand is bare (bowFrom: the slot that was
+// selected when it was taken; 16: bare hands).
+struct HolsterMemory {bool armed=false;uint8_t slot=0xff;bool modBow=false;uint8_t bowFrom=16;};
 constexpr uint8_t holsterNoSlot=0xff;
 struct HolsterOrder {
     bool change=false;bool arm=false;
@@ -97,7 +100,8 @@ inline HolsterOrder holsterOrder(HolsterAct act,const HolsterGame& g,HolsterMemo
     // The bow of the equipment is held by the ranged-combat bit over the slot that stays selected: letting the bit go
     // is enough. A bow of the action bar goes back to the slot that was selected before it.
     if(act==HolsterAct::Ranged){
-        if(m.armed){o.arm=m.armed=false;o.change=true;}
+        if(m.modBow){m.modBow=false;o.arm=m.armed=false;if(m.bowFrom<16)o.select=m.bowFrom;o.change=true;}   // away: what the hand held before
+        else if(m.armed){o.arm=m.armed=false;o.change=true;}
         else if(inHand&&g.selectedIsRanged){
             if(g.weaponSlot<16&&g.weaponSlot!=g.selected){m.slot=g.weaponSlot;o.select=g.weaponSlot;o.change=true;}
             else bare();
@@ -106,9 +110,15 @@ inline HolsterOrder holsterOrder(HolsterAct act,const HolsterGame& g,HolsterMemo
         // from the shoulder slows the walk" - the ranged-combat key is the game's aiming key, and held it halves the walk:
         // Mock game-20261018-124517, 3.6 m against 6.2 / 8.5 m in the same time). Held by the key only without one there.
         else if(g.rangedBarSlot<16){o.select=g.rangedBarSlot;o.change=true;}
+        // Not on the bar (2026-10-24, user: "the action bar is full in ordinary play"; "not slowed while the string is
+        // not drawn, and drawing it in the air has to float"): the ranged-combat bit is the game's aiming - held, the walk
+        // is slowed all the time and the bow aims in the air. The mod shows the bow instead, the game's hand bare; the
+        // draw presses the game's LT (bow_draw.hpp), which brings the game's own bow and its aim for as long as it is held.
+        else if(g.rangedWorn&&g.modBow){m.modBow=true;m.bowFrom=inHand?g.selected:16;if(inHand){m.slot=g.selected;o.select=16;}o.arm=m.armed=false;o.change=true;}
         else if(g.rangedWorn){o.arm=m.armed=true;o.change=true;}
     }else if(act==HolsterAct::Weapon){
-        if(m.armed||inHand)bare();
+        if(m.modBow){m.modBow=false;o.arm=m.armed=false;o.change=true;}  // the mod's bow away: bare hands (the slot is remembered)
+        else if(m.armed||inHand)bare();
         else{o.select=m.slot<16?m.slot:0;o.change=true;}                // nothing remembered (the game began bare): the first slot
     }else if(act==HolsterAct::Shield){
         if(g.shieldWorn){o.shield=1;o.change=true;}
