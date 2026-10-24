@@ -92,6 +92,25 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 - **Quick slots:** hold right B, point your hand at the slot you want and let go.
 - **Tools** (pickaxe, axe, ...): swing them like weapons. You aim with your right hand's direction.
 
+### Building
+- **Enter / leave building mode:** left trigger with the building hammer in your hand.
+- **Build:** right trigger.
+- **Choose what to build:** hold left B (or right B), choose with the right stick, let go to take it.
+- **Hold the right grip** - it is the gamepad's RT - for the combined inputs:
+
+| Right grip held + | Does |
+| --- | --- |
+| Right stick left / right | Turn the piece by 90 degrees |
+| Right stick up / down | Move the piece nearer / farther |
+| Left stick left / right | Turn the piece a little |
+| Left stick up / down | Raise / lower the piece |
+| Right B | Undo |
+| Right A | Material catalog |
+| Left A | Snapping on / off |
+| Left grip | Take the material you are looking at |
+
+- While the right grip is held, the right stick does not turn you. Tilting and scaling a piece (the gamepad's RT + right stick) are not available in VR.
+
 ### Food, potions and other items
 - Choosing a consumable on the quick slots puts it in your right hand (a short vibration) instead of using it at once. Bring it to your mouth or pull the right trigger to use it.
 - Each item is held the way it would be in life: bottles, cups and bombs in the closed hand, plates, bowls and handfuls (berries, nuts, popcorn, mushrooms) on the open palm, a whole fish by its tail.
