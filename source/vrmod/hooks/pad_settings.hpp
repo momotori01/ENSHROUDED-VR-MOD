@@ -149,7 +149,9 @@ inline void plate(const Pose& camera) noexcept {
         if(!finite(camera.position)||!std::isfinite(camera.orientation.w))return;
         const auto q=normalized(camera.orientation);
         const float pose[7]{q.x,q.y,q.z,q.w,camera.position.x,camera.position.y,camera.position.z};
-        const int r=setPlate(1,pose);if(!r)plateSet=true;
+        // 2 while playing: the plate stays ahead of the camera and the layer still takes the locked enemy's bar out of it to the
+        // enemy (as with the plate ahead of the head); 1 in a menu (as the motion VR's fixed menu plate - nothing taken out)
+        const int r=setPlate(controllerUiFixture::liveScreenGameplay.load()?2:1,pose);if(!r)plateSet=true;
         if(plateLogs<3||(r&&plateLogs<20)){++plateLogs;std::ostringstream o;o<<std::setprecision(6)<<"\"result\":"<<r<<",\"orientation\":["<<q.x<<','<<q.y<<','<<q.z<<','<<q.w<<"],\"position\":["
             <<camera.position.x<<','<<camera.position.y<<','<<camera.position.z<<"],\"frame\":"<<liveFrame.frame;logFile->event("pad_third_person_plate",o.str());}
     }catch(...){}

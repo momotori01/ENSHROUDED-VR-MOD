@@ -2928,6 +2928,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
     if(game::padStyle.load()&&!motionVisual::requested&&earlyPrepared&&pair&&!pair->failed&&!done.load()){padOnline::frame(pair->scene,pair->originalView,sharedStage.serial);
         keyScript::frame(liveFrame.frame,keyScript::installed?menuPointer::gameWindow():nullptr);   // the Mock's keys (as in the motion branch below)
         padSettings::frame(menuPointer::screen.load());
+        targetMark::frame(liveFrame.frame,GetTickCount64());   // the locked enemy's bar above it (target_mark.hpp)
         // the VR bug report (its button: the pad panel's left stick click), after the panel (it takes the overlay elsewhere)
         {const motion::GestureHead head{liveFrame.head,liveFrame.headFlags,liveFrame.frame,liveFrame.sessionGeneration,liveFrame.hands.originGeneration,liveFrame.time};
          bugReport::frame(liveFrame.hands,head,GetTickCount64());}}
@@ -3289,6 +3290,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                 remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;
                 controllerUiFixture::staminaOf=&liveTargets::staminaOf;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
                 inputRanged::liveBowWatch=true;bowSpawnObserver::remoteAlways=true;}
+            // The locked enemy's health bar and lock-on arrow above the enemy, not on the UI plate (2026-10-25, user: "in TPS and
+            // FPS the enemy's lock is on the UI - the focus does not match, very hard to see; make it look as in VR"): the list of
+            // creatures (kept on the event selection hook's ticks - installed for the pad styles below) and the mark's part of
+            // motion VR (target_mark.hpp: the HUD image's part about the target goes to it, the layer's evrSetTargetHud).
+            liveTargets::requested=true;targetMark::install();
             logFile->event("pad_mode_enabled","\"style\":\""+view+"\",\"pitch_lock\":"+(game::padPitchLock.load()?"true":"false")+",\"tilt_degrees\":"+std::to_string(game::padTiltDegrees.load())+
                 ",\"head_steers\":"+(inputHeadIdle::vrLocomotion?"true":"false")+",\"online\":"+(onlineSync::requested?"true":"false"));
         }
@@ -4260,10 +4266,13 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         if(inputDirection::requested)inputDirection::install();
         // A pad style's host parts (as onlineFlat::installHostParts): the event selection (the guests' strokes), the parry and
         // the shots' spawn; each optional.
-        if(game::padStyle.load()&&onlineSync::requested){
+        // The event selection also offline (2026-10-25): its ticks keep the creatures for the locked target's bar (liveTargets).
+        if(game::padStyle.load()){
             const auto part=[](const char* name,void(*install)()){try{install();}catch(const std::exception& e){logFile->event("optional_hook_skipped","\"hook\":"+jsonString(name)+",\"reason\":"+jsonString(e.what()));}};
-            motionEventSelection::hostOnly=true;part("motion_event_selection",[]{motionEventSelection::install();});part("parry",[]{parryObserver::install();});part("bow_spawn",[]{bowSpawnObserver::install();});
-            logFile->event("pad_host_parts","\"parry\":"+std::string(parryObserver::enabled?"true":"false"));}
+            motionEventSelection::hostOnly=true;part("motion_event_selection",[]{motionEventSelection::install();});
+            if(onlineSync::requested){part("parry",[]{parryObserver::install();});part("bow_spawn",[]{bowSpawnObserver::install();});}
+            logFile->event("pad_host_parts","\"online\":"+std::string(onlineSync::requested?"true":"false")+",\"event_selection\":"+(motionEventSelection::enabled?"true":"false")+
+                ",\"parry\":"+(parryObserver::enabled?"true":"false"));}
         if(uiStateObserver::requested)uiStateObserver::install();
         if(equipmentObserver::requested)equipmentObserver::install();
         // 1.0: the readiness, shared-state, terrain and download diagnostics are read-only records; one whose check of the new

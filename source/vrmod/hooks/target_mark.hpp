@@ -62,6 +62,14 @@ inline void frame(uint64_t xrFrame,uint64_t now){
         {std::lock_guard<std::mutex> lock(anchorMutex);a=anchor;t=trackingToAnchor;at=anchorMs;camera=nativePosition;cameraOrientation=nativeOrientation;fov=nativeFov;}
         const bool anchored=at&&now>=at&&now-at<=500;
         if(!anchored)locked=false;
+        // The bar only out of the play screen's HUD (2026-10-25, controller VR on the headset: "the UI gets a hole at times" - the
+        // bag was open, the target kept for its 3 s, and the bag's picture had its part cut out to the target: report 154925,
+        // frames 9547..9769). Motion VR's menus fix the plate and the layer cuts nothing then; the first-person pad style's
+        // plate stays ahead of the head in the menus. In a menu the layer is told at once (setHud with nothing).
+        const bool hudScreen=controllerUiFixture::liveScreenGameplay.load()&&now>=controllerUiFixture::liveScreenAt.load()&&now-controllerUiFixture::liveScreenAt.load()<=500;
+        {static bool wasHudScreen=true;static unsigned screenLogs=0;
+         if(hudScreen!=wasHudScreen){wasHudScreen=hudScreen;if(!hudScreen&&setHud)setHud(nullptr,0);
+            if(screenLogs++<400)logFile->event("target_hud_screen","\"frame\":"+std::to_string(xrFrame)+",\"play_screen\":"+(hudScreen?"true":"false"));}}
         // The bar after the target is lost (2026-10-19 18:45, user: "when the enemy leaves my view the health bar shows in
         // the UI"; headset run 20261019-183558: the game's combat target went for 1..1.5 s at a time - 7322..7455,
         // 7854..7940, 8282..8407 - while the game may still show the bar of the enemy it was): for up to 3 s the last
@@ -80,7 +88,7 @@ inline void frame(uint64_t xrFrame,uint64_t now){
             point=game::trackingPointFromWorld(a,t,cameraPosition(rootCamera,ahead,1));
             const float v[3]={point.x,point.y,point.z};
             // The health bar's route as well, for the fixture's point (the HUD image's part there moves to it).
-            if(setHud&&std::isfinite(fov)&&fov>.2f&&fov<3.f){
+            if(setHud&&hudScreen&&std::isfinite(fov)&&fov>.2f&&fov<3.f){
                 const auto world=cameraPosition(rootCamera,ahead,1);
                 const Vec3 offset{float(relativeQ32(world.x,camera.x)),float(relativeQ32(world.y,camera.y)),float(relativeQ32(world.z,camera.z))};
                 const Vec3 seen=rotate(inverse(normalized(cameraOrientation)),offset);
@@ -101,7 +109,7 @@ inline void frame(uint64_t xrFrame,uint64_t now){
             if(chevron&&setMark(v,1))locked=false;
             // The game's health bar: its anchor as the game's camera sees it (game camera space, +z ahead).
             bool hud=false;Vec3 hudPoint{};float slopes[2]{};
-            if(locked&&setHud&&std::isfinite(fov)&&fov>.2f&&fov<3.f){
+            if(locked&&setHud&&hudScreen&&std::isfinite(fov)&&fov>.2f&&fov<3.f){
                 const WorldPositionQ32 hudAnchor{base[0],addQ32(base[1],double(box?target.height:hudWithoutBox)),base[2]};
                 const Vec3 offset{float(relativeQ32(hudAnchor.x,camera.x)),float(relativeQ32(hudAnchor.y,camera.y)),float(relativeQ32(hudAnchor.z,camera.z))};
                 const Vec3 seen=rotate(inverse(normalized(cameraOrientation)),offset);

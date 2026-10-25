@@ -59,6 +59,7 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 Choose **controller VR 【FPS】** or **controller VR 【TPS】** in "Enshrouded VR setting.exe". The headset shows the game; you play with an Xbox controller and the game's own controls.
 - **FPS**: first person. You aim where your head looks. The head bob stays out, as in motion VR.
 - **TPS**: the game's own third-person camera. You aim with the right stick; the HUD and the crosshair stay in front of the game camera.
+- The locked enemy's health bar and lock-on arrow stand above the enemy, as in motion VR.
 
 In the start menu, a small panel lists what the controller changes there:
 - **RT**: switch between FPS and TPS

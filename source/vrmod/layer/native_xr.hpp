@@ -147,8 +147,10 @@ extern "C" __declspec(dllexport) int evrSetUiCursor(float u,float v,int shown) n
 // 1.5 m ahead of `pose` (the LOCAL space; orientation x y z w, then position x y z) instead of ahead of the head, 0 =
 // ahead of the head again. Without a call for two seconds it is ahead of the head.
 std::mutex uiPlateLock;Pose uiPlateOrigin=identityPose();std::atomic<int> uiPlateFixed{0};std::atomic<uint64_t> uiPlateAt{0};
+// fixed 2 (the third-person pad style while playing, hooks/pad_settings.hpp): fixed as 1, and the locked enemy's health bar is still
+// taken out of the image to the enemy, the rest of the plate staying where it is fixed.
 extern "C" __declspec(dllexport) int evrSetUiPlate(int fixed,const float* pose) noexcept {
-    if(fixed<0||fixed>1||(fixed&&!pose))return 2;
+    if(fixed<0||fixed>2||(fixed&&!pose))return 2;
     if(fixed){
         float norm=0;for(unsigned i=0;i<7;i++)if(!std::isfinite(pose[i]))return 2;
         for(unsigned i=0;i<4;i++)norm+=pose[i]*pose[i];
@@ -1289,7 +1291,8 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
             // The locked enemy's health bar and lock-on arrow: where the game's camera put them into the HUD image (the
             // anchor pixel), a part 380 by 180 (of 1080 rows) about it, the anchor 50 rows above its bottom - the bar and
             // the level badge stand above the arrow (bug report 20261019-141055, ui-031117: badge 341, bar 353, arrow 372).
-            std::array<float,7> hud{};const bool hudKnown=targetHudNow(hud);bool targetHud=hudKnown&&!(uiPlateFixed.load()&&GetTickCount64()-uiPlateAt.load()<=2000);
+            std::array<float,7> hud{};const bool hudKnown=targetHudNow(hud);bool targetHud=hudKnown&&!(uiPlateFixed.load()==1&&GetTickCount64()-uiPlateAt.load()<=2000);
+            const bool playPlate=placement.localSpace&&uiPlateFixed.load()==2;   // the third-person pad style's plate ahead of the camera
             // Why the bar is or is not taken out (2026-10-19 18:45, user: "the health bar shows in the UI when the enemy leaves
             // my view"): 0 no target from the hooks, 1 the plate fixed in the room (a menu), 2 the anchor off the image,
             // 3 the plate in the room's space, 4 no part (too near, or overlapping the cluster), 5 moved. Logged on each change.
@@ -1312,7 +1315,7 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                     hudCut.x1=std::min(hudCut.x1,int32_t(uiSource.width)-1);hudCut.y1=std::min(hudCut.y1,int32_t(uiSource.height)-1);
                     targetHud=hudCut.x1-hudCut.x0>=int32_t(40*s)&&hudCut.y1-hudCut.y0>=int32_t(40*s);}
             }
-            if((cluster||targetHud)&&!placement.localSpace){
+            if((cluster||targetHud)&&(!placement.localSpace||playPlate)){
                 // The plate ahead of the head as the parts around the cluster (and the health bar), and those at their points.
                 std::array<aim::PixelRect,2> cuts{};std::array<aim::QuadPart,2> moved{};size_t count=0;
                 // The locked enemy's widget stands near the middle of the game's lock camera, so it nearly always overlaps the
@@ -1335,7 +1338,9 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                     count=1;aim::plateWithout(cuts.data(),count,uiSource.width,uiSource.height,placement.width,pieces,n);if(targetHud&&cluster)hudState=4;}
                 if(count&&n&&n+count<=placement.parts.size()){
                     for(size_t i=0;i<n;++i){const auto& p=pieces[i];auto& part=placement.parts[placement.partCount++];
-                        part={p.rect.x0,p.rect.y0,p.rect.x1-p.rect.x0,p.rect.y1-p.rect.y0,false,Pose{{0,0,0,1},{p.pose.position.x,p.pose.position.y,-placement.distance}},p.width,p.height};}
+                        const Pose onPlate{{0,0,0,1},{p.pose.position.x,p.pose.position.y,-placement.distance}};
+                        // the plate fixed in the room (playPlate): its pieces where it is fixed
+                        part={p.rect.x0,p.rect.y0,p.rect.x1-p.rect.x0,p.rect.y1-p.rect.y0,placement.localSpace,placement.localSpace?compose(placement.origin,onPlate):onPlate,p.width,p.height};}
                     for(size_t i=0;i<count;++i)placement.parts[placement.partCount++]={cuts[i].x0,cuts[i].y0,cuts[i].x1-cuts[i].x0,cuts[i].y1-cuts[i].y0,true,moved[i].pose,moved[i].width,moved[i].height};
                 }
                 if(targetHud){const auto k=++targetHudFrames;
@@ -1343,7 +1348,7 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                         <<"],\"anchor\":["<<hud[0]<<','<<hud[1]<<','<<hud[2]<<"],\"slopes\":["<<hud[3]<<','<<hud[4]<<"],\"tan_half_fov\":"<<hud[5]<<",\"vertical\":"<<(hud[6]>.5f?"true":"false")
                         <<",\"with_cluster\":"<<(cluster&&clusterFits?"true":"false")<<",\"cluster_rows\":["<<clusterCut.y0<<','<<clusterCut.y1<<"],\"parts\":"<<placement.partCount;state.log->event("target_hud_part",o.str());}}
             }
-            if(targetHud&&placement.localSpace)hudState=3;
+            if(targetHud&&placement.localSpace&&!playPlate)hudState=3;
             if(hudState!=state.targetHudState&&state.targetHudStateLogs<2000){++state.targetHudStateLogs;state.targetHudState=hudState;
                 static const char* names[]={"no_target","plate_fixed","anchor_off_image","plate_in_room","no_part","moved"};
                 std::ostringstream o;o<<std::setprecision(6)<<"\"frame\":"<<frame<<",\"state\":\""<<names[std::clamp(hudState,0,5)]<<"\",\"anchor_pixel\":["<<hudX<<','<<hudY<<"],\"cluster\":"<<(cluster?"true":"false");
