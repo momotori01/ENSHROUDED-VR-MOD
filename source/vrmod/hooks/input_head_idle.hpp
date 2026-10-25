@@ -70,7 +70,7 @@ inline bool requested=false,walkingRequested=false,fixtureRequested=false;
 // The way the stick is turned back while the guard turns the sent camera. Mock game-20261014-221432: with +1 the walk
 // went 40 degrees the wrong way (head 131, guard 91, walk 51), so -1 (EVR_GUARD_STICK_SIGN=1 the other way).
 inline const float guardStickSign=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_GUARD_STICK_SIGN",v,sizeof v);return n==1&&v[0]=='1'?1.f:-1.f;}();
-inline bool vrLocomotion=false; // live play input: head camera also for buttons and airborne states (walking_head_camera.hpp)
+inline std::atomic<bool> vrLocomotion{false}; // (atomic: the pad panel switches first and third person in play, 2026-10-25) live play input: head camera also for buttons and airborne states (walking_head_camera.hpp)
 inline bool (*meleeEvidence)(uint32_t,uint64_t)=nullptr;
 // Placing by hand (pointer_aim_camera.hpp): in building mode, and while a building piece or building tool is the
 // selected item (heldPiece, set by the policy), the ray of the game's cursor starts at the right hand's pointer
@@ -303,7 +303,16 @@ inline void patch(const game::ClientInputBytes& source,game::ClientInputBytes& o
     // the consumable first: its emptying of the hand is a holster request, which goes out with this input
     consumableHoldInput::apply(source,output,tick);
     holsterInput::apply(source,output,tick);
-    if(holsterInput::requested){const auto ms=GetTickCount64();game::applyAreaLoot(output,ms);game::applySwimInput(output,ms);}
+    if(holsterInput::requested){const auto ms=GetTickCount64();game::applyAreaLoot(output,ms);game::applySwimInput(output,ms);game::applySpecialInput(output,ms);}
+    // EVR_INPUT_INJECT (diagnostic, 2026-10-24: the bow's strong shot with the equipment bow): "from-to:hexbits,..." ORs the
+    // bits into the sent input's digital word on the XR frames from..to (the Mock's key script counts the same frames).
+    {static const auto inject=[]{std::vector<std::array<uint64_t,3>> v;char s[1024]{};
+      if(GetEnvironmentVariableA("EVR_INPUT_INJECT",s,sizeof s)>=sizeof s)return v;
+      for(const char* p=s;*p;){char* e=nullptr;const auto a=std::strtoull(p,&e,10);if(*e!='-')break;const auto b=std::strtoull(e+1,&e,10);if(*e!=':')break;
+       const auto bits=std::strtoull(e+1,&e,16);v.push_back({a,b,bits});p=*e==','?e+1:e;if(*e!=','&&*e)break;}
+      return v;}();
+     if(!inject.empty()){const auto f=uint64_t(liveFrame.frame);uint64_t add=0;for(const auto& r:inject)if(f>=r[0]&&f<=r[1])add|=r[2];
+      if(add){uint64_t digital=0;std::memcpy(&digital,output.data()+game::inputDigital,8);digital|=add;std::memcpy(output.data()+game::inputDigital,&digital,8);}}}
     // A watch on "the stick is pushed and the player does not move" (headset run game-20261013-105615: after the second
     // respawn the player could not walk for the rest of the run, while guard and quick slot worked; the samples above
     // had run out long before, so the record could not tell whether the stick reached the game). Read-only: the left

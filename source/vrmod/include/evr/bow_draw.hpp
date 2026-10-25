@@ -22,14 +22,19 @@ struct BowDrawSettings {
  // With the trigger held and the hand within preAimRange of the string, LT goes to the game already, so that its
  // nocking runs while the hand reaches the string. Let go without taking the string: LT goes, nothing is shot. 0: off.
  float preAimRange=.45f;
- // The strong shot (2026-10-21, the user: "draw with the grip and the trigger held and let go: the strong shot"; 15:20
- // after the headset: "it does not come out - the grip alone is enough"). The game takes RT held past its threshold and
- // let go as the bow's special ability (SpecialAbility_Hold on the release: Mock game-20261021-134251, held 600 ms; 300
- // ms was a tap), but not while the bow is aimed (LT): with LT held through it none of 17 strong releases of headset run
- // 20261021-150238 began the strong shot (its action 1963645007 draws by itself and shoots at 400 ms; the gamepad's way
- // is RT held without aiming - guess). So a string taken or held with the right grip is the strong shot's: RT is held
- // (no LT) for as long as the string is, and let go with it. false: the grip takes no string.
+ // The strong shot (2026-10-21, the user: "draw with the grip and let go: the strong shot"). A string taken or held with
+ // the right grip draws as the trigger's does (LT: the game aims and charges, AimAndCharge), and its release asks for the
+ // bow's special ability while still aimed (specialInput(): the caller sends SpecialAbility and SpecialAbility_Hold).
+ // Read in the executable 2026-10-24 (docs/analysis/strong_shot_modbow_20261024.md): in AimAndCharge the ranged weapon
+ // takes the special-ability input of its own item (46ef20, 470c10) and starts that item's SpecialAbility row - the
+ // strong shot, 1963645007 - so it comes out of a bow on the action bar and of the equipment's bow alike (user 10-24:
+ // "make the strong shot come out" of the bow that is not on the action bar). When the game does not start it (its
+ // special-ability gauge not full - user 10-24: "it needs the gauge charged" - or its skill, Bow Specialization, not
+ // learned: the request is refused, Mock game-20261024-213418), strongSpecialMs after
+ // the release, or at once when the caller tells it (strongOutcome), the release goes on as the ordinary shot (an RT
+ // tap), so a let-go string always shoots. false: the grip takes no string.
  bool strongByGrip=true;
+ uint64_t strongSpecialMs=150,strongAimMs=1100;
 };
 // VHVR realLifePullPercentage: squared share of the travel behind the rest string.
 inline float bowPullPercentage(float pull,float brace,float fullDrawLength){
@@ -66,8 +71,8 @@ class BowDraw {
 public: enum Phase:unsigned {Idle=0,Blocked=1,Held=2,Cancelled=3,Aborted=4,Released=5};
 private:
  BowDrawSettings settings_{};Phase phase_=Blocked;BowPhysicalMetrics metrics_{};
- bool pressed_=false,bowMode_=false,fullDrawn_=false,strong_=false,byGrip_=false,gripAsTrigger_=false;float releasePull_=0;unsigned shots_=0;
- uint64_t binding_=0,session_=0,origin_=0,heldMs_=0,releaseMs_=0,lastMs_=0,boundMs_=0;
+ bool pressed_=false,bowMode_=false,fullDrawn_=false,strong_=false,byGrip_=false,special_=false,taken_=false,fallback_=false;float releasePull_=0;unsigned shots_=0;
+ uint64_t binding_=0,session_=0,origin_=0,heldMs_=0,releaseMs_=0,lastMs_=0,boundMs_=0,fallbackMs_=0;
  XrTime lastTime_=0;std::array<XrPath,2> profiles_{};
  static bool scope(const HandFrame& f,const BowPhysicalGeometry& g,bool allowed){
   const auto& h=f.hands[1];const auto q=g.model.orientation;const float norm=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
@@ -79,20 +84,23 @@ private:
 public:
  BowDraw()=default;explicit BowDraw(BowDrawSettings s):settings_(s){}
  void preAim(float range){settings_.preAimRange=range;}
- // The string taken with the grip draws as with the trigger (LT, a normal shot), not the strong shot's RT: for the mod's
- // bow (holster.hpp modBow) the game's hand is bare until the LT brings its bow - RT alone would be the fists' attack.
- void gripAsTrigger(bool on){gripAsTrigger_=on;}
+ void strongSpecial(uint64_t ms){settings_.strongSpecialMs=ms;}
  Phase phase()const{return phase_;}const BowPhysicalMetrics& metrics()const{return metrics_;}
  float releasePull()const{return releasePull_;}unsigned shots()const{return shots_;}
- // The last release was the strong shot's (the string held with the right grip).
- bool strongRelease()const{return strong_;}
- // The string is held with the right grip now (the strong shot's draw: RT, not LT).
- bool strongDraw()const{return phase_==Held&&byGrip_&&!gripAsTrigger_;}
+ // The last release was the strong shot's (the string held with the right grip) and the game was not seen refusing it.
+ bool strongRelease()const{return strong_&&!fallback_;}
+ // The strong release asks for the special ability now (the caller sends the game's SpecialAbility input bits).
+ bool specialInput()const{return special_;}
+ // The strong release went on as the ordinary shot (refused, or not begun in time).
+ bool strongFallback()const{return fallback_;}
+ // What the game made of the strong release: taken (the strong shot began, or the bow fired), refused (its special
+ // ability was not given). Refused before taken: the ordinary shot at once.
+ void strongOutcome(bool taken,bool refused){if(phase_!=Released||!strong_||fallback_)return;if(taken)taken_=true;else if(refused&&!taken_)fallbackMs_=lastMs_;}
  bool bowMode()const{return bowMode_;}
  // A refused shot or a screen that owns the triggers: let go, then require a new press.
  void abort(){if(phase_==Held||phase_==Released)phase_=Aborted;else if(phase_!=Aborted)phase_=Blocked;}
  LivePadState update(LivePadState pad,const HandFrame& f,const BowPhysicalGeometry& g,bool allowed,uint64_t now){
-  metrics_={};
+  metrics_={};special_=false;
   const auto& right=f.hands[1];
   const float t=right.triggerActive&&std::isfinite(right.trigger)?std::clamp(right.trigger,0.f,1.f):0;
   if(t>=.8f)pressed_=true;else if(t<=.2f)pressed_=false;
@@ -115,9 +123,18 @@ public:
    if(!valid||changed||now<lastMs_||f.predictedTime<lastTime_){phase_=Aborted;return pad;}
    lastMs_=now;lastTime_=f.predictedTime;
    const auto age=now-releaseMs_;
-   if(age>=settings_.aimMs){phase_=Idle;return pad;}
-   if(strong_)return pad;                                   // RT was let go with the string: the game takes its hold
-   pad.leftTrigger=255;if(age<settings_.tapMs)pad.rightTrigger=255;return pad;
+   if(strong_&&!fallback_){
+    // the special ability is asked for, still aimed, until the game takes it, refuses it or strongSpecialMs pass
+    const bool due=fallbackMs_?now>=fallbackMs_:age>=settings_.strongSpecialMs;
+    if(!taken_&&due){fallback_=true;fallbackMs_=now;}       // not given: the ordinary shot from here
+    else{
+     if(age>=settings_.strongAimMs){phase_=Idle;return pad;}
+     pad.leftTrigger=255;special_=!taken_;return pad;
+    }
+   }
+   const auto tapAge=now-(fallback_?fallbackMs_:releaseMs_);
+   if(tapAge>=settings_.aimMs){phase_=Idle;return pad;}
+   pad.leftTrigger=255;if(tapAge<settings_.tapMs)pad.rightTrigger=255;return pad;
   }
   if(phase_==Held&&(!valid||changed||f.predictedTime<lastTime_)){phase_=Aborted;return pad;}
   if(!valid){if(phase_!=Aborted)phase_=Blocked;return pad;}
@@ -142,13 +159,13 @@ public:
    if(!pressed_&&!grip){
     if(now>=heldMs_&&now-heldMs_>=settings_.minimumHoldMs&&metrics_.pull>=settings_.minimumPull){
      phase_=Released;releaseMs_=lastMs_=now;releasePull_=metrics_.pull;++shots_;
-     strong_=byGrip_&&!gripAsTrigger_;
-     if(!strong_)pad.leftTrigger=pad.rightTrigger=255;
+     strong_=byGrip_;taken_=fallback_=false;fallbackMs_=0;
+     pad.leftTrigger=255;if(strong_)special_=true;else pad.rightTrigger=255;
     }else phase_=Cancelled;
    }
   }
-  if(phase_==Held){if(byGrip_&&!gripAsTrigger_)pad.rightTrigger=255;else pad.leftTrigger=255;}
-  else if(phase_==Idle&&(pressed_||(gripAsTrigger_&&grip))&&settings_.preAimRange>0&&metrics_.distance<=settings_.preAimRange)pad.leftTrigger=255;
+  if(phase_==Held)pad.leftTrigger=255;
+  else if(phase_==Idle&&(pressed_||grip)&&settings_.preAimRange>0&&metrics_.distance<=settings_.preAimRange)pad.leftTrigger=255;
   return pad;
  }
  float pullPercentage(const BowPhysicalGeometry& g)const{

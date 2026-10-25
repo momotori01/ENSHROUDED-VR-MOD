@@ -149,6 +149,9 @@ inline Environment vrEnvironment(const Paths& p,const Shaders& s,bool online,dou
     else{e.push_back({L"EVR_GI_PROBE_SHADER",L""});e.push_back({L"EVR_GI_PROBE_SHADER_SHA256",L""});}
     return e;
 }
+// A pad style (2026-10-25): the motion controllers' settings do nothing (the native body is shown but the head and the upper
+// body before the eyes: hooks/head_visibility_bridge.hpp, the hands-only shader kept).
+inline Environment padEnvironment(){return {{L"EVR_NATIVE_MOTION_HANDS",L""},{L"EVR_ROOM_SNEAK",L"0"},{L"EVR_ARM_SWIM",L"0"}};}
 // [Environment] of EnshroudedVR.ini, for a test or for looking into a problem: NAME=value on top of the list above
 // (NAME= takes the variable away). Only the mod's own switches and the OpenXR runtime can be named.
 // %GAME%, %MOD% and %LOG% stand for the folders.
@@ -159,11 +162,29 @@ inline std::wstring expanded(std::wstring value,const Paths& p){
     return value;
 }
 // ---- the files of one VR session that follow the settings (the others come from the package's profile) ----
+// The pad styles (vr_settings.hpp Style, 2026-10-25) add world-pad-mode.txt: first or third person, the pitch lock and the tilt.
 inline std::map<std::string,std::string> sessionFiles(const settings::Values& v,const std::string& scene,const std::string& view){
-    return {{"world-resource-proof.txt","EVR_WORLD_RESOURCE_1 "+scene+" "+view+"\n"},
+    std::map<std::string,std::string> files{{"world-resource-proof.txt","EVR_WORLD_RESOURCE_1 "+scene+" "+view+"\n"},
             {"live-xr-config.txt","EVR_LIVE_XR_1 3000 "+settings::text(v.renderScale)+"\n"},
             {"world-vr-sharpness.txt","EVR_VR_SHARPNESS_1 "+settings::text(v.sharpness)+"\n"},
             {"world-session.txt","EVR_WORLD_SESSION_1 0\n"}};   // no minute limit: the session ends with the world
+    if(settings::padStyle(v))files["world-pad-mode.txt"]=std::string("EVR_PAD_MODE_1 ")+(v.style==settings::Style::PadThird?"third":"first")+
+        " "+(v.padPitchLock?"1":"0")+" "+std::to_string(v.padTilt)+"\n";
+    return files;
+}
+// The package's profile files that belong to the motion controllers (2026-10-25): left out of a pad style's session. They
+// make the mod's own gamepad from the controllers and hide the real one (controller-ui-fixture.txt), show and drive the
+// tracked hands and the weapons in them, attack by the swing, guard by the pose, draw the bow, take the holsters and point at
+// the menus - several of them refuse a session without the controllers' input. world-hands-only.txt stays: in first person
+// with the pad it hides the head and the upper body before the eyes (hooks/head_visibility_bridge.hpp).
+inline bool motionProfileFile(const std::string& name){
+    static const char* const motion[]{"controller-ui-fixture.txt","world-motion-hands.txt","world-motion-visual.txt","world-native-grip-observe.txt",
+        "world-weapon-mount.txt","world-two-hand-wield.txt","world-body-ik.txt","world-live-melee.txt","world-live-melee-contact.txt","world-live-guard.txt",
+        "world-quick-slot-motion.txt","world-live-held-items.txt","world-menu-pointer.txt","world-bow-draw.txt","world-bow-tracked-aim.txt",
+        "world-bow-physical-cancel.txt","world-bow-physical-pose.txt","world-bow-physical-release.txt","world-bow-spawn-observe.txt","world-bow-animation.txt",
+        "world-ranged-animation.txt","world-ranged-aim.txt","world-shield-mount.txt","world-hand-curl.txt","hand-curl-closed-pose.bin"};
+    for(const auto* m:motion)if(settings::sameText(name,m))return true;
+    return false;
 }
 // world-found.txt of EVR_AwaitWorld: EVR_WORLD_FOUND_1 0x<scene> 0x<view>
 inline bool worldFound(const std::string& text,std::string& scene,std::string& view){

@@ -117,5 +117,17 @@ int main(){
    W small;const auto s=small.update(.005f,4,true);
    check(none&&begins==1&&w.active()&&s.correction!=0&&s.event==E::None&&!small.active(),"measuring only gives no correction; a small difference is corrected without an episode");
    W nan;check(nan.update(std::numeric_limits<float>::quiet_NaN(),4,true).correction==0&&!nan.active(),"an invalid difference gives nothing");}}
+ // The third-person pad style (2026-10-25): every camera shown as the game has it; the tilt turns a face looking up to
+ // looking ahead at 90, and nothing at 0.
+ game::padStyle=2;check(game::cameraPresentation(4)==P::NativeEvent&&game::cameraPresentation(38)==P::NativeEvent&&game::cameraPresentation(255)==P::Unknown,"third person shows the game cameras");
+ game::padStyle=1;check(game::cameraPresentation(4)==P::FirstPerson,"the first-person pad style keeps first person");game::padStyle=0;
+ {const auto up=rotate(game::padTilt(90),Vec3{0,1,0}),ahead=rotate(game::padTilt(90),Vec3{0,0,-1}),none=rotate(game::padTilt(0),Vec3{0,1,0});
+  check(std::abs(up.z+1)<1e-5f&&std::abs(up.y)<1e-5f&&std::abs(ahead.y+1)<1e-5f&&std::abs(none.y-1)<1e-6f,"the tilt turns up to ahead at 90 degrees");
+  const auto half=rotate(game::padTilt(45),Vec3{0,0.7071068f,-0.7071068f});check(std::abs(half.z+1)<1e-5f,"45 degrees: a face 45 degrees up looks ahead");}
+ // The pad panel's view reset takes the tilt from the head (2026-10-25 evening): its pitch above level, 0 .. 90, whatever the
+ // heading; lying on the back with the face up is 90, looking down 0.
+ {const auto pitch=[](float degrees){const float a=degrees*3.14159265f/180.f;return Quat{std::sin(a/2),0,0,std::cos(a/2)};};
+  check(game::padTiltOf(identityPose().orientation)==0&&game::padTiltOf(pitch(45))==45&&game::padTiltOf(pitch(90))==90&&game::padTiltOf(pitch(-30))==0,"the tilt from the head's pitch");
+  check(game::padTiltOf(normalized(multiply(euler(.6f,0,0),pitch(30))))==30&&game::padTiltOf(normalized(multiply(euler(-2.f,0,0),pitch(72))))==72,"the tilt from the head's pitch, turned");}
  std::cout<<"RESULT "<<pass<<" PASS "<<fail<<" FAIL\n";return fail?1:0;
 }

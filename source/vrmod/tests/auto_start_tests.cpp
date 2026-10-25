@@ -81,6 +81,14 @@ int main(int argc,char** argv){try{unsigned n=0;
  // The files of a session that follow the settings.
  {evr::settings::Values v;v.renderScale=1.;v.sharpness=.5;const auto f=sessionFiles(v,"0x29c8a495600","0x29c8cb94060");
   ck(f.size()==4&&f.at("world-resource-proof.txt")=="EVR_WORLD_RESOURCE_1 0x29c8a495600 0x29c8cb94060\n"&&f.at("live-xr-config.txt")=="EVR_LIVE_XR_1 3000 1.0\n"&&f.at("world-vr-sharpness.txt")=="EVR_VR_SHARPNESS_1 0.5\n"&&f.at("world-session.txt")=="EVR_WORLD_SESSION_1 0\n");}
+ // A pad style (2026-10-25): world-pad-mode.txt with the style, the pitch lock and the tilt; the motion controllers' files
+ // left out of the profile; the pad environment shows the whole body but the head.
+ {evr::settings::Values v;v.style=evr::settings::Style::PadFirst;v.padTilt=45;auto f=sessionFiles(v,"0x1","0x2");
+  ck(f.size()==5&&f.at("world-pad-mode.txt")=="EVR_PAD_MODE_1 first 1 45\n");
+  v.style=evr::settings::Style::PadThird;v.padPitchLock=false;v.padTilt=0;f=sessionFiles(v,"0x1","0x2");ck(f.size()==5&&f.at("world-pad-mode.txt")=="EVR_PAD_MODE_1 third 0 0\n");
+  ck(motionProfileFile("controller-ui-fixture.txt")&&motionProfileFile("world-live-melee.txt")&&!motionProfileFile("World-Hands-Only.txt")&&motionProfileFile("hand-curl-closed-pose.bin"));
+  ck(!motionProfileFile("world-root-camera.txt")&&!motionProfileFile("world-early-xr.txt")&&!motionProfileFile("world-ui-auto-hide.txt")&&!motionProfileFile("world-head-visibility.txt")&&!motionProfileFile("world-equipment-observer.txt"));
+  const auto e=padEnvironment();bool hands=false,native=false;for(const auto& x:e){hands|=x.first==L"EVR_HANDS_ONLY";native|=x.first==L"EVR_NATIVE_MOTION_HANDS"&&x.second.empty();}ck(!hands&&native);}
  // The world the waiting found.
  {std::string s,v;ck(worldFound("EVR_WORLD_FOUND_1 0x29c8a495600 0x29c8cb94060\n",s,v)&&s=="0x29c8a495600"&&v=="0x29c8cb94060");
   ck(!worldFound("",s,v)&&!worldFound("EVR_WORLD_FOUND_2 0x1 0x2",s,v)&&!worldFound("EVR_WORLD_FOUND_1 0x29C8 0x2000",s,v)&&!worldFound("EVR_WORLD_FOUND_1 29c8a495600 0x29c8cb94060",s,v)&&!worldFound("EVR_WORLD_FOUND_1 0x29c8a495600",s,v));}

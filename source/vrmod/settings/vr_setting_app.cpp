@@ -34,13 +34,13 @@ std::string g_ini;                           // EnshroudedVR.ini as read
 bool g_running=false,g_loading=false,g_zipping=false,g_installed=false,g_updating=false;
 void refreshUpdateButton();
 std::vector<HWND> g_controls;                // disabled while the game runs
-HWND g_rbVr,g_rbFlat,g_coSize,g_coSharp,g_coEyes,g_btZip,g_btDefaults,g_status,g_last,g_stZip,g_btUpdate,g_stUpdate;
+HWND g_rbMode[4],g_rbLockOn,g_rbLockOff,g_tbTilt,g_stTilt,g_coSize,g_coSharp,g_coFit,g_coEyes,g_btZip,g_btDefaults,g_status,g_last,g_stZip,g_btUpdate,g_stUpdate;
 // The stroke's speed (a slider, 5 % a step) and swimming by the arms (2026-10-20; also in the game's start menu).
 // The alternate eyes' own picture and pacing (2026-10-23, include/evr/afw_pacing.hpp).
 HWND g_coAfwPacing,g_coAfwSize,g_coAfwDlss;
 HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff,g_btRecommend,g_stRecommend;
 evr::recommend::Machine g_machine;   // the graphics card, read once at the start
-enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS};
+enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS,ID_MODE_MOTION,ID_LOCK_ON,ID_LOCK_OFF,ID_TILT,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP,ID_FIT_VIEW};
 constexpr UINT WM_APP_ZIP_DONE=WM_APP+1;     // wParam: exit code, lParam: new std::wstring (the zip's path)
 constexpr UINT WM_APP_LATEST=WM_APP+2;       // lParam: new std::wstring (the newest release's version, or "" when it could not be checked)
 constexpr UINT WM_APP_UPDATE_LINE=WM_APP+3;  // lParam: new std::wstring (a line the updater wrote)
@@ -54,6 +54,15 @@ const Choice kEyes[]{{L"Both eyes every frame","0"},{L"AFW: one eye a frame, the
 // and DLSS mode ("same" = the rows above; the steady half rate leaves room for a larger picture).
 const Choice kAfwPacing[]{{L"As fast as it can (shown 1 or 2 refreshes)","0"},{L"Steady half rate (37.5 fps at 75 Hz)","1"},{L"Mod fills every refresh (test)","2"}};
 const Choice kAfwSizes[]{{L"Same as Picture size","0"},{L"Low 0.7","0.7"},{L"Normal 0.8","0.8"},{L"High 1.0","1.0"},{L"Very high 1.2  (steady half rate)","1.2"}};
+// 2026-10-25 (user: "the play mode switchable: the full VR, first person with the Xbox pad, third person with the pad, the
+// desktop"): [Mode] VR and Style (include/evr/vr_settings.hpp); the value is the Style, "" the normal start without VR.
+// Evening (user: "the play modes as four boxes one below the other"): radio buttons with the user's names.
+const Choice kModes[]{{L"motion VR","Motion"},{L"controller VR 【FPS】","PadFirst"},{L"controller VR 【TPS】","PadThird"},{L"Desktop",""}};
+const int kModeIds[]{ID_MODE_MOTION,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP};
+constexpr int kTiltStep=5;
+// 2026-10-25 (ALVR through SteamVR: cross-eyed; user: "Auto, the present one, and one for when it is cross-eyed"): [Picture]
+// FitView (include/evr/vr_settings.hpp FitView, include/evr/fov_fit.hpp), in the order of the enum.
+const Choice kFitView[]{{L"Auto","Auto"},{L"Normal","Normal"},{L"Fit (if cross-eyed)","Fit"}};
 const Choice kAfwDlss[]{{L"Same as the game's setting",""},{L"Quality","Quality"},{L"Balanced","Balanced"},{L"Performance","Performance"},{L"DLAA / FSR3 Native","Dlaa"}};
 
 int S(int v){return MulDiv(v,g_dpi,96);}
@@ -129,7 +138,10 @@ bool load(){
 }
 void show(){
     g_loading=true;const auto v=read(g_ini);
-    check(g_rbVr,v.vr);check(g_rbFlat,!v.vr);
+    {const size_t mode=v.vr?size_t(v.style):std::size(kModes)-1;for(size_t i=0;i<std::size(kModes);++i)check(g_rbMode[i],i==mode);}
+    const bool pad=v.vr&&padStyle(v);
+    check(g_rbLockOn,v.padPitchLock);check(g_rbLockOff,!v.padPitchLock);
+    SendMessageW(g_tbTilt,TBM_SETPOS,TRUE,v.padTilt/kTiltStep);SetWindowTextW(g_stTilt,(std::to_wstring(v.padTilt)+L"°").c_str());
     pick(g_coSize,kSizes,std::size(kSizes),text(v.renderScale),1);
     pick(g_coSharp,kSharp,std::size(kSharp),text(v.sharpness),1);
     pick(g_coEyes,kEyes,std::size(kEyes),v.alternateEyes&&v.eyeWarp==2?"2":"0",0);
@@ -139,7 +151,12 @@ void show(){
     SendMessageW(g_tbSwing,TBM_SETPOS,TRUE,v.swingSpeed/swingSpeedStep);SetWindowTextW(g_stSwing,(std::to_wstring(v.swingSpeed)+L" %").c_str());
     check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);check(g_rbHudOn,v.uiAutoHide);check(g_rbHudOff,!v.uiAutoHide);
     for(HWND h:{g_coAfwPacing,g_coAfwSize,g_coAfwDlss})EnableWindow(h,!g_running&&v.vr&&v.alternateEyes);
-    for(HWND h:{g_coSize,g_coSharp,g_coEyes,g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff})EnableWindow(h,!g_running&&v.vr);
+    SendMessageW(g_coFit,CB_SETCURSEL,size_t(v.fitView),0);
+    for(HWND h:{g_coSize,g_coSharp,g_coFit,g_coEyes,g_rbHudOn,g_rbHudOff})EnableWindow(h,!g_running&&v.vr);
+    // The motion controllers' rows are off in the gamepad modes; the pad rows only there (FPS and TPS alike).
+    for(HWND h:{g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff})EnableWindow(h,!g_running&&v.vr&&!pad);
+    for(HWND h:{g_rbLockOn,g_rbLockOff})EnableWindow(h,!g_running&&pad);   // FPS too: RT switches to TPS in the game
+    EnableWindow(g_tbTilt,!g_running&&pad);
     g_loading=false;
 }
 void refreshRunning(bool force=false){
@@ -694,14 +711,24 @@ void build(){
     g_btUpdate=part(L"BUTTON",L"Update now",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,120,30,ID_UPDATE);
     g_stUpdate=part(L"STATIC",L"",SS_LEFT|SS_NOPREFIX,kRight+134,g_y+4,kWidth-kRight-134-kLeft,64);
     next(kRowHeight+4);
-    row(L"Play mode",L"VR: play with the headset.\nNormal: play on your monitor, without VR.\nOther VR players' movements show in both.");
-    g_rbVr=control(part(L"BUTTON",L"VR",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,120,22,ID_VR));
-    g_rbFlat=control(part(L"BUTTON",L"Normal (no VR)",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+130,g_y+8,170,22,ID_FLAT));
-    next(kRowHeight);
+    row(L"Play mode",L"motion VR: the headset and motion controllers.\ncontroller VR: the headset shows the game, played with an Xbox controller - FPS in first person, TPS with the game's third-person camera (switch in the game's start menu with RT).\nDesktop: on your monitor, without VR.\nOther VR players' movements show in all.\n動作モード：モーションVR／コントローラーVR（一人称・三人称）／デスクトップ");
+    for(size_t i=0;i<std::size(kModes);++i)g_rbMode[i]=control(part(L"BUTTON",kModes[i].label,BS_AUTORADIOBUTTON|WS_TABSTOP|(i?0:WS_GROUP),kRight,g_y+8+int(i)*28,300,24,kModeIds[i]));
+    next(kRowHeight+30);
+    row(L"Pitch lock (controller VR, TPS)",L"On: the view stays level; the camera's up and down is left out. Also in the game's start menu (right stick click).\nオン：視点を水平に保つ（スタートメニューの右スティック押し込みでも変更可）");
+    g_rbLockOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_LOCK_ON));
+    g_rbLockOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_LOCK_OFF));
+    next(kRowHeight-16);
+    row(L"View tilt (controller VR)",L"Tilts the view down, for playing lying down. At 90°, lying on your back, the ceiling is ahead. Also in the game's start menu: D-pad left/right, or LT (the view reset) takes your head's angle.\n寝ながら遊ぶ用の視点の傾き。90° で仰向けに天井を見ると正面（スタートメニューの十字キー左右、LT の視点リセットで今の頭の角度）");
+    g_tbTilt=control(part(TRACKBAR_CLASSW,L"",TBS_HORZ|TBS_AUTOTICKS|WS_TABSTOP|WS_GROUP,kRight,g_y+4,250,30,ID_TILT));
+    SendMessageW(g_tbTilt,TBM_SETRANGE,TRUE,MAKELPARAM(padTiltLow/kTiltStep,padTiltHigh/kTiltStep));SendMessageW(g_tbTilt,TBM_SETTICFREQ,15/kTiltStep,0);
+    SendMessageW(g_tbTilt,TBM_SETLINESIZE,0,1);SendMessageW(g_tbTilt,TBM_SETPAGESIZE,0,15/kTiltStep);
+    g_stTilt=part(L"STATIC",L"0°",SS_LEFT,kRight+258,g_y+10,80,20);next(kRowHeight-16);
     row(L"Picture size (VR)",L"Bigger is sharper, but gives lower FPS.");g_coSize=combo(ID_SIZE,kSizes,std::size(kSizes));next(kRowHeight-16);
     // No DLSS row (2026-10-23, user: a player asked why it is here - "it is the same as the game's setting, remove it"):
     // a VR start keeps the game's own DLSS / FSR 3 mode (include/evr/auto_start.hpp).
     row(L"Sharpening (VR)",L"Makes edges crisper.");g_coSharp=combo(ID_SHARP,kSharp,std::size(kSharp));next(kRowHeight-16);
+    row(L"View fit (VR)",L"How each eye's picture is fitted to the headset's view. Auto: fitted only when the mod finds ALVR. Normal: as always. Fit: always fitted - choose it if the view is cross-eyed.\n視野の合わせ方。Auto は ALVR の時だけ合わせる。寄り目になったら Fit");
+    g_coFit=combo(ID_FIT_VIEW,kFitView,std::size(kFitView));next(kRowHeight-16);
     row(L"Frame mode (VR)",L"In testing - do not use.\n試験中。使用しないで。");g_coEyes=combo(ID_EYES,kEyes,std::size(kEyes),330);next(kRowHeight-16);
     row(L"AFW frame pacing (VR)",L"AFW only. Steady half rate: no switching between rates while walking. Also in the game's VR settings.\nAFW の表示間隔（ゲーム内の VR 設定でも変更可）");
     g_coAfwPacing=combo(ID_AFW_PACING,kAfwPacing,std::size(kAfwPacing),330);next(kRowHeight-16);
@@ -757,7 +784,11 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
     case WM_MOUSEWHEEL:setScroll(g_scroll-MulDiv(GET_WHEEL_DELTA_WPARAM(wParam),S(60),WHEEL_DELTA));return 0;
     case WM_COMMAND:{const int id=LOWORD(wParam),code=HIWORD(wParam);
         if(code==BN_CLICKED)switch(id){
-            case ID_VR:store("Mode","VR","1");break;case ID_FLAT:store("Mode","VR","0");break;
+            case ID_LOCK_ON:store("Pad","PitchLock","1");break;case ID_LOCK_OFF:store("Pad","PitchLock","0");break;
+            // the play mode: a VR mode writes the style and VR=1; Desktop only VR=0 (the VR mode chosen before is kept)
+            case ID_MODE_MOTION:case ID_MODE_FIRST:case ID_MODE_THIRD:case ID_MODE_DESKTOP:{
+                const size_t at=size_t(std::find(std::begin(kModeIds),std::end(kModeIds),id)-std::begin(kModeIds));
+                if(at<std::size(kModes)){if(*kModes[at].value){store("Mode","Style",kModes[at].value);store("Mode","VR","1");}else store("Mode","VR","0");}break;}
             case ID_SWIM_ON:store("Body","ArmSwim","1");break;case ID_SWIM_OFF:store("Body","ArmSwim","0");break;
             case ID_HITSTOP_ON:store("Melee","HitStop","1");break;case ID_HITSTOP_OFF:store("Melee","HitStop","0");break;
             case ID_HUD_ON:store("Picture","UiAutoHide","1");break;case ID_HUD_OFF:store("Picture","UiAutoHide","0");break;
@@ -769,6 +800,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
         if(code==CBN_SELCHANGE){const auto at=size_t(SendMessageW(reinterpret_cast<HWND>(lParam),CB_GETCURSEL,0,0));
             if(id==ID_SIZE&&at<std::size(kSizes))store("Picture","RenderScale",kSizes[at].value);
             if(id==ID_SHARP&&at<std::size(kSharp))store("Picture","Sharpness",kSharp[at].value);
+            if(id==ID_FIT_VIEW&&at<std::size(kFitView))store("Picture","FitView",kFitView[at].value);
             if(id==ID_EYES&&at<std::size(kEyes)){store("Picture","AlternateEyes",at?"1":"0");store("Picture","EyeWarp",at?"2":"0");show();}
             if(id==ID_AFW_PACING&&at<std::size(kAfwPacing))store("Picture","AfwPacing",kAfwPacing[at].value);
             if(id==ID_AFW_SIZE&&at<std::size(kAfwSizes))store("Picture","AfwRenderScale",kAfwSizes[at].value);
@@ -778,6 +810,11 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
         const int percent=clampSwingSpeed(int(SendMessageW(g_tbSwing,TBM_GETPOS,0,0))*swingSpeedStep);
         SetWindowTextW(g_stSwing,(std::to_wstring(percent)+L" %").c_str());
         if(LOWORD(wParam)!=TB_THUMBTRACK)store("Melee","SwingSpeed",std::to_string(percent));   // written when the thumb is let go
+        return 0;}
+        if(reinterpret_cast<HWND>(lParam)==g_tbTilt){
+        const int degrees=std::clamp(int(SendMessageW(g_tbTilt,TBM_GETPOS,0,0))*kTiltStep,padTiltLow,padTiltHigh);
+        SetWindowTextW(g_stTilt,(std::to_wstring(degrees)+L"°").c_str());
+        if(LOWORD(wParam)!=TB_THUMBTRACK)store("Pad","Tilt",std::to_string(degrees));
         return 0;}
         break;
     case WM_APP_ZIP_DONE:{

@@ -14,7 +14,8 @@ INSTALL
 The mod comes with VR OFF. Nothing else is needed for playing on the monitor.
 
 VR ON / OFF
-- Start "Enshrouded VR setting.exe" (with the game closed) and choose "VR" or "Normal".
+- Start "Enshrouded VR setting.exe" (with the game closed) and choose the play mode
+  ("motion VR", "controller VR 【FPS】", "controller VR 【TPS】" or "Desktop").
   The choice is saved; the game uses it every time it starts. Use the program again
   only to change it.
 - VR: connect the headset and start your PC VR runtime (SteamVR) first, then start the
@@ -26,7 +27,15 @@ VR ON / OFF
   (a small block moves along its lower edge), then VR begins. The very first time on a
   PC this takes about half a minute; after that about 10 to 20 seconds.
   If you turn away from the screen, it comes back in front of you after a moment.
+- controller VR: "controller VR 【FPS】" and "controller VR 【TPS】" show the game in the
+  headset and are played with an Xbox controller and the game's own controls. FPS aims
+  with your head, TPS with the right stick. In the start menu: RT = switch FPS / TPS,
+  D-pad left/right = view tilt for playing lying down (1 degree a press), LT = reset the
+  view (where your head looks now is ahead, the tilt included), right stick click = pitch
+  lock (TPS), left stick click = VR bug report.
 - The picture size, DLSS / FSR 3 mode and sharpening for VR are in the same program.
+- "View fit (VR)": Auto fits the picture to the headset's own field of view when the mod finds
+  ALVR (with ALVR the view is cross-eyed otherwise). If the view is cross-eyed, choose "Fit".
 - "Frame mode (VR)": "One eye a frame" draws the left and the right eye in turn, and the
   other eye shows the picture it had. It gives more frames a second; things that move
   can look a little doubled. It is a test - switch back to "Both eyes every frame" if it
@@ -94,7 +103,8 @@ EnshroudedVR\licenses.
 入れた直後は VR は「切」です。モニターで遊ぶだけなら、他に何もいりません。
 
 VR の入・切
-- ゲームを閉じた状態で「Enshrouded VR setting.exe」を開き、「VR」か「Normal」を選びます。
+- ゲームを閉じた状態で「Enshrouded VR setting.exe」を開き、動作モード（「motion VR」
+  「controller VR 【FPS】」「controller VR 【TPS】」「Desktop」）を選びます。
   選んだ内容は保存され、ゲームを起動するたびに使われます。変えたい時だけ開いてください。
 - VR：ヘッドセットをつなぎ、先に PC の VR ランタイム（SteamVR）を起動してから、Steam で
   ゲームを起動し、ヘッドセットをかぶります。最初からゲームの画面が目の前の板に出て、
@@ -105,7 +115,14 @@ VR の入・切
   ます）、その後 VR が始まります。その PC で最初の 1 回だけ約 30 秒、2 回目からは約 10〜20
   秒です。
   板から顔を背けると、少しして板が目の前に戻ります。
+- コントローラー VR：「controller VR 【FPS】」と「controller VR 【TPS】」は、ヘッドセットに
+  ゲームを映し、Xbox コントローラーとゲームの元の操作で遊びます。FPS は頭の向きで、TPS は
+  右スティックで狙います。スタートメニューで RT＝FPS と TPS の切り替え、十字キー左右＝
+  寝ながら遊ぶ用の視点の傾き（1 回 1°）、LT＝視点のリセット（今の頭の向きを正面に。傾きも
+  合わせる）、右スティック押し込み＝上下の傾きの固定（TPS）、左スティック押し込み＝VR バグ報告。
 - VR の絵の大きさ・DLSS / FSR 3 のモード・シャープさも同じプログラムで選べます。
+- 「View fit (VR)」：Auto は、MOD が ALVR を見つけた時だけ絵をヘッドセットの視野に合わせます（ALVR
+  ではそうしないと寄り目になります）。寄り目になったら「Fit」を選んでください。
 - 「Frame mode (VR)」の「One eye a frame」は、左右の目を 1 コマずつ交互に描き、描かない
   方の目は前の絵を見せます。1 秒あたりのコマ数が増えます。動く物は少し二重に見える事が
   あります。試験中の機能です。合わなければ「Both eyes every frame」に戻してください。

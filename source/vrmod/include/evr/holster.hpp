@@ -201,7 +201,20 @@ inline bool applySwimInput(ClientInputBytes& output,uint64_t now){
     if(!bits||now>=swimInputUntilMs.load())return false;
     uint64_t digital=0;std::memcpy(&digital,output.data()+inputDigital,8);digital|=bits;std::memcpy(output.data()+inputDigital,&digital,8);return true;
 }
-// Nothing but the head camera, the two actions, the ranged-combat bit, the AreaLoot bit and the diving bits differs.
+// The bow's special ability asked for while it is aimed (2026-10-24, the strong shot of a let-go string held with the right
+// grip: include/evr/bow_draw.hpp specialInput). keen::ecs::PlayerInputType SpecialAbility 9 and SpecialAbility_Hold 11 in 1.0:
+// which one the aimed bow takes depends on the player's bindings (enshrouded.exe e87050: Hold when SpecialAbility and
+// RangedCombatShoot share a button - the gamepad's PresetA, PlayerInput+0x5a8 bit 4 - else SpecialAbility), so both go,
+// until specialInputUntilMs (GetTickCount64; controller_ui_fixture.hpp sets it every frame while the draw asks).
+constexpr unsigned inputSpecialAbilityBit=9,inputSpecialAbilityHoldBit=11;
+constexpr uint64_t inputSpecialBits=(1ull<<inputSpecialAbilityBit)|(1ull<<inputSpecialAbilityHoldBit);
+inline std::atomic<uint64_t> specialInputUntilMs{0};
+inline bool applySpecialInput(ClientInputBytes& output,uint64_t now){
+    if(now>=specialInputUntilMs.load())return false;
+    uint64_t digital=0;std::memcpy(&digital,output.data()+inputDigital,8);digital|=inputSpecialBits;std::memcpy(output.data()+inputDigital,&digital,8);return true;
+}
+// Nothing but the head camera, the two actions, the ranged-combat bit, the AreaLoot bit, the diving bits and the special
+// ability bits differs.
 inline bool onlyHolsterAndCameraChanged(const ClientInputBytes& a,const ClientInputBytes& b){
     for(size_t i=0;i<a.size();++i){
         if(a[i]==b[i]||(i>=0x20&&i<0x4c)||(i>=inputBarAction&&i<inputBarAction+8)||(i>=inputEquipAction&&i<inputEquipAction+16))continue;
@@ -209,6 +222,7 @@ inline bool onlyHolsterAndCameraChanged(const ClientInputBytes& a,const ClientIn
         if(i==inputDigital+inputRangedCombatArmBit/8&&((a[i]^b[i])&~uint8_t(1u<<(inputRangedCombatArmBit%8)))==0)continue;
         if(i==inputDigital+inputAreaLootBit/8&&((a[i]^b[i])&~uint8_t(1u<<(inputAreaLootBit%8)))==0)continue;
         if(i==inputDigital+4&&((a[i]^b[i])&~uint8_t(inputSwimBits>>32))==0)continue;   // bits 34..36: byte 4
+        if(i==inputDigital+1&&((a[i]^b[i])&~uint8_t(inputSpecialBits>>8))==0)continue;  // bits 9 and 11: byte 1
         return false;}
     return true;
 }

@@ -96,6 +96,21 @@ constexpr uintptr_t staffParentRva=0x224c68;
 constexpr float aimFocusLimit=3.f;
 // Other players' shots (observe below). EVR_REMOTE_SHOTS=0: as before (a guest's arrow went the tracked branch).
 inline const bool remoteShotsWanted=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_REMOTE_SHOTS",v,sizeof v);return !(n==1&&v[0]=='0');}();
+inline constexpr uint64_t remoteShotMs=1000,remoteHeldMs=300;
+// Whether an aim another player's mod sent (controllerUiFixture::remoteShots) waits for a shot of this input: as remoteShot
+// below, without using it up.
+inline bool remoteShotNear(const std::array<uint8_t,44>& camera,uint64_t now){
+ WorldPositionQ32 nativePosition;Quat nativeQ;float nativeDistance;
+ std::memcpy(&nativePosition,camera.data(),24);std::memcpy(&nativeQ,camera.data()+24,16);std::memcpy(&nativeDistance,camera.data()+40,4);
+ const auto focus=cameraPosition(nativePosition,rotate(normalized(nativeQ),{0,0,std::isfinite(nativeDistance)?nativeDistance:0.f}),1);
+ std::lock_guard<std::mutex> lock(controllerUiFixture::remoteShotMutex);
+ for(const auto& s:controllerUiFixture::remoteShots){
+  if(s.used||now<s.milliseconds||now-s.milliseconds>(s.held?remoteHeldMs:remoteShotMs))continue;
+  WorldPositionQ32 at;std::memcpy(&at,s.aim.data(),24);
+  const Vec3 offset{float(relativeQ32(at.x,focus.x)),float(relativeQ32(at.y,focus.y)),float(relativeQ32(at.z,focus.z))};
+  if(finite(offset)&&length(offset)<=aimFocusLimit)return true;}
+ return false;
+}
 inline const bool lockedBowToHand=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_LOCKED_BOW_TO_HAND",v,sizeof v);return !(n==1&&v[0]=='0');}();
 inline std::atomic<unsigned> lockedBowShots{0};
 inline void lockedBowAside(uintptr_t callerRva,const void* context,TargetFlagAside& aside) noexcept {
@@ -107,6 +122,10 @@ inline void lockedBowAside(uintptr_t callerRva,const void* context,TargetFlagAsi
   if(!(item==327157552u||motion::catalogBowItem(item)))return;   // bows only: the wand and the staff keep the game's way
   const bool own=inputRanged::bowIdentity(read<uintptr_t>(c+0x88),weapon).world!=0;
   if(!(own?controllerUiFixture::bowTrackedAimRequested:remoteShotsWanted))return;
+  // Not known as the own player's shot: the target is let go only for another player's arrow whose aim has come (2026-10-25,
+  // controller VR on the headset: "locked on, the bow shoots the ground" - the own player's shot of a host without tracked
+  // hands is not known as its own (own:false), the lock was let go and no aim came in its place: 20 of 41 shots).
+  if(!own&&!remoteShotNear(read<std::array<uint8_t,44>>(read<uintptr_t>(c+0x88)+0x28),GetTickCount64()))return;
   aside.at=flag;aside.was=was;*reinterpret_cast<volatile uint8_t*>(flag)=0;   // put back by aside's end, right after the dispatch
   const auto n=++lockedBowShots;
   try{if(n<=20||n%50==0)logFile->event("bow_locked_shot_to_hand","\"shots\":"+std::to_string(n)+",\"item\":"+std::to_string(item)+",\"own\":"+(own?"true":"false")+",\"target_flag\":"+std::to_string(unsigned(was)));}catch(...){}
@@ -115,7 +134,7 @@ inline void lockedBowAside(uintptr_t callerRva,const void* context,TargetFlagAsi
 // A host without VR (view_resource_probe.cpp onlineFlat, 2026-10-22): every shot is looked at for the other players' aims,
 // and the staff's casts too - the own ones keep the game's aim (no tracked hands).
 inline bool remoteAlways=false;
-inline constexpr uint64_t remoteShotMs=1000,remoteHeldMs=300;inline unsigned remoteLogs=0;
+inline unsigned remoteLogs=0;
 // The nearest new aim another player's mod sent (controllerUiFixture::remoteShots) whose start lies within aimFocusLimit
 // of this input's camera focus; a shot is used up, a held aim stays. Returns why none was taken, or "applied".
 inline const char* remoteShot(const std::array<uint8_t,44>& camera,uint64_t now,motion::BowWorldAim& aim,float& nearest,uint64_t& from,uint64_t& age,uint16_t& id,unsigned& fresh,bool& held,bool heldOnly=false){
@@ -229,7 +248,16 @@ __declspec(noinline) bool __fastcall observe(void* output,void* nativeContext,co
      motion::BowTrackedShotValue shot;bool consumed=false;
      // The one-shot diagnostic was reviewed with one arrow type; the draw route takes any loaded arrow.
      const bool draw=controllerUiFixture::bowDrawRequested;
-     if(freshIdentity&&(draw?ammo!=0:ammo==1454438654)&&ammo==cachedAmmo&&!missing&&received&&now>=received&&now-received<=200){
+     // The strong shot's arrow (2026-10-25, user after the headset: "the strong shot came out, but it does not seem to fly where
+     // aimed"; headset run 20261025-014644: both of its spawns came with the ranged weapon's ammunition instance empty, state 3,
+     // and the hand's aim was not used): within 1.5 s of its action's start the empty instance is the strong shot's own.
+     // A refused special ability leaves its feedback (UsageFeedbackTypes SpecialAbility 0x400 - the gauge - and SkillUnlock
+     // 0x800) on the weapon for a while: the same run's 5 ordinary shots after a refused strong release had 0x400 and their aim
+     // was refused for it. Those two are not the arrow's own lack.
+     const auto strongAt=controllerUiFixture::strongActionAt.load();
+     const bool strongArrow=draw&&strongAt&&now>=strongAt&&now-strongAt<=1500&&nativeWeapon[0]==3;
+     constexpr uint16_t specialFeedback=0x0c00;
+     if(freshIdentity&&(draw?(ammo!=0||strongArrow):ammo==1454438654)&&ammo==cachedAmmo&&!(missing&~specialFeedback)&&received&&now>=received&&now-received<=200){
       std::lock_guard<std::mutex> lock(controllerUiFixture::bowShotMutex);
       consumed=controllerUiFixture::bowTrackedShot.consume(hands,geometry,now,identity.entity,shot,draw?controllerUiFixture::bowDrawShotMs:200,draw?controllerUiFixture::bowDrawShotFrames:8);
      }

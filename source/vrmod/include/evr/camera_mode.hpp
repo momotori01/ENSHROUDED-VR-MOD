@@ -1,5 +1,8 @@
 #pragma once
 #include <evr/game_stereo.hpp>
+#include <algorithm>
+#include <atomic>
+#include <cmath>
 
 namespace evr::game {
 // The 1.0 build (25936191, 2026-10-16) renumbered CameraId (its reflection table: name, length, value). The policies
@@ -22,10 +25,31 @@ inline uint8_t legacyCameraId(uint8_t id){
         11,6,13};             // FreeAimWandDefault, FreeAimWandSprinting, FreeAimWandSneaking (new)
     return id<46?map[id]:id==255?255:uint8_t(45);
 }
+// The pad styles (2026-10-25, include/evr/vr_settings.hpp Style; the session's world-pad-mode.txt): 0 none, 1 first person
+// played with the gamepad, 2 the game's own third-person camera in the headset. padPitchLock: the third person's view stays
+// level (the game camera's pitch left out); padTiltDegrees: the pad styles' view tilted down, 0 .. 90, for playing lying down.
+inline std::atomic<int> padStyle{0};inline std::atomic<bool> padPitchLock{true};inline std::atomic<int> padTiltDegrees{0};
+// The tilt as a rotation of the anchor's space: about its right axis (x), down by the degrees (a face turned up to the
+// ceiling at 90 looks ahead).
+inline Quat padTilt(int degrees){const float a=-float(std::clamp(degrees,0,90))*3.14159265f/180.f;return {std::sin(a/2),0,0,std::cos(a/2)};}
+// The view reset of the pad panel (2026-10-25 evening, user: "on the view reset the slider moves to the head's angle now"):
+// the head's pitch above level, in whole degrees 0 .. 90 (looking down counts 0), measured in the plane the head's right side
+// leaves upright - lying on the back with the face to the ceiling is 90. padTiltFromHead: the next reset takes it.
+inline std::atomic<bool> padTiltFromHead{false};
+inline int padTiltOf(Quat head){
+    const auto right=rotate(normalized(head),Vec3{1,0,0}),forward=rotate(normalized(head),Vec3{0,0,-1});
+    const float yaw=right.x*right.x+right.z*right.z>1e-6f?std::atan2(-right.z,right.x):0.f;
+    const auto level=rotate(euler(-yaw,0,0),forward);   // the forward with the right side turned onto +x
+    const float pitch=std::atan2(level.y,-level.z)*180.f/3.14159265f;
+    return std::clamp(int(std::lround(pitch)),0,90);
+}
 // Values validated against CameraId reflection for build23966345. This is a
 // presentation policy, not a claim that every named state is a cutscene.
 enum class CameraPresentation { FirstPerson, NativeEvent, NativeSpecial, Unknown };
 inline CameraPresentation cameraPresentation(uint8_t id){
+    // The third-person pad style: every camera of the game is shown as the game has it (a native camera: the headset's
+    // view anchored at the game camera, root_camera_bridge.hpp renderAnchor).
+    if(padStyle.load()==2)return id==255?CameraPresentation::Unknown:CameraPresentation::NativeEvent;
     // Every camera of the game is first person (2026-10-24 15:55, user: "the altar's, the obelisk's, the shroud forge's cameras -
     // and the others too: make every camera first person"). Until then the event cameras kept the game's own view in the headset:
     // 0 EntityCamera, 1 / 2 the spawning, 3 the respawning (also the teleports and being revived), 31 the altar, 32 the obelisk,

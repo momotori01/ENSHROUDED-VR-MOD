@@ -22,6 +22,8 @@ inline const RangedAimModel* rangedAimModel(uint32_t item){
 }
 // The wand's native attack is the attack button, not the right trigger.
 inline bool rangedAimWand(uint32_t item){const auto m=rangedAimModel(item);return m&&m->type==6;}
+// A staff (type 5): the trigger charges and its release casts (include/evr/staff_trigger.hpp).
+inline bool rangedAimStaff(uint32_t item){const auto m=rangedAimModel(item);return m&&m->type==5;}
 // +Z along direction, +Y as close to upHint as the direction allows.
 inline Quat lookAlong(Vec3 direction,Vec3 upHint){
  const float size=length(direction);if(!finite(direction)||!finite(upHint)||size<1e-6f)throw std::invalid_argument("look direction");

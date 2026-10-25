@@ -5,7 +5,7 @@ Fight by swinging your sword, cast spells by swinging your wand, draw and loose 
 ## Features
 - Native stereo rendering
 - Multiplayer: other players' full-body IK is shown - including the fish they just caught
-- Switch between VR mode and desktop mode. VR and desktop players can play together
+- Four play modes: motion VR (full VR with motion controllers), controller VR in first person (FPS) or third person (TPS) - also lying down -, and desktop. VR and desktop players can play together
 - Combat by motion controls: melee, wand, bow, throwing
 - Rising slashes, downward slashes, and the movement of skill attacks follow your swing.
   Example: when you attack in the air, swing down for a plunging attack, swing up for a rising slash.
@@ -25,6 +25,7 @@ Download **EnshroudedVR-x.y.z.zip** under **Assets** on the [Releases](https://g
 ## Bug reports
 1. Hold the left controller at the left side of your head and press the left stick. The start menu opens with the red **"! VR bug report !"** button.
 2. Press the button and close the menu. The mod now records 30 seconds of detailed logs and pictures of both eyes (the last seconds before you pressed it are kept too). Keep playing - show the problem if you can.
+   With controller VR: open the start menu and press the left stick, then close the menu.
 3. A zip appears in the game folder (the folder with enshrouded.exe): **VR_bug_report_<time>.zip** (with the game in Japanese: バグ報告_<time>.zip).
 
 If you would like to help fix bugs, please send that zip with a short description of what happened (on Discord or as a GitHub issue). The logs contain no personal information: names, the PC's name, IP addresses and Steam IDs are replaced in the zip. I fix what I can.
@@ -40,9 +41,12 @@ The program next to enshrouded.exe holds the settings that cannot be changed in 
 | Setting | What it does |
 |---|---|
 | Update | Shows the installed and the newest version. **Update now** installs the newest release. |
-| Play mode | **VR**: play with the headset. **Normal**: play on your monitor without VR. Other VR players' movements show in both. |
+| Play mode | **motion VR**: full VR. **controller VR 【FPS】** / **controller VR 【TPS】**: the headset shows the game, played with an Xbox controller (see [controller VR](#controller-vr)). **Desktop**: play on your monitor without VR. Other VR players' movements show in all of them. |
+| Pitch lock (controller VR, TPS) | On: the view stays level; the camera's up and down is left out. |
+| View tilt (controller VR) | 0-90°: tilts the view down, for playing lying down. At 90°, lying on your back, the ceiling is ahead. |
 | Picture size (VR) | Low 0.7 (faster) / Normal 0.8 / High 1.0 (sharper, slower) |
 | Sharpening (VR) | Off / Soft 0.2 / Strong 0.5 |
+| View fit (VR) | How each eye's picture is fitted to the headset's view. **Auto** (the default): fitted only when the mod finds ALVR (with ALVR the view is cross-eyed without it). **Normal**: as always. **Fit (if cross-eyed)**: always fitted - choose it if the view is cross-eyed. |
 | Frame mode (VR) | Both eyes every frame (normal), or one eye a frame (a test for more FPS) |
 | Problem report | **Make zip**: the mod's logs, its settings and the game's log in one zip next to the program, to send with a description. It also finishes a VR bug report that a crash cut short. |
 | Put settings back | All settings back to how they came. |
@@ -50,6 +54,20 @@ The program next to enshrouded.exe holds the settings that cannot be changed in 
 It also shows what the mod did at the last start of the game.
 DLSS / FSR 3 quality is the game's own graphics setting: choose it in the game. A VR start switches anti-aliasing to DLSS (DLAA stays DLAA); cards without DLSS use the game's FSR 3 setting.
 Real crouching for sneaking is switched on or off, and its depth set, in the game itself: the **VR settings** button next to the bug report button in the start menu.
+
+## controller VR
+Choose **controller VR 【FPS】** or **controller VR 【TPS】** in "Enshrouded VR setting.exe". The headset shows the game; you play with an Xbox controller and the game's own controls.
+- **FPS**: first person. You aim where your head looks. The head bob stays out, as in motion VR.
+- **TPS**: the game's own third-person camera. You aim with the right stick; the HUD and the crosshair stay in front of the game camera.
+
+In the start menu, a small panel lists what the controller changes there:
+- **RT**: switch between FPS and TPS
+- **D-pad left/right**: view tilt, 1° a press (hold to keep going)
+- **LT**: reset the view - where your head looks now becomes ahead, the tilt included (lie down, look where you want "ahead" to be, press LT)
+- **Right stick click**: pitch lock on/off (TPS)
+- **Left stick click**: VR bug report (it records 30 seconds after you close the menu)
+
+The changes are kept for the next start.
 
 ## Combat
 ### Melee
@@ -72,6 +90,10 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 ### Wand
 - Swing the wand to cast its normal attack. A normal, deliberate swing is enough; the cooldown is the vanilla one.
 - The trigger casts as well.
+
+### Staff
+- Hold the trigger to charge; let go to cast. Nothing is cast while you hold it, so you can switch spells while charging.
+- The left trigger charges too (it does not cast); the right trigger's release casts.
 
 ### Lock-on
 - The game's own lock-on works as usual. The enemy's health bar and the lock-on arrow are shown above the enemy instead of on the HUD - for the locked enemy, the lock-on candidate and enemies that are aware of you. Moving stays headset-based while locked on.
@@ -152,14 +174,14 @@ Real crouching for sneaking is switched on or off, and its depth set, in the gam
 ### More
 - **Reset the view:** look at both palms in front of your face for 3 seconds (the headset's own reset works too).
 - **Bug report:** left controller at the left side of your head + left stick, then the red button (see [Bug reports](#bug-reports)).
-- **VR or desktop:** with the game closed, open "Enshrouded VR setting.exe" and choose "VR" or "Normal". Players with the mod see VR players' movements in both modes; players without the mod can still play with you.
+- **VR or desktop:** with the game closed, open "Enshrouded VR setting.exe" and choose the play mode. Players with the mod see VR players' movements in both modes; players without the mod can still play with you.
 - **Update:** "Update now" in "Enshrouded VR setting.exe" (see [Updating](#updating)).
 
 ## Installation
 1. Start the Steam version of Enshrouded normally once, then quit.
 2. In Steam: Manage -> Browse local files.
 3. Put everything in the zip into the folder that contains enshrouded.exe.
-4. With the game closed, open "Enshrouded VR setting.exe" and choose "VR" (VR is off right after installing).
+4. With the game closed, open "Enshrouded VR setting.exe" and choose a VR play mode (VR is off right after installing).
 5. Start SteamVR first, then start the game from Steam.
 
 For details, see EnshroudedVR\README.txt in the package.

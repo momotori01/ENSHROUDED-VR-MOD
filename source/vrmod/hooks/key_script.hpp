@@ -28,7 +28,7 @@
 //                                             of it, degrees (the Mock runtime's EVR_MockHeadTurn; nothing on a headset)
 //   "<XR frame> MARK <word>"                  only a line in the log (key_script_mark), to find a place of the script
 //   "<XR frame> MBUTTON down|up"             the middle mouse button (2026-10-19, the game's combat target lock), as a
-//                                             raw mouse record with no movement
+//                                             raw mouse record with no movement; LBUTTON / RBUTTON the same (2026-10-24)
 // A step may be timed instead: "t<milliseconds> <step>" runs that long after the frame of "<XR frame> ORIGIN". The
 // game moves by time, not by frames, and a replay runs at another frame rate than the walk it repeats (Mock replay
 // game-20261014-184902: 24.5 ms a frame against the user's 20.5, 5 m away after 600 frames); tools/save_route.py
@@ -178,8 +178,10 @@ inline void install(){
                     if(!(in>>s.pitch))throw std::runtime_error("key script line "+std::to_string(row));s.turnOn=true;}
                 list.push_back(s);continue;}
             if(name=="MOUSE"){s.kind=Kind::Mouse;if(!(in>>s.dx>>s.dy))throw std::runtime_error("key script line "+std::to_string(row));s.name=name;list.push_back(s);continue;}
-            if(name=="MBUTTON"){s.kind=Kind::Mouse;std::string how2;if(!(in>>how2)||(how2!="down"&&how2!="up"))throw std::runtime_error("key script line "+std::to_string(row));
-                s.down=how2=="down";s.buttons=s.down?RI_MOUSE_MIDDLE_BUTTON_DOWN:RI_MOUSE_MIDDLE_BUTTON_UP;s.name=name;list.push_back(s);continue;}
+            if(name=="MBUTTON"||name=="LBUTTON"||name=="RBUTTON"){s.kind=Kind::Mouse;std::string how2;if(!(in>>how2)||(how2!="down"&&how2!="up"))throw std::runtime_error("key script line "+std::to_string(row));
+                s.down=how2=="down";
+                s.buttons=name=="LBUTTON"?(s.down?RI_MOUSE_LEFT_BUTTON_DOWN:RI_MOUSE_LEFT_BUTTON_UP):name=="RBUTTON"?(s.down?RI_MOUSE_RIGHT_BUTTON_DOWN:RI_MOUSE_RIGHT_BUTTON_UP):(s.down?RI_MOUSE_MIDDLE_BUTTON_DOWN:RI_MOUSE_MIDDLE_BUTTON_UP);
+                s.name=name;list.push_back(s);continue;}
             if(name=="CAPTURE"){s.kind=Kind::Capture;s.name=name;list.push_back(s);continue;}
             if(name=="BURST"){s.kind=Kind::Burst;s.name=name;if(!(in>>s.dx)||s.dx<1||s.dx>32)throw std::runtime_error("key script line "+std::to_string(row));list.push_back(s);continue;}
             if(name=="STOP"){s.kind=Kind::Stop;s.name=name;list.push_back(s);continue;}

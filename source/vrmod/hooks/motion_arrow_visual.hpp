@@ -267,9 +267,8 @@ inline void update(const game::StableAnchor& anchor,uint64_t currentSerial){
     if(string.held&&flight.on)flight.on=false;   // a new draw: the string's arrow again
     if(!string.held&&flightMode&&scene&&flyFrame(now,currentSerial)){if(source){hiddenSerial=currentSerial;hiddenFrame=liveFrame.frame;}return;}   // the game's arrow at the bow stays out of sight
     if(!source){
-        // (the strong shot's draw, by the right grip, has no game arrow at all: the clone stays for as long as it is drawn - 2026-10-21,
-        // the user: "with the strong shot the nocked arrow does not show")
-        if(earlyWanted&&string.held&&handle&&measured&&measuredResource==resource&&haveRelative&&heldSince&&(now-heldSince<=earlyMs||controllerUiFixture::bowStrongDrawing.load())&&anchor.worldUnitsPerMeter==1){
+        // (the strong shot's draw, by the right grip, aims as the trigger's since 2026-10-24: the game's own arrow comes as with it)
+        if(earlyWanted&&string.held&&handle&&measured&&measuredResource==resource&&haveRelative&&heldSince&&now-heldSince<=earlyMs&&anchor.worldUnitsPerMeter==1){
             const auto facing=normalized(anchor.orientation);
             const auto origin=cameraPosition(anchor.root,rotate(facing,anchor.cameraOffsetGameUnits),1);
             auto world=[&](Vec3 tracking){return cameraPosition(origin,rotate(facing,game::trackingPose(compose(liveTrackingToAnchor,Pose{{0,0,0,1},tracking})).position),anchor.worldUnitsPerMeter);};

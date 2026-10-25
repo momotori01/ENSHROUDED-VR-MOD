@@ -3,7 +3,7 @@
 // inputActor; this helper never mutates components or retains their pointers.
 namespace inputRanged {
 inline bool liveBowWatch=false;inline std::atomic<unsigned> bowSamples{0};
-struct BowSeen {uintptr_t world=0;uint32_t item=0;uint64_t digital=0;uint8_t state=0,queued=0;};
+struct BowSeen {uintptr_t world=0;uint32_t item=0,sequence=0;uint64_t digital=0;uint8_t state=0,queued=0;};
 inline std::mutex bowMutex;inline std::array<BowSeen,4> bowSeen{};
 // Read-only identity evidence, not a lifetime/shot authorization token.
 // 1.0 (2026-10-16, tools/reflection_struct_diff.py on the June and 1.0 executables): keen::ecs::RangedWeapon is 200 bytes;
@@ -267,6 +267,15 @@ inline void capture(uintptr_t sp,void* context,void* query,uint32_t bytes){
             if(raw!=read<std::array<uint8_t,rangedWeaponBytes>>(weapon)||camera!=read<std::array<uint8_t,44>>(input+0x28)||
                selected!=read<std::array<uint8_t,20>>(selection+selectionActionItem)||digital!=read<uint64_t>(input+game::playerInputDigital))return;
             const auto world=read<uintptr_t>(state+0x30);uint32_t item=0;std::memcpy(&item,raw.data()+rangedItem,4);
+            // The actor's running action (BaseActor +0, as motion_event_selection_observer.hpp reads it; 2026-10-24: does
+            // the bow's strong shot 1963645007 begin with the equipment bow, not on the action bar?).
+            const auto sequence=read<uint32_t>(actor);const auto sequenceActive=read<uint8_t>(actor+0x1b1)&1;
+            // the bow's shot state (3) and a refused special ability for the strong release (controller_ui_fixture.hpp,
+            // BowDraw::strongOutcome): RangedWeapon+0x7c usageFeedbackMask (keen::UsageFeedbackTypes of 1.0) SpecialAbility 10
+            // (its gauge not full - user 2026-10-24: "the strong shot needs the gauge charged") or SkillUnlock 11 (the skill
+            // not learned: Mock game-20261024-213418)
+            {const auto ms=GetTickCount64();uint16_t usage=0;std::memcpy(&usage,raw.data()+rangedUsageMask,2);
+             if(raw[0]==3)controllerUiFixture::bowNativeFireAt=ms;if(usage&0xc00)controllerUiFixture::bowNativeRefusedAt=ms;}
             bool changed=true;
             {std::lock_guard<std::mutex> lock(bowMutex);BowNativeIdentity* id=nullptr;
              for(auto& v:bowIdentities)if(v.world==world){id=&v;break;}
@@ -275,12 +284,12 @@ inline void capture(uintptr_t sp,void* context,void* query,uint32_t bytes){
              BowSeen* seen=nullptr;
              for(auto& v:bowSeen)if(v.world==world){seen=&v;break;}
              if(!seen)for(auto& v:bowSeen)if(!v.world){seen=&v;break;}
-             if(seen){changed=seen->world!=world||seen->item!=item||seen->digital!=digital||seen->state!=raw[0]||seen->queued!=raw[0x39];
-              *seen={world,item,digital,raw[0],raw[0x39]};}}
+             if(seen){changed=seen->world!=world||seen->item!=item||seen->sequence!=sequence||seen->digital!=digital||seen->state!=raw[0]||seen->queued!=raw[0x39];
+              *seen={world,item,sequence,digital,raw[0],raw[0x39]};}}
             const auto n=(bowSamples.load()<2048&&(changed||!(call%8)))?bowSamples.fetch_add(1):2048;
             if(n<2048)logFile->event("input_bow_sample","\"sample\":"+std::to_string(n+1)+",\"frame\":"+std::to_string(liveFrame.frame)+
                 ",\"entity\":"+std::to_string(entity)+",\"world\":"+hex(read<uintptr_t>(state+0x30))+
-                ",\"query_state\":"+hex(state)+",\"input\":"+hex(input)+",\"weapon\":"+hex(weapon)+",\"actor\":"+hex(actor)+",\"digital\":"+std::to_string(digital)+",\"weapon_bytes\":"+jsonString(categoryBytes(raw))+
+                ",\"query_state\":"+hex(state)+",\"input\":"+hex(input)+",\"weapon\":"+hex(weapon)+",\"actor\":"+hex(actor)+",\"sequence\":"+std::to_string(sequence)+",\"sequence_active\":"+std::to_string(sequenceActive)+",\"digital\":"+std::to_string(digital)+",\"weapon_bytes\":"+jsonString(categoryBytes(raw))+
                 ",\"camera_bytes\":"+jsonString(categoryBytes(camera))+",\"selection_bytes\":"+jsonString(categoryBytes(selected))+
                 ",\"read_only\":true,\"source_unchanged\":true");
         }

@@ -69,7 +69,13 @@ inline void onCopy(uintptr_t rsp) noexcept {
         // model, which stays on the game's pose under the private hands) are kept out of the eyes.
         const bool bodyShown=motionBodyIk::shown(pair.serial);
         if(bodyShown)parts.push_back(11);
-        if(handsOnly&&!bodyShown){parts.clear();for(unsigned n=0;n<(motionVisual::requested?s.handles.size():22);n++)if(motionVisual::requested||n!=11)parts.push_back(n);}
+        // First person with the pad (2026-10-25): the native body is shown (no tracked hands stand for it), but the head, the
+        // neck, the collar, the chest and the upper armour - the shoulder pieces and the breastplate, right before the eyes
+        // (Mock 20261025-115157) - are left out; the arms, the hands with what they hold, and the legs stay. More than the
+        // head payload's five: the hands-only payload (body::packAppearance) carries them, with no private model of the mod's.
+        const bool padFirst=game::padStyle.load()==1;
+        if(handsOnly&&!bodyShown&&padFirst)parts={0,1,2,3,4,5,6,15,16};
+        else if(handsOnly&&!bodyShown){parts.clear();for(unsigned n=0;n<(motionVisual::requested?s.handles.size():22);n++)if(motionVisual::requested||n!=11)parts.push_back(n);}
         std::vector<uint32_t> indices;
         for(auto part:parts)if(s.handles[part]){
             const auto handle=s.handles[part],index=handle&0xffffff;
@@ -132,6 +138,19 @@ inline void onCopy(uintptr_t rsp) noexcept {
                         throw std::runtime_error("motion private culling invariant changed");
                     else if(nativeRod){if(indices.size()<body::maximumModels&&std::find(indices.begin(),indices.end(),hand)==indices.end())indices.push_back(hand);hand=UINT32_MAX;}
                 }
+            }else if(padFirst){
+                // The first-person pad style (2026-10-25 evening, user: "the cape covers the eyes while gliding - hide it"): what
+                // hangs on the body (the glider, what is carried on the back) is left out; what the hands hold stays.
+                unsigned added=0;
+                for(const auto held:attachmentObserver::heldHandles(s.entity,pair.scene,GetTickCount64(),true,true)){
+                    const auto index=held&0xffffff;
+                    if(index>=cpuCount||index>=objectBytes/0x1b0||index>=generationCount||read<uint8_t>(generations+index)!=(held>>24))continue;
+                    const auto object=objects+uintptr_t(index)*0x1b0;if(!read<uintptr_t>(object+layout::modelResource))continue;
+                    if(indices.size()>=body::maximumModels)break; // payload capacity (24); body parts come first
+                    if(std::find(indices.begin(),indices.end(),index)==indices.end()){indices.push_back(index);++added;}
+                }
+                static unsigned lastAdded=UINT_MAX;static unsigned addedLogs=0;
+                if(added!=lastAdded&&addedLogs<200){lastAdded=added;++addedLogs;logFile->event("pad_first_attachments_hidden","\"count\":"+std::to_string(added)+",\"serial\":"+std::to_string(pair.serial));}
             }else{
             const auto handle=s.handles[11];hand=handle&0xffffff;
             if(!handle||hand>=cpuCount||hand>=objectBytes/0x1b0||hand>=generationCount||read<uint8_t>(generations+hand)!=(handle>>24))throw std::runtime_error("local hand ownership/generation unavailable");

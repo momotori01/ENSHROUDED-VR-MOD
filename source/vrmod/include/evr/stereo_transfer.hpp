@@ -92,6 +92,32 @@ class StereoTransfer
     // in the same submission as its XR copy, into an image owned by this transfer; the desktop blits that image.
     struct Mirror { VkImage image{}; VkDeviceMemory memory{}; uint32_t width = 0, height = 0; VkFormat format = VK_FORMAT_UNDEFINED; bool written = false; };
     Mirror mirror{};
+    // The headset-view fit (include/evr/fov_fit.hpp; [Picture] FitView): per eye an image of the eye's own format and size,
+    // the part stretched into it; then copied as the eye's picture is (byte for byte - the eye's picture holds sRGB bytes in
+    // a UNORM image and the runtime's image is an sRGB one: a blit between them would encode the colours twice).
+    std::array<Mirror, 2> fitImage{};
+    PFN_vkCmdBlitImage blit = nullptr;
+    void destroyFit() noexcept
+    {
+        for (auto &f : fitImage) { if (f.image) v.vkDestroyImage(v.device, f.image, nullptr); if (f.memory) v.vkFreeMemory(v.device, f.memory, nullptr); f = {}; }
+    }
+    void ensureFit(size_t eye, uint32_t width, uint32_t height, VkFormat format)
+    {
+        auto &f = fitImage[eye];
+        if (f.image && f.width == width && f.height == height && f.format == format) return;
+        if (f.image) v.vkDestroyImage(v.device, f.image, nullptr);
+        if (f.memory) v.vkFreeMemory(v.device, f.memory, nullptr);
+        f = {};
+        VkImageCreateInfo i{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        i.imageType = VK_IMAGE_TYPE_2D; i.format = format; i.extent = {width, height, 1}; i.mipLevels = 1; i.arrayLayers = 1;
+        i.samples = VK_SAMPLE_COUNT_1_BIT; i.tiling = VK_IMAGE_TILING_OPTIMAL;
+        i.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT; i.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        vkCheck(v.vkCreateImage(v.device, &i, nullptr, &f.image), "fit image");
+        VkMemoryRequirements req{}; v.vkGetImageMemoryRequirements(v.device, f.image, &req);
+        try { f.memory = v.allocate(req, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT); vkCheck(v.vkBindImageMemory(v.device, f.image, f.memory, 0), "fit bind"); }
+        catch (...) { v.vkDestroyImage(v.device, f.image, nullptr); f = {}; throw; }
+        f.width = width; f.height = height; f.format = format;
+    }
     void destroyMirror() noexcept
     {
         if (mirror.image) v.vkDestroyImage(v.device, mirror.image, nullptr);
@@ -144,6 +170,7 @@ class StereoTransfer
         }
         freeReadbacks();
         destroyMirror();
+        destroyFit();
         if (fence) v.vkDestroyFence(v.device, fence, nullptr);
         if (pool) v.vkDestroyCommandPool(v.device, pool, nullptr);
     }
@@ -199,6 +226,11 @@ class StereoTransfer
     StereoTransfer &operator=(const StereoTransfer &) = delete;
     ~StereoTransfer() { destroy(); }
     bool gpuPending() const { return pending; }
+    // The headset-view fit of the next copy() (set by the caller just before it; cleared by it): per eye the part of the
+    // source picture, in its pixels, that is stretched to the whole destination. off: the plain copy.
+    struct Fit { bool on = false; int32_t x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
+    std::array<Fit, 2> fit{};
+    uint64_t fitted = 0, fitFailures = 0;   // eyes stretched; eyes copied plain because their fit could not be made
     void copy(const std::array<TransferImage, 2> &src, const std::array<TransferImage, 2> &dst,
               const std::array<std::string, 2> &captures = {}, bool wait = true, bool luma = false, uint32_t eyes = 3)
     {
@@ -245,6 +277,19 @@ class StereoTransfer
                 vkCheck(v.vkAllocateMemory(v.device, &allocation, nullptr, &r.memory), "transfer cached readback memory");
                 vkCheck(v.vkBindBufferMemory(v.device, r.buffer, r.memory, 0), "transfer readback bind");
             }
+        // the fit's images and the blit, before anything is recorded (a failure leaves the plain copy of this frame)
+        for (size_t eye = 0; eye < 2; ++eye)
+            if (fit[eye].on)
+                try
+                {
+                    const auto &f = fit[eye];
+                    if (!(eyes >> eye & 1) || !(f.x1 > f.x0 && f.y1 > f.y0) || f.x0 < 0 || f.y0 < 0 || uint32_t(f.x1) > src[eye].width || uint32_t(f.y1) > src[eye].height)
+                        throw std::invalid_argument("fit part outside the picture");
+                    if (!blit) blit = reinterpret_cast<PFN_vkCmdBlitImage>(v.vkGetDeviceProcAddr(v.device, "vkCmdBlitImage"));
+                    if (!blit) throw std::runtime_error("vkCmdBlitImage unavailable");
+                    ensureFit(eye, src[eye].width, src[eye].height, src[eye].format);
+                }
+                catch (...) { fit[eye].on = false; ++fitFailures; }
         const auto allocated=Clock::now();timing.allocateUs=micros(freed,allocated);
         vkCheck(v.vkResetCommandBuffer(cmd, 0), "transfer reset command");
         VkCommandBufferBeginInfo b{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
@@ -263,8 +308,26 @@ class StereoTransfer
             VkImageCopy region{};
             region.srcSubresource = region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             region.extent = {s.width, s.height, 1};
-            v.vkCmdCopyImage(cmd, s.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                            d.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            if (fit[eye].on)
+            {
+                // the part stretched into the fit image, that copied as the picture would be
+                const auto &f = fit[eye]; auto &m = fitImage[eye];
+                barrier(m.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        0, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                VkImageBlit b{};
+                b.srcSubresource = b.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                b.srcOffsets[0] = {f.x0, f.y0, 0}; b.srcOffsets[1] = {f.x1, f.y1, 1};
+                b.dstOffsets[0] = {0, 0, 0}; b.dstOffsets[1] = {int32_t(s.width), int32_t(s.height), 1};
+                blit(cmd, s.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, m.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &b, VK_FILTER_LINEAR);
+                barrier(m.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT);
+                v.vkCmdCopyImage(cmd, m.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                d.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+                ++fitted;
+            }
+            else
+                v.vkCmdCopyImage(cmd, s.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                                d.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
             if (eye == 1 && mirrorRight)
             {
                 ensureMirror(s.width, s.height, s.format);
@@ -325,6 +388,7 @@ class StereoTransfer
                                   0, 1, &host, 0, nullptr, 0, nullptr);
         }
         vkCheck(v.vkEndCommandBuffer(cmd), "transfer end command");
+        fit = {};   // one copy's
         vkCheck(v.vkResetFences(v.device, 1, &fence), "transfer reset fence");
         const auto recorded=Clock::now();timing.recordUs=micros(allocated,recorded);
         VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO}; submit.commandBufferCount = 1; submit.pCommandBuffers = &cmd;

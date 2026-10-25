@@ -110,6 +110,10 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
    ck((d&inputDiveDescend)&&!(d&inputDiveAscend)&&onlyHolsterAndCameraChanged(wheel,o));
    auto p=wheel;swimInputBits=inputSwimBits|inputAreaLoot;ck(applySwimInput(p,10));std::memcpy(&d,p.data()+inputDigital,8);ck((d&inputSwimBits)==inputSwimBits&&onlyHolsterAndCameraChanged(wheel,p));
    p[inputDigital+4]^=0x20;ck(!onlyHolsterAndCameraChanged(wheel,p));swimInputBits=0;swimInputUntilMs=0;ck(!applySwimInput(o,10));}
+  // the bow's special ability (2026-10-24): SpecialAbility 9 and SpecialAbility_Hold 11 until specialInputUntilMs, nothing else
+  {auto q=wheel;specialInputUntilMs=500;ck(applySpecialInput(q,499));uint64_t d=0,w=0;std::memcpy(&d,q.data()+inputDigital,8);std::memcpy(&w,wheel.data()+inputDigital,8);
+   ck(d==(w|0xa00ull)&&onlyHolsterAndCameraChanged(wheel,q));auto r2=wheel;ck(!applySpecialInput(r2,500)&&r2==wheel);
+   q[inputDigital+1]^=0x04;ck(!onlyHolsterAndCameraChanged(wheel,q));specialInputUntilMs=0;}
   out=wheel;out[inputDigital+5]^=0x40;ck(!onlyHolsterAndCameraChanged(wheel,out));
   r.serial=6;r.equip=-1;r.arm=true;out=wheel;s.apply(r,wheel,out);s.reset();out=wheel;a=s.apply(r,wheel,out);ck(out==wheel&&!a.arm);}
  std::cout<<"holster "<<n<<" PASS\n";return 0;}

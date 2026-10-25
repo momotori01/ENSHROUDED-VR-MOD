@@ -267,11 +267,13 @@ inline MeleeAppearance meleeAppearance(uint32_t local,uint64_t now,bool eitherHa
 // hidden native body and floated in front of the eyes; live play hides them (only the tracked clone is drawn).
 // anySlot (third run feedback: the glider cape covered half the view while gliding) takes every slot of the local
 // player, not only the hands: the VR eyes never show the native body or what hangs on it.
-inline std::vector<uint32_t> heldHandles(uint32_t local,uintptr_t scene,uint64_t now,bool anySlot=false){
+// exceptHands (the first-person pad style, 2026-10-25 evening: "the cape covers the eyes while gliding"): what hangs on the
+// body but not what the hands hold - the native body is shown there.
+inline std::vector<uint32_t> heldHandles(uint32_t local,uintptr_t scene,uint64_t now,bool anySlot=false,bool exceptHands=false){
     std::vector<uint32_t> out;std::lock_guard<std::mutex> lock(mutex);
     auto fresh=[&](uint64_t t){return pauseClock::fresh(t,now,500);};
     for(const auto& c:children)
-        if(c.parent==local&&c.handle&&c.modelScene==scene&&c.slotObserved&&c.target==0&&(anySlot||c.slot==8||c.slot==9)&&fresh(c.modelSeen)&&fresh(c.slotSeen))
+        if(c.parent==local&&c.handle&&c.modelScene==scene&&c.slotObserved&&c.target==0&&(anySlot||c.slot==8||c.slot==9)&&!(exceptHands&&(c.slot==8||c.slot==9))&&fresh(c.modelSeen)&&fresh(c.slotSeen))
             out.push_back(c.handle);
     return out;
 }

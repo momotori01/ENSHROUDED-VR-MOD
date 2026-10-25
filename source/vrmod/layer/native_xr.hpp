@@ -1101,7 +1101,15 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
             }catch(const std::exception& e){state.historyFailed=true;eyeHistoryDone=eyeHistoryAsked.load();state.log->event("eye_history_failed","\"stage\":\"save\",\"reason\":"+jsonString(e.what()));}
             state.history->begin(frame,GetTickCount64(),eyes==3);
         }
+        // The headset-view fit ([Picture] FitView, include/evr/fov_fit.hpp; ALVR): the part of each picture the runtime's own
+        // field of view covers, taken now that the game has drawn them; the frame's field of view becomes the runtime's.
+        {std::array<evr::fovfit::Rect,2> parts{};std::array<StereoTransfer::Fit,2> fit{};
+         if(xr.takeRuntimeFovFit(parts,eyes))for(size_t eye=0;eye<2;++eye)if((eyes>>eye&1)&&parts[eye].valid())fit[eye]={true,parts[eye].x0,parts[eye].y0,parts[eye].x1,parts[eye].y1};
+         state.transfer->fit=fit;}
+        const auto fitFailuresBefore=state.transfer->fitFailures;
         state.transfer->copy(src,dst,captures,!async,lumaFrame,eyes);
+        if(state.transfer->fitFailures!=fitFailuresBefore){static unsigned fitFailureLogs=0;
+            if(fitFailureLogs++<20)state.log->event("runtime_fov_fit_failed","\"frame\":"+std::to_string(frame)+",\"failures\":"+std::to_string(state.transfer->fitFailures)+",\"plain_copy\":true");}
         if(state.history)state.history->end();
         copyDone=std::chrono::steady_clock::now();uiDone=copyDone;
         // Desktop UI (2026-10-13, user: "put the UI on the desktop side, for streaming"): with the UI of this frame the

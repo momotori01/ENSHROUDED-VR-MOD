@@ -7,6 +7,7 @@
 #include <evr/log.hpp>
 #include <evr/math.hpp>
 #include <evr/fov_crop.hpp>
+#include <evr/fov_fit.hpp>
 #include <evr/symmetric_fov.hpp>
 #include <evr/openxr_dispatch.hpp>
 #include <evr/process_exit.hpp>
@@ -51,6 +52,10 @@ struct OpenXrFrameSnapshot
     // released swapchain image" (OpenXR, rendering chapter). Alternate-eye rendering (2026-10-14, user: "try the
     // PureDark way" - one eye a frame, the other from before).
     uint32_t eyeMask = 3;
+    // The headset-view fit (fitRuntimeFov below): the runtime's own field of view of each eye, before the symmetric one took
+    // its place in views; fitPending until the layer takes the fit (takeRuntimeFovFit) just before the eyes' copy.
+    std::array<XrFovf, 2> runtimeFov{};
+    bool fitPending = false;
 };
 // A part of the UI image as a quad of its own (the aim cluster, include/evr/aim_mark.hpp): its pixels in the image,
 // the pose of its centre in the VIEW space or (localSpace) the LOCAL space, its size in metres.
@@ -89,6 +94,14 @@ class OpenXrClient : private OpenXrDispatch
     // cantedEnvelope, 2026-10-19), the eye extent shrunk to keep the pixels per degree. EVR_CANTED_FOV=0: the plain
     // envelope at the full extent, as before.
     bool cantedFov = true;
+    // The headset-view fit (include/evr/fov_fit.hpp, [Picture] FitView; 2026-10-25, ALVR through SteamVR showed the symmetric
+    // picture as its own field of view - cross-eyed): with symmetricFov the eyes are drawn as always, and the part of each
+    // picture that the runtime's own field of view covers is stretched to the eye's image and submitted with that field of view
+    // and the eye's own pose. EVR_FIT_RUNTIME_FOV 1 on, 0 off, unset: on when the system name says ALVR. Not with the alternate
+    // eyes (their warps take the drawn picture's field of view); the frustums are not turned (cantedFov off) so the part is a
+    // rectangle of the picture.
+    bool fitRuntimeFov = false;
+    unsigned fitLogs = 0;
     // masked: the turned frustums of the first frame hold the lens' visible area (cantedEnvelope with the mask) and are
     // used while the runtime fov stays that of the first frame; a changed mask or fov goes back to the corners' frustum.
     // cacheWritten: the lens' visible area came later than the first frame and was kept for the next start (fovCache)
@@ -603,6 +616,27 @@ class OpenXrClient : private OpenXrDispatch
         XrSystemGetInfo si{XR_TYPE_SYSTEM_GET_INFO};
         si.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
         xrCheck(xrGetSystem(instance, &si, &system), "xrGetSystem");
+        {   // the headset's name (for the record, and the fit's Auto)
+            XrSystemProperties sp{XR_TYPE_SYSTEM_PROPERTIES};
+            const bool named = XR_SUCCEEDED(xrGetSystemProperties(instance, system, &sp));
+            const std::string name = named ? std::string(sp.systemName) : std::string();
+            const char *fitFlag = std::getenv("EVR_FIT_RUNTIME_FOV");
+            const bool forced = fitFlag && *fitFlag;
+            // Auto ([Picture] FitView): ALVR found by the headset's name, or by ALVR's driver in SteamVR's server (only with
+            // SteamVR's runtime - ALVR is a driver of SteamVR)
+            const bool alvrByName = fovfit::alvrName(name);
+            const bool steamVr = std::string(props.runtimeName).rfind("SteamVR", 0) == 0;
+            const int alvrDriver = !forced && !alvrByName && steamVr ? fovfit::processHasModule(L"vrserver.exe", L"driver_alvr_server.dll") : -3;
+            fitRuntimeFov = forced ? !std::strcmp(fitFlag, "1") : alvrByName || alvrDriver == 1;
+            const char *alternate = std::getenv("EVR_ALTERNATE_EYES");
+            const char *why = !fitRuntimeFov ? (forced ? "normal_by_setting" : "not_alvr") : !symmetricFov ? "symmetric_fov_off" :
+                (alternate && !std::strcmp(alternate, "1")) ? "alternate_eyes" : forced ? "fit_by_setting" : alvrByName ? "alvr_by_name" : "alvr_driver_in_vrserver";
+            if (!std::strcmp(why, "symmetric_fov_off") || !std::strcmp(why, "alternate_eyes")) fitRuntimeFov = false;
+            if (fitRuntimeFov) cantedFov = false;
+            log.event("xr_system", "\"name\":" + jsonString(name) + ",\"vendor_id\":" + std::to_string(named ? sp.vendorId : 0u) +
+                ",\"fit_runtime_fov\":" + (fitRuntimeFov ? "true" : "false") + ",\"fit_why\":\"" + why + "\",\"fit_setting\":" + jsonString(forced ? fitFlag : "auto") +
+                ",\"alvr_driver\":" + std::to_string(alvrDriver) + ",\"canted_fov\":" + (cantedFov ? "true" : "false"));
+        }
         XrGraphicsRequirementsVulkanKHR req{XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR};
         if (enable2)
             xrCheck(xrFunction<PFN_xrGetVulkanGraphicsRequirements2KHR>(
@@ -1016,6 +1050,33 @@ class OpenXrClient : private OpenXrDispatch
     // All staged operations must be serialized by the caller. Queue access must
     // also be externally synchronized with the game and runtime. No new pose
     // query occurs between beginFrame and finishFrame.
+    // The headset-view fit of the pending frame (fitRuntimeFov): per eye the part of its drawn picture (the target's extent)
+    // that the runtime's own field of view covers; the frame's field of view becomes the runtime's - what is drawn over the
+    // pictures after their copy (layer/native_xr.hpp: the aim mark, the guides) and what xrEndFrame submits. Taken once, just
+    // before the eyes' copy, when the game has drawn them. false: no fit in this frame.
+    bool takeRuntimeFovFit(std::array<fovfit::Rect, 2> &parts, uint32_t eyes)
+    {
+        if (!pending.active || !pending.snapshot.fitPending) return false;
+        pending.snapshot.fitPending = false;
+        for (uint32_t eye = 0; eye < 2; ++eye)
+        {
+            if (!(eyes >> eye & 1)) continue;
+            auto &view = pending.snapshot.views[eye];
+            const auto drawn = view.fov, shown = pending.snapshot.runtimeFov[eye];
+            parts[eye] = fovfit::part({drawn.angleLeft, drawn.angleRight, drawn.angleUp, drawn.angleDown},
+                                      {shown.angleLeft, shown.angleRight, shown.angleUp, shown.angleDown}, targets[eye].width, targets[eye].height);
+            if (parts[eye].valid()) view.fov = shown;
+            if (fitLogs < 6 || (fitLogs < 400 && frames % 600 == 0))
+            {
+                ++fitLogs;
+                std::ostringstream o; o << std::setprecision(8) << "\"frame\":" << frames << ",\"eye\":" << eye << ",\"part\":[" << parts[eye].x0 << ',' << parts[eye].y0 << ',' << parts[eye].x1 << ',' << parts[eye].y1
+                    << "],\"extent\":[" << targets[eye].width << ',' << targets[eye].height << "],\"drawn_fov\":[" << drawn.angleLeft << ',' << drawn.angleRight << ',' << drawn.angleUp << ',' << drawn.angleDown
+                    << "],\"shown_fov\":[" << shown.angleLeft << ',' << shown.angleRight << ',' << shown.angleUp << ',' << shown.angleDown << "],\"valid\":" << (parts[eye].valid() ? "true" : "false");
+                log.event("runtime_fov_fit", o.str());
+            }
+        }
+        return true;
+    }
     const OpenXrFrameSnapshot &pendingFrame() const
     {
         if (!pending.active) throw std::logic_error("no pending OpenXR frame");
@@ -1095,6 +1156,11 @@ class OpenXrClient : private OpenXrDispatch
     // looked for and the choice logged) and for the refresh thread's (2026-10-23), which shows the same pictures.
     void shapeViews(std::array<XrView, 2> &views, bool gameFrame)
     {
+        if (gameFrame && &views == &pending.snapshot.views)
+        {
+            pending.snapshot.runtimeFov = {views[0].fov, views[1].fov};
+            pending.snapshot.fitPending = fitRuntimeFov && symmetricFov && !crop.active;
+        }
         if (gameFrame && !crop.decided) decideFovCrop(views);
         if (gameFrame && symmetricFov && cantedFov && cant.decided && !cant.masked && !cant.cacheWritten && !cant.lateGaveUp && xrGetVisibilityMaskKHR &&
             fovCropRequested() && frames % 30 == 0)

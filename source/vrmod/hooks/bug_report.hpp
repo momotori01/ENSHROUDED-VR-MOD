@@ -410,15 +410,17 @@ inline void sample(const evr::motion::HandFrame& f,const evr::motion::GestureHea
 // Once per XR frame (view_resource_probe.cpp, after the menu pointer).
 inline void disable();
 inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead& head,uint64_t now){
-    static bool tried=false;if(!tried&&menuPointer::installed){tried=true;install();if(installed)menuPointer::onDisable=&disable;}
+    // a pad style (2026-10-25): no pointer - the button is the pad's left stick click on the pad panel (pad_settings.hpp)
+    static bool tried=false;if(!tried&&(menuPointer::installed||game::padStyle.load())){tried=true;install();if(installed)menuPointer::onDisable=&disable;}
     if(!installed)return;
     try{
         std::lock_guard<std::mutex> lock(mutex);
         const auto screen=menuPointer::screen.load();
         // EVR_BUG_REPORT_PRESS_AT=<XR frame> (Mock trials): the button counts as pressed at that frame while the start menu is open.
         {static const uint64_t pressAt=[]{char v[24]{};const auto n=GetEnvironmentVariableA("EVR_BUG_REPORT_PRESS_AT",v,sizeof v);return n&&n<sizeof v?std::strtoull(v,nullptr,10):0ull;}();
-         static bool pressed=false;if(pressAt&&!pressed&&f.frame>=pressAt&&screen==2&&phase.load()==int(Phase::Idle)){pressed=true;pressHit(Hit::BugReport,"test");}}
-        while(nextTestPress<testPresses.size()&&f.frame>=testPresses[nextTestPress].frame&&screen==2){pressHit(testPresses[nextTestPress].hit,"test",testPresses[nextTestPress].value);++nextTestPress;}
+         // the XR frame (liveFrame): a pad style samples no hands, their frame stays 0
+         static bool pressed=false;if(pressAt&&!pressed&&liveFrame.frame>=pressAt&&screen==2&&phase.load()==int(Phase::Idle)){pressed=true;pressHit(Hit::BugReport,"test");}}
+        while(nextTestPress<testPresses.size()&&liveFrame.frame>=testPresses[nextTestPress].frame&&screen==2){pressHit(testPresses[nextTestPress].hit,"test",testPresses[nextTestPress].value);++nextTestPress;}
         const auto p=Phase(phase.load());
         if(p==Phase::Armed&&screen==1&&lastScreen!=1)begin(now);
         else if(p==Phase::Recording){sample(f,head,now);if(now-startMs>=evr::bugreport::windowMs)finish(now,"time");}
@@ -435,7 +437,9 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
         lastScreen=screen;
         // What the plate shows.
         const auto q=Phase(phase.load());
-        if(screen==2&&(q==Phase::Idle||q==Phase::Armed||q==Phase::Done)){
+        // A pad style: over the start menu the pad panel (pad_settings.hpp) holds the layer's one overlay and shows this line.
+        if(screen==2&&game::padStyle.load()){drawnKind=-1;drawnSeconds=-1;drawnLook=~0ull;}
+        else if(screen==2&&(q==Phase::Idle||q==Phase::Armed||q==Phase::Done)){
             const int kind=q==Phase::Armed?1:0;
             // over whatever the game shows there (user 2026-10-15: "show it even over other things - this first")
             // hidden while the game covers much of the place (the settings page, user 2026-10-17: "the bug report button stays

@@ -140,6 +140,10 @@ inline void gate(void* sub,uint8_t value,void* frontend,uintptr_t returnAddress)
     if(s.readable&&s.stable){
         menuPointer::screen=s.screen;menuPointer::deviceMode=s.deviceMode;pauseClock::update(s.screen==2,GetTickCount64());
         if(!controllerUiFixture::requested)inputGamepad::capture(reinterpret_cast<uintptr_t>(frontend),s.number);
+        // A pad style (2026-10-25): no live input reads the screen, so whether the game shows its play HUD (the bow's and the
+        // staff's aim, auxiliary 3, too) goes to the HUD auto-hide from here (view_resource_probe.cpp uiHudBridge).
+        if(game::padStyle.load()){controllerUiFixture::liveScreenGameplay=s.world&&s.senderContext&&s.entity&&s.screen==1&&(s.auxiliary==0||s.auxiliary==3)&&!s.nativeResult;
+            controllerUiFixture::liveScreenAt=GetTickCount64();}
         else controllerUiFixture::onScope(reinterpret_cast<uintptr_t>(frontend),s.world&&s.senderContext&&s.entity&&s.screen==1&&s.auxiliary==0&&!s.nativeResult,s.screen,s.auxiliary,s.world&&s.senderContext&&s.entity,s.nativeResult);
     }
     const auto previous=snapshot();

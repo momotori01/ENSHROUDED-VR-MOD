@@ -46,5 +46,13 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
  {const auto e=entries("[Mode]\r\nVR=1\r\n[Environment]\r\n; a comment\r\nEVR_GRIP_TRIM=\r\nXR_RUNTIME_JSON = C:\\x y\\mock.json   ; test\r\n[Other]\r\nA=1\r\n","environment");
   ck(e.size()==2&&e[0].first=="EVR_GRIP_TRIM"&&e[0].second.empty()&&e[1].first=="XR_RUNTIME_JSON"&&e[1].second=="C:\\x y\\mock.json"&&entries(ini,"Nothing").empty());}
  ck(text(.8)=="0.8"&&text(1.)=="1.0"&&text(.25)=="0.25"&&text(.7)=="0.7");
+ // [Picture] FitView (2026-10-25): Auto unless named; the earlier forms' names read as Fit / Normal
+ ck(read("").fitView==FitView::Auto&&read("[Picture]\nFitView=Fit\n").fitView==FitView::Fit&&read("[Picture]\nFitView=ALVR\n").fitView==FitView::Fit&&read("[Picture]\nFitView=on\n").fitView==FitView::Fit&&
+    read("[Picture]\nFitView=Normal\n").fitView==FitView::Normal&&read("[Picture]\nFitView=SteamVR\n").fitView==FitView::Normal&&read("[Picture]\nFitView=auto\n").fitView==FitView::Auto);
+ // The play style (2026-10-25): Motion unless named; [Pad] PitchLock on and Tilt 0 unless set, the tilt 0 .. 90.
+ {const auto d=read("");ck(d.style==Style::Motion&&!padStyle(d)&&d.padPitchLock&&d.padTilt==0);
+  const auto first=read("[Mode]\nStyle=padfirst\n[Pad]\nTilt=45\n");ck(first.style==Style::PadFirst&&padStyle(first)&&first.padTilt==45&&first.padPitchLock);
+  const auto third=read("[Mode]\nStyle=PadThird\n[Pad]\nPitchLock=0\nTilt=90\n");ck(third.style==Style::PadThird&&!third.padPitchLock&&third.padTilt==90);
+  const auto bad=read("[Mode]\nStyle=Sideview\n[Pad]\nTilt=120\n");ck(bad.style==Style::Motion&&bad.padTilt==0);}
  std::cout<<"vr_settings "<<n<<" PASS\n";return 0;}
  catch(const std::exception& e){std::cerr<<"vr_settings FAIL "<<e.what()<<"\n";return 1;}}

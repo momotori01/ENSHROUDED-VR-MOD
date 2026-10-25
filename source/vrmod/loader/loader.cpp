@@ -178,11 +178,14 @@ DWORD run(const char* name,const std::wstring& directory){
 }
 std::wstring stage(const std::wstring& name){const std::wstring path=g.session+L"\\"+name;CreateDirectoryW(path.c_str(),nullptr);return path;}
 bool put(const std::wstring& folder,const std::string& name,const std::string& bytes){return writeFile(folder+L"\\"+wide(name),bytes);}
-// The package's profile: every policy file of the eyes that does not depend on the settings or on the world.
+// The package's profile: every policy file of the eyes that does not depend on the settings or on the world. A pad style
+// (2026-10-25, [Mode] Style) leaves the motion controllers' files out (auto_start.hpp motionProfileFile).
 bool copyProfile(const std::wstring& to){
+    const bool pad=evr::settings::padStyle(g.values);
     const std::wstring from=g.paths.data+L"\\profile";WIN32_FIND_DATAW found{};unsigned files=0;bool ok=true;
     const HANDLE search=FindFirstFileW((from+L"\\*").c_str(),&found);if(search==INVALID_HANDLE_VALUE)return false;
     do{if(found.dwFileAttributes&FILE_ATTRIBUTE_DIRECTORY)continue;
+        if(pad&&start::motionProfileFile(narrow(found.cFileName)))continue;
         ok=CopyFileW((from+L"\\"+found.cFileName).c_str(),(to+L"\\"+found.cFileName).c_str(),FALSE)&&ok;++files;}while(FindNextFileW(search,&found));
     FindClose(search);return ok&&files>=20;
 }
@@ -310,7 +313,8 @@ void begin(){
     if(!readFile(g.ini,g.iniText))say("settings: "+narrow(g.ini)+" is not there; the defaults are used (VR off)");
     g.values=evr::settings::forStart(evr::settings::read(g.iniText));   // with the alternate eyes, their own picture (2026-10-23)
     say("settings: VR="+std::to_string(int(g.values.vr))+" Sync="+std::to_string(int(g.values.online))+" RenderScale="+evr::settings::text(g.values.renderScale)+" Dlss="+g.values.dlss+
-        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+" UiAutoHide="+std::to_string(int(g.values.uiAutoHide))+" AlternateEyes="+std::to_string(int(g.values.alternateEyes))+" AfwPacing="+std::to_string(g.values.afwPacing)+(given?" (from EVR_AUTO_INI)":""));
+        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+" UiAutoHide="+std::to_string(int(g.values.uiAutoHide))+" AlternateEyes="+std::to_string(int(g.values.alternateEyes))+" AfwPacing="+std::to_string(g.values.afwPacing)+" FitView="+evr::settings::fitViewNames()[size_t(g.values.fitView)]+(given?" (from EVR_AUTO_INI)":""));
+    say("settings: Style="+evr::settings::styleNames()[size_t(g.values.style)]+" PitchLock="+std::to_string(int(g.values.padPitchLock))+" Tilt="+std::to_string(g.values.padTilt));
     if(!supportedBuild()){restoreRenderSettings();status("Off: this version of the game is not the one the mod was made for (the game was updated?); the game runs without the mod");return;}
     applyRecommendedGraphics();
     const bool hooks=exists(g.paths.bin+L"\\evr_hooks.dll");
@@ -347,6 +351,10 @@ void begin(){
         // The stroke's speed and swimming by the arms (2026-10-20), changeable there too.
         setEnvironment(L"EVR_SWING_SPEED",std::to_wstring(g.values.swingSpeed));setEnvironment(L"EVR_ARM_SWIM",g.values.armSwim?L"":L"0");setEnvironment(L"EVR_HIT_STOP",g.values.hitStop?L"":L"0");
         setEnvironment(L"EVR_UI_AUTO_HIDE",g.values.uiAutoHide?L"":L"0");   // [Picture] UiAutoHide (2026-10-23)
+        // [Picture] FitView (2026-10-25): Fit 1, Normal 0, Auto none (the client finds ALVR itself)
+        setEnvironment(L"EVR_FIT_RUNTIME_FOV",g.values.fitView==evr::settings::FitView::Fit?L"1":g.values.fitView==evr::settings::FitView::Normal?L"0":L"");
+        // A pad style (2026-10-25): the native body shown but the head, nothing of the motion controllers.
+        if(evr::settings::padStyle(g.values))for(const auto& variable:start::padEnvironment())setEnvironment(variable.first,variable.second);
         // The mod's Vulkan layer prepares OpenXR only with the runtime named by an absolute path (layer/xr_preflight.hpp).
         // Without XR_RUNTIME_JSON it is the PC's own active runtime, named here. First headset start from Steam,
         // 2026-10-14 12:39: "preflight requires explicit absolute runtime/loader paths" - the Mock tests had always

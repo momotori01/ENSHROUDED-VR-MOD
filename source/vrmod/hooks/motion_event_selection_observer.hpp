@@ -21,7 +21,7 @@ inline void restrictToRetained(const motion::EventActionKey& key){
  logFile->event("motion_event_retained_scope","\"actor_argument\":"+hex(retainedScope.actorArgument)+",\"native_registry_argument\":"+hex(retainedScope.registryArgument)+",\"world\":"+hex(key.world)+",\"entity\":"+std::to_string(key.entity)+",\"sequence\":"+std::to_string(key.sequence)+",\"trigger\":"+std::to_string(key.trigger)+",\"native_arguments_only\":true,\"reads_camera\":false,\"dereferences_saved_actor\":false"+combatEpochGate::stampFields(key.epoch));
 }
 inline bool shadowRequested=false;inline std::atomic<unsigned> shadowCalls{0};
-inline Select original=nullptr;inline bool requested=false,enabled=false;inline std::atomic<bool> accepting{false};
+inline Select original=nullptr;inline bool requested=false,enabled=false,hostOnly=false;inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},samples{0},failures{0};
 constexpr uintptr_t rva=0x213b50,callerRva=0x224524;
 constexpr const char* pattern="48 89 5c 24 18 48 89 6c 24 20 56 48 83 ec 50 f6 82 b1 01";
@@ -453,7 +453,7 @@ inline void liveEvents(void* output,const void* actor,void* registry,const std::
   // and its weapon hits are the real weapon's as well when the catalog gives it one.
   uint16_t actionTrigger=0;std::memcpy(&actionTrigger,before.data()+0x18,2);
   // The bow's strong shot begun by this player (Attack_Player_SpecialAbility_Strong_Shot_Bow, 1 s; the 1.0 attack table).
-  if(key.sequence==1963645007u&&root.entity==entity&&triggerEntity==entity){controllerUiFixture::strongShotAt=now;
+  if(key.sequence==1963645007u&&root.entity==entity&&triggerEntity==entity){controllerUiFixture::strongShotAt=now;controllerUiFixture::strongActionAt=now;
    static std::atomic<unsigned> told{0};if(told.fetch_add(1)<100)logFile->event("strong_shot_begun","\"frame\":"+std::to_string(liveFrame.frame)+",\"action_trigger\":"+std::to_string(actionTrigger));}
   const auto* listed=evr::attacks::find(key.sequence);const bool stroke=press.starts(key,now);
   const bool button=!stroke&&specialAbilityOwned&&actionTrigger==specialAbilityTrigger&&listed&&listed->skill&&listed->weaponHits;
@@ -1148,6 +1148,11 @@ __declspec(noinline) uintptr_t __fastcall select(void* output,const void* actor,
   const auto f=read<std::array<uint8_t,5>>(reinterpret_cast<uintptr_t>(filter));uint32_t hash=0;if(f[4])std::memcpy(&hash,f.data(),4);
   const bool stable=before==read<std::array<uint8_t,3104>>(reinterpret_cast<uintptr_t>(actor))&&header==read<std::array<uintptr_t,4>>(address)&&f==read<std::array<uint8_t,5>>(reinterpret_cast<uintptr_t>(filter));
   if(!stable)throw std::runtime_error("event selection changed Actor or source descriptor");
+  // Each change of the local actor's running action, beyond the recording budget (2026-10-24: which action a key or a
+  // button began - the bow's strong shot, Attack_Player_SpecialAbility_Strong_Shot_Bow 1963645007).
+  {static std::atomic<uint32_t> lastSequence{0};static std::atomic<unsigned> sequenceLogs{0};uint32_t running=0,heldItem=0;std::memcpy(&running,before.data(),4);std::memcpy(&heldItem,before.data()+0x38,4);
+   if(running!=lastSequence.exchange(running)&&sequenceLogs.fetch_add(1)<2000)
+    logFile->event("action_sequence_changed","\"entity\":"+std::to_string(entity)+",\"sequence\":"+std::to_string(running)+",\"item\":"+std::to_string(heldItem)+",\"frame\":"+std::to_string(liveFrame.frame));}
   const auto observation=recordingBudget.observe();++samples;
   if(observation.record||observation.witness)try{
   uint32_t sequence=0,item=0;int64_t start=0,end=0,start2=0,end2=0,trigger=0;std::memcpy(&sequence,before.data(),4);std::memcpy(&item,before.data()+0x38,4);std::memcpy(&trigger,before.data()+8,8);
@@ -1205,8 +1210,9 @@ inline void disable(){
    o<<"{\"caller\":"<<hex(uintptr_t(key>>32))<<",\"filter_hash\":"<<uint32_t(key)<<",\"calls\":"<<censusCounts[i].load()<<'}';}
   o<<"],\"filter_hash_4294967295\":\"no filter argument\",\"filter_hash_0\":\"filter absent\"";logFile->event("motion_event_selection_callers",o.str());}
  logFile->event("motion_event_selection_removed",std::string("\"restored\":")+(restored?"true":"false")+",\"callbacks\":"+std::to_string(callbacks.load())+",\"samples\":"+std::to_string(samples.load())+",\"failures\":"+std::to_string(failures.load()));
- // Live play may end without any action, and a rejected read there is reported, not fatal.
- if(liveRetime){if(!restored||callbacks.load())throw std::runtime_error("native event selection did not restore/quiesce");return;}
+ // Live play may end without any action, and a rejected read there is reported, not fatal; so may a pad style's host part
+ // (hostOnly, 2026-10-25: the other players' actions only, which may not come).
+ if(liveRetime||hostOnly){if(!restored||callbacks.load())throw std::runtime_error("native event selection did not restore/quiesce");return;}
  if(!restored||callbacks.load()||failures.load()||!samples.load()||(shadowRequested&&shadowCalls.load()!=controllerUiFixture::expectedNativeActions())||(retimeRequested&&(appended+blocked!=controllerUiFixture::expectedNativeActions()||suppressed!=controllerUiFixture::expectedNativeActions())))throw std::runtime_error("native event selection observation failed");
 }
 }

@@ -296,7 +296,10 @@ inline game::StableAnchor anchor(const Sample& s){
     game::StableAnchor a;a.root=s.stable.position;a.orientation=euler(lastYaw,0,0);a.cameraOffsetGameUnits={0,height,0};
     return a;
 }
+// The third-person pad style with the pitch lock (2026-10-25): the game camera's place and its heading only - the view stays
+// level while the right stick moves the camera up and down (the head still looks up and down).
 inline game::StableAnchor renderAnchor(const Sample& s,WorldPositionQ32 nativePosition,Quat nativeOrientation){
+    if(!firstPerson(s)&&game::padStyle.load()==2&&game::padPitchLock.load())return game::nativeCameraAnchor(nativePosition,euler(heading(normalized(nativeOrientation),0.f),0,0));
     return firstPerson(s)?anchor(s):game::nativeCameraAnchor(nativePosition,nativeOrientation);
 }
 inline void install(){

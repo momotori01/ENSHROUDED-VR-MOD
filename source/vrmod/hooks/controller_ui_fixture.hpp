@@ -24,6 +24,7 @@
 #include <evr/controller_menu_fixture.hpp>
 #include <evr/live_pad.hpp>
 #include <evr/left_trigger_tools.hpp>
+#include <evr/staff_trigger.hpp>
 #include <evr/bow_input_trial.hpp>
 #include <evr/bow_physical_trial.hpp>
 #include <evr/bow_physical_release.hpp>
@@ -314,9 +315,11 @@ inline std::atomic<uint64_t> throwEarlySpawnUntil{0};
 // A wand's shot handed early (the same, 2026-10-24): before the game's shot state 3 the hand's aim was refused (headset run
 // 20261024-151525: every wand shot "native_identity" at the state 2 - the spells did not fly to the white dot).
 inline std::atomic<uint64_t> rangedEarlySpawnUntil{0};
-// The string is held with the right grip (the strong shot's draw, BowDraw::strongDraw): the game does not aim then and
-// shows no arrow of its own, so motion_arrow_visual.hpp keeps its clone on the string for the whole draw.
-inline std::atomic<bool> bowStrongDrawing{false};
+// What the game made of a strong release (2026-10-24, BowDraw::strongOutcome): when this player's strong shot began
+// (motion_event_selection_observer.hpp), when the own bow was last seen in its shot state (3) and when its special ability
+// was last refused (RangedWeapon+0x7c usageFeedbackMask: SpecialAbility 0x400 - its gauge not full - or SkillUnlock 0x800 -
+// the skill not learned, Mock game-20261024-213418), from input_ranged_observer.hpp.
+inline std::atomic<uint64_t> strongActionAt{0},bowNativeFireAt{0},bowNativeRefusedAt{0};
 // where that projectile was made (the camera the guest sent at its release); written before remoteSpawnAt
 inline std::array<std::atomic<int64_t>,3> remoteSpawnOrigin{};inline std::array<std::atomic<float>,3> remoteSpawnDirection{};
 inline void (*shotHitArrived)(const std::array<int64_t,3>&,bool,uint32_t,uint64_t)=nullptr;
@@ -996,7 +999,9 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // roofs): the left trigger is the game's LT, which enters building mode (include/evr/live_pad.hpp). The same for the
                 // summoning staff and the screwdriver, whose LT enters their own modes (include/evr/left_trigger_tools.hpp; 2026-10-24).
                 {bool blueprint=false;if(handItem&&screenKind==evr::motion::LiveScreen::Gameplay){const auto held=handItem(now);
-                  blueprint=held.valid&&held.item&&(held.category==10||evr::motion::leftTriggerModeTool(held.item));}
+                  // and a staff (2026-10-25, user: "with the staff LT charges only"): LT is its aim and charge - not while the
+                  // shoulder's bow is out (its draw owns the triggers)
+                  blueprint=held.valid&&held.item&&(held.category==10||evr::motion::leftTriggerModeTool(held.item)||(evr::motion::rangedAimStaff(held.item)&&!modBowItem.load()));}
                  liveMapper.leftTriggerGame(blueprint);
                  static bool wasBlueprint=false;if(blueprint!=wasBlueprint){wasBlueprint=blueprint;logFile->event("left_trigger_game_lt","\"on\":"+std::string(blueprint?"true":"false")+",\"milliseconds\":"+std::to_string(now));}}
                 // The VR button pictures (2026-10-21, include/evr/button_glyph_labels.hpp): the scene, what the hands hold and the
@@ -1689,6 +1694,22 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         ",\"required\":"+std::to_string(swing.required)+",\"presses\":"+std::to_string(wandStrokes.presses())+",\"item\":"+std::to_string(rangedItem)+",\"trigger_held\":"+(wandPressed?"true":"false"));}
                     // the special's RT press, the attack button kept off meanwhile
                     if(wandSpecialUntil){if(now<wandSpecialUntil){pad.rightTrigger=255;pad.buttons&=~evr::motion::LivePadMapper::X;}else wandSpecialUntil=0;}
+                    // The staff (include/evr/staff_trigger.hpp; 2026-10-25, user: "fire when the trigger is let go after the
+                    // charge"): the trigger held is the game's LT (aim and charge), its release the cast (RT with LT held); the
+                    // game's RT never goes alone, so nothing casts by itself. Not while a bow is out or drawn - the shoulder's
+                    // bow, whose draw the game sees with the staff still in the hand for a moment (user: "take care the bow's
+                    // quick equip does not fire by RT"): the bow's draw owns the triggers then (bow_draw.hpp clears them).
+                    // EVR_STAFF_RELEASE=0: the game's own RT as before (the trigger held charges and casts when full).
+                    {static evr::motion::StaffTrigger staffTrigger;static unsigned staffLogs=0;
+                     static const bool staffRelease=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_STAFF_RELEASE",v,sizeof v);return !(n==1&&v[0]=='0');}();
+                     bool staffInHand=false;uint32_t staffItem=0;
+                     if(staffRelease&&handItem&&screenKind==evr::motion::LiveScreen::Gameplay){const auto h=handItem(now);staffInHand=h.valid&&h.item&&evr::motion::rangedAimStaff(h.item);staffItem=h.item;}
+                     const bool bowOut=modBowItem.load()!=0||bowGeometry.binding!=0||(bowDrawRequested&&(bowDraw.phase()==evr::motion::BowDraw::Held||bowDraw.phase()==evr::motion::BowDraw::Released));
+                     const bool ready=staffInHand&&fresh&&mapped.valid&&!value.active&&!bowOut;
+                     const auto o=staffTrigger.update(hands.hands[1].trigger,hands.hands[1].triggerActive,ready,now);
+                     if(staffInHand&&!bowOut){pad.rightTrigger=0;if(o.leftTrigger)pad.leftTrigger=255;if(o.rightTrigger)pad.rightTrigger=255;}
+                     if((o.cast||o.cancelled)&&staffLogs++<400)logFile->event("staff_trigger","\"frame\":"+std::to_string(hands.frame)+",\"cast\":"+(o.cast?"true":"false")+
+                        ",\"cancelled\":"+(o.cancelled?"true":"false")+",\"item\":"+std::to_string(staffItem)+",\"bow_out\":"+(bowOut?"true":"false")+",\"tap_ms\":"+std::to_string(staffTrigger.tapMs)+",\"aim_after_ms\":"+std::to_string(staffTrigger.aimAfterMs));}
                 }
                 if(bowInputTrialRequested){
                     const auto before=bowInputTrial.phase();
@@ -1715,7 +1736,6 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     const bool hud=hudNow||(drawing&&screen==1&&hudLostAt&&now-hudLostAt<=bowHudGraceMs);
                     const bool allowed=hud&&!value.active;
                     // Menus and other native screens own their triggers: the draw lets go and the pad is left as mapped.
-                    if(bowDrawRequested)bowDraw.gripAsTrigger(bowGeometry.binding&&uint32_t(bowGeometry.binding)==modBowTag);
                     if(bowDrawRequested&&!hud)bowDraw.abort();
                     else pad=bowDrawRequested?bowDraw.update(pad,hands,bowGeometry,allowed,now):
                         bowPhysicalReleaseRequested?bowPhysicalRelease.update(pad,hands,bowGeometry,allowed,now):bowPhysicalTrial.update(pad,hands,bowGeometry,allowed);
@@ -1744,18 +1764,30 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         if(phase!=5||!allowed)bowTrackedShot.invalidate();
                     }
                     if(bowDrawRequested){
-                        bowStrongDrawing=bowDraw.strongDraw();
                         const bool released=phase==5&&before!=5,full=!released&&bowDraw.takeFullDraw(bowGeometry);
-                        if(released&&!bowDraw.strongRelease())bowReleasedAt=now;   // the strong shot's arrow is not the shoot action's
+                        // The strong release: the game's special-ability input while it asks for it (input_head_idle.hpp); what the
+                        // game made of it goes back to the draw, which shoots the ordinary way when it was not given.
+                        static uint64_t strongReleasedAt=0;static bool wasFallback=false;
+                        if(released)strongReleasedAt=bowDraw.strongRelease()?now:0;
+                        if(bowDraw.specialInput())evr::game::specialInputUntilMs=now+40;
+                        if(strongReleasedAt&&phase==5){
+                            const bool taken=strongActionAt.load()>=strongReleasedAt||bowNativeFireAt.load()>=strongReleasedAt,refused=bowNativeRefusedAt.load()>=strongReleasedAt;
+                            bowDraw.strongOutcome(taken,refused);}
+                        const bool fallbackBegan=bowDraw.strongFallback()&&!wasFallback;wasFallback=bowDraw.strongFallback();
+                        if(fallbackBegan){evr::game::specialInputUntilMs=0;strongShotAt=0;static unsigned fallbackLogs=0;
+                            if(fallbackLogs++<200)logFile->event("bow_strong_fallback","\"frame\":"+std::to_string(hands.frame)+",\"after_ms\":"+std::to_string(strongReleasedAt?now-strongReleasedAt:0)+
+                                ",\"refused\":"+(bowNativeRefusedAt.load()>=strongReleasedAt&&strongReleasedAt?"true":"false"));}
+                        if((released&&!bowDraw.strongRelease())||fallbackBegan)bowReleasedAt=now;   // the strong shot's arrow is not the shoot action's
                         // The tap let go as soon as the game has read it bowTapPolls times (not the strong shot's hold).
                         {static uint64_t tapBase=0,tapAt=0;static bool tapCut=true;
                          static bool guestTap=false;
-                         if(released&&!bowDraw.strongRelease()){tapBase=liveRtPolls.load();tapAt=now;tapCut=false;guestTap=clientNowFn&&clientNowFn(now);}
+                         if((released&&!bowDraw.strongRelease())||fallbackBegan){tapBase=liveRtPolls.load();tapAt=now;tapCut=false;guestTap=clientNowFn&&clientNowFn(now);}
                          if(phase!=5||bowDraw.strongRelease())tapCut=true;
                          else if(!tapCut&&bowTapPolls&&liveRtPolls.load()-tapBase>=bowTapPolls&&(!guestTap||now-tapAt>=guestBowTapMs)){tapCut=true;static unsigned tapLogs=0;
                             if(tapLogs++<400)logFile->event("bow_tap_released","\"frame\":"+std::to_string(hands.frame)+",\"held_ms\":"+std::to_string(now-tapAt)+",\"polls\":"+std::to_string(liveRtPolls.load()-tapBase)+",\"guest\":"+(guestTap?"true":"false"));}
                          if(phase==5&&!bowDraw.strongRelease()&&bowTapPolls&&tapCut&&!released)pad.rightTrigger=0;}
                         if(released&&bowDraw.strongRelease())strongShotAt=now;     // a guest's own flight of it starts at the release (no drop)
+                        if(released&&bowDraw.strongRelease()){static unsigned strongLogs=0;if(strongLogs++<200)logFile->event("bow_strong_release","\"frame\":"+std::to_string(hands.frame));}
                         if(released)requestBowHaptic({.3f,.9f},{200,100});else if(full)requestBowHaptic({.3f,0},{200,0});
                         if(released||full)logFile->event("bow_draw_haptic","\"frame\":"+std::to_string(hands.frame)+",\"kind\":\""+(released?"release":"full_draw")+"\",\"shots\":"+std::to_string(bowDraw.shots())+",\"strong\":"+(released&&bowDraw.strongRelease()?"true":"false"));
                     }

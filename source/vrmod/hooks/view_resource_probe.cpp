@@ -29,6 +29,7 @@
 #include <evr/vertical_stick_mapping.hpp>
 #include <evr/live_pad.hpp>
 #include <evr/left_trigger_tools.hpp>
+#include <evr/staff_trigger.hpp>
 #include <evr/bow_input_trial.hpp>
 #include <evr/bow_physical_trial.hpp>
 #include <evr/bow_physical_release.hpp>
@@ -386,6 +387,9 @@ evr::motion::HandHold handHold;bool handHoldWanted=true;std::array<evr::motion::
 diagnostic::NativeMotionHaptic nativeMotionHaptic=nullptr;
 diagnostic::NativeGestureHaptic nativeGestureHaptic=nullptr;
 Pose liveTrackingToAnchor=identityPose();
+// The tracking origin as taken at the start or the view reset; a pad style's tilt (game::padTiltDegrees) turns it every
+// frame (2026-10-25: playing lying down).
+Pose liveTrackingBase=identityPose();
 bool sceneryReplayRequested=false;
 game::StableAnchor sceneryReplayReference{};
 // EVR_SCENERY_REPLAY_FROM=<frame> (2026-10-21, a Mock of "entering a building": the shadows differ between the eyes for
@@ -641,6 +645,7 @@ namespace inputActor {inline const bool clientTicksSet=[]{clientWorldTicks=[](ui
 #include "melee_trigger_observer.hpp"
 #include "opportunity_take_observer.hpp"
 #include "sequence_request_observer.hpp"
+#include "ranged_special_probe.hpp"
 #include "water_displacement_bridge.hpp"
 #include "hit_event_intake.hpp"
 #include "world_ray.hpp"
@@ -655,6 +660,7 @@ namespace inputActor {inline const bool clientTicksSet=[]{clientWorldTicks=[](ui
 #include "status_vignette.hpp"
 #include "combat_camera_override.hpp"
 #include "bug_report.hpp"
+#include "pad_settings.hpp"
 #include <tlhelp32.h>
 #include "data_watch.hpp"
 // VR status tint (2026-10-06): colour/coverage handed to the layer once per eye pair (evrSetEdgeTint).
@@ -686,6 +692,31 @@ inline void apply(){
     const int mode=!loading&&at&&now>=at&&now-at<=500&&controllerUiFixture::liveScreenGameplay.load()?1:2;
     if(set&&set(mode))throw std::runtime_error("UI HUD mode rejected");
     if(mode!=last){last=mode;logFile->event("ui_hud_mode","\"mode\":"+std::to_string(mode)+",\"gameplay_hud\":"+(mode==1?"true":"false"));}
+}
+}
+// The pad styles' online (2026-10-25, user: "whichever mode is chosen, no problem online"): as the mod without VR
+// (onlineFlat::frame) - the own character's place goes out (the others' VR bodies are sent here and shown on their
+// characters), no body of its own (no tracked hands: the native animation, as any player's). Once per eye pair, at
+// the original world boundary (as motionVisual::prepareContext).
+namespace padOnline {
+inline unsigned frames=0,skipped=0;
+inline void frame(uintptr_t scene,uintptr_t view,uint64_t serial) noexcept {
+    const ObserverLastError preserve;
+    try{
+        if(!onlineSync::requested)return;
+        if(!finishEyeCpuTasks(scene,4)){++skipped;return;}
+        motionVisual::scene=scene;motionVisual::view=view;motionVisual::thread=GetCurrentThreadId();
+        motionVisual::contextReady=true;motionVisual::contextSerial=serial;motionVisual::contextFrame=liveFrame.frame;
+        equipmentObserver::Snapshot own;{std::lock_guard<std::mutex> lock(equipmentObserver::snapshotMutex);own=equipmentObserver::latest;}
+        const auto local=rootCamera::snapshot().entity;
+        if(own.number&&own.entity==local&&own.scene==scene&&GetTickCount64()-own.milliseconds<=1500){
+            std::array<double,3> at{};if(onlineSync::placeOf(own.handles,at)){onlineSync::flatPlace=sync::place(at);onlineSync::flatPlaced=true;}
+            motionHandVisual::rigFromSource(own.handles[11]);
+        }
+        motionBodyIk::published.have=false;
+        onlineSync::frame(serial);++frames;
+    }catch(const std::exception& e){static unsigned logs=0;if(logs++<5)try{logFile->event("pad_online_failure","\"reason\":"+jsonString(e.what()));}catch(...){}}
+    catch(...){}
 }
 }
 void configureControllerFixture(const std::filesystem::path& path,unsigned duration,bool world){
@@ -1380,8 +1411,19 @@ bool beginLiveFrame(uintptr_t view,uint32_t eyes=3){
          if(!liveOriginInitialized)liveRecenterRequestsSeen=asked;
          else if(asked!=liveRecenterRequestsSeen){liveRecenterRequestsSeen=asked;if(!recenter)recenter="pose";}}
         if(!liveOriginInitialized||liveOriginSession!=liveFrame.sessionGeneration||recenter){
-            if(rootCamera::mode==2){TrackingOrigin origin;origin.recenter(liveFrame.head);liveTrackingToAnchor=origin.trackingToAnchor;}
-            else liveTrackingToAnchor=inverse(liveFrame.head);
+            if(rootCamera::mode==2&&game::padStyle.load()){
+                // A pad style: forward is taken from the head's right side, which stays level lying on the back as well (its
+                // face looks up there); the tilt is turned on every frame below.
+                const auto right=rotate(liveFrame.head.orientation,Vec3{1,0,0});
+                const float yaw=right.x*right.x+right.z*right.z>1e-6f?std::atan2(-right.z,right.x):0.f;
+                const auto q=euler(-yaw,0,0);liveTrackingBase={q,rotate(q,liveFrame.head.position)*-1};
+                // The pad panel's view reset (LT, pad_settings.hpp): the tilt becomes the head's angle now, so where the face
+                // looks - up and down as well - is ahead (the panel's slider shows it and keeps it in the settings).
+                if(recenter&&game::padTiltFromHead.exchange(false)){const int tilt=game::padTiltOf(liveFrame.head.orientation);game::padTiltDegrees=tilt;
+                    logFile->event("pad_tilt_from_head","\"frame\":"+std::to_string(liveFrame.frame)+",\"tilt\":"+std::to_string(tilt));}
+            }else if(rootCamera::mode==2){TrackingOrigin origin;origin.recenter(liveFrame.head);liveTrackingBase=origin.trackingToAnchor;}
+            else liveTrackingBase=inverse(liveFrame.head);
+            liveTrackingToAnchor=liveTrackingBase;
             liveOriginInitialized=true;
             liveOriginSession=liveFrame.sessionGeneration;++liveOriginEpoch;
             const float standing=rootCamera::calibratedHeight>1.f&&rootCamera::calibratedHeight<2.5f?float(rootCamera::calibratedHeight):1.65f;
@@ -1413,6 +1455,10 @@ bool beginLiveFrame(uintptr_t view,uint32_t eyes=3){
             static const char* const names[]{"none","tracked","estimated","held"};
             if(handHoldLogs++<400)logFile->event("hand_tracking_hold","\"frame\":"+std::to_string(liveFrame.frame)+",\"hand\":"+std::to_string(h)+",\"state\":\""+names[unsigned(handHold.state[h])]+
                 "\",\"focused\":"+(liveFrame.hands.focused?"true":"false")+",\"grip_flags\":"+std::to_string(liveFrame.hands.hands[h].gripFlags)+",\"grip_active\":"+(liveFrame.hands.hands[h].gripActive?"true":"false"));}
+        // A pad style's tilt (2026-10-25, playing lying down): the origin turned down about its right axis, every frame (the
+        // setting can change in the game).
+        if(game::padStyle.load()&&rootCamera::mode==2){const int tilt=game::padTiltDegrees.load();
+            liveTrackingToAnchor=tilt?compose(Pose{game::padTilt(tilt),Vec3{0,0,0}},liveTrackingBase):liveTrackingBase;}
         inputPose::publish(liveFrame,liveTrackingToAnchor,liveOriginEpoch);
         ready=true;
     });
@@ -1789,6 +1835,8 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
             const Vec3 offset{float(relativeQ32(position.x,root.x)),float(relativeQ32(position.y,root.y)),float(relativeQ32(position.z,root.z))};
             return compose(inverse(liveTrackingToAnchor),game::trackingPose(Pose{normalized(multiply(back,orientation)),rotate(back,offset)}));
         };
+        // The third-person pad style: the UI image ahead of the game camera - its reticle where the stick aims (pad_settings.hpp).
+        if(liveXr&&game::padStyle.load()==2&&rootCamera::mode==2)padSettings::plate(trackingOf(anchor,read<WorldPositionQ32>(input+0x38),baseRotation));
         alternateEyes::worldMotion={};
         if(liveXr){
             static game::StableAnchor lastAnchor{};static bool lastValid=false;static uint64_t lastFrame=0,lastSession=0;static int64_t lastTime=0;
@@ -2180,7 +2228,8 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
     selectView(pair.scene,pair.originalView);
     if(read<std::array<uint8_t,layout::parameterBytes>>(input)!=originalParameters)throw std::runtime_error("source render camera arguments changed during eye calls");
     bool heightWait=false;
-    if(pair.frameReady&&!pair.pairedFrames&&rootCamera::mode==2&&!rootCamera::calibratedEntity){
+    // (the third-person pad style shows the game camera: no first-person height to wait for, 2026-10-25)
+    if(pair.frameReady&&!pair.pairedFrames&&rootCamera::mode==2&&!rootCamera::calibratedEntity&&game::padStyle.load()!=2){
         if(++pair.heightWaitFrames>heightWaitLimit)throw std::runtime_error("first-person height did not settle before the first live pair");
         heightWait=true;pair.frameReady=false;
         if(pair.heightWaitFrames==1||pair.heightWaitFrames%120==0)
@@ -2190,8 +2239,8 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         if(!heightWait&&++pair.warmupFrames>worldWarmupLimit)throw std::runtime_error("world View resource preparation exceeded 600 frames");
         logFile->event("world_pair_preparing","\"serial\":"+std::to_string(pair.serial)+",\"submitted\":false");return;
     }
-    if(!pair.pairedFrames&&rootCamera::mode==2){
-        // The first live pair must not freeze or follow a transitional native height.
+    if(!pair.pairedFrames&&rootCamera::mode==2&&game::padStyle.load()!=2){
+        // The first live pair must not freeze or follow a transitional native height (none in the third-person pad style).
         if(!rootCamera::calibratedEntity)throw std::runtime_error("first-person height did not settle before the first live pair");
         rootCamera::requireCalibrated=true;
         logFile->event("root_camera_height_required","\"serial\":"+std::to_string(pair.serial)+",\"provisional_anchors\":"+std::to_string(rootCamera::provisionalAnchors.load()));
@@ -2876,6 +2925,12 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
             logFile->event("calibration_series_failure","\"reason\":"+jsonString(e.what()));}
     }
     heldVfxBridge::Scope heldEffectScope;
+    if(game::padStyle.load()&&!motionVisual::requested&&earlyPrepared&&pair&&!pair->failed&&!done.load()){padOnline::frame(pair->scene,pair->originalView,sharedStage.serial);
+        keyScript::frame(liveFrame.frame,keyScript::installed?menuPointer::gameWindow():nullptr);   // the Mock's keys (as in the motion branch below)
+        padSettings::frame(menuPointer::screen.load());
+        // the VR bug report (its button: the pad panel's left stick click), after the panel (it takes the overlay elsewhere)
+        {const motion::GestureHead head{liveFrame.head,liveFrame.headFlags,liveFrame.frame,liveFrame.sessionGeneration,liveFrame.hands.originGeneration,liveFrame.time};
+         bugReport::frame(liveFrame.hands,head,GetTickCount64());}}
     if(motionVisual::requested&&earlyPrepared&&pair&&!pair->failed&&!done.load()){
         try{const auto sample=rootCamera::snapshot();
             const auto input=reinterpret_cast<uintptr_t>(parameters);
@@ -3209,6 +3264,33 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             if(!policy||!policy.eof()||magic!="EVR_CAMERA_MODES_1"||!liveXr||rootCamera::mode!=2)
                 throw std::runtime_error("camera mode policy requires live first-person");
             rootCamera::cameraModes=true;
+        }
+        // The pad styles (2026-10-25, user: "the play mode switchable: the full VR, the camera only in first person with the
+        // Xbox pad played as usual, the third person view with the pad, the desktop"; include/evr/vr_settings.hpp Style; the
+        // loader's world-pad-mode.txt, with the motion controllers' files left out): the real gamepad reaches the game as it
+        // is (no controller-ui-fixture.txt). First person keeps the head-bob removal of the stable root (user); third person
+        // shows the game's own camera (camera_mode.hpp cameraPresentation, root_camera_bridge.hpp renderAnchor).
+        if(std::filesystem::exists(calibrationDirectory/"world-pad-mode.txt")){
+            std::ifstream policy(calibrationDirectory/"world-pad-mode.txt");std::string magic,view;int lock=1,tilt=0;policy>>magic>>view>>lock>>tilt>>std::ws;
+            if(!policy||!policy.eof()||magic!="EVR_PAD_MODE_1"||(view!="first"&&view!="third")||!liveXr||rootCamera::mode!=2||!rootCamera::cameraModes||
+               std::filesystem::exists(calibrationDirectory/"controller-ui-fixture.txt"))throw std::runtime_error("invalid pad mode policy");
+            game::padStyle=view=="third"?2:1;game::padPitchLock=lock!=0;game::padTiltDegrees=std::clamp(tilt,0,90);
+            // As the live input (configureControllerFixture): in first person the head steers the walk, the jump and the attacks;
+            // a full-screen UI holds the camera (it stops the game's camera update).
+            if(game::padStyle==1)inputHeadIdle::vrLocomotion=true;
+            rootCamera::uiHold=[]()->bool{const auto last=inputUi::lastNonHudMs.load();const auto now=GetTickCount64();return last&&now>=last&&now-last<=1500;};
+            // Online as the mod without VR (padOnline), with the host's parts for the players whose mod confirms their own
+            // actions (onlineFlat::prepareHostParts): their strokes, shots, parries reach this host's server.
+            onlineSync::configure();
+            if(onlineSync::requested){onlineSync::flat=true;
+                nativeImpactComponents::requested=true;actionSequenceObserver::requested=true;
+                sequenceColliderObserver::requested=true;impactHierarchyObserver::requested=true;attachmentObserver::requested=true;
+                motionColliderApply::requested=true;motionColliderApply::live=true;liveTargets::requested=true;
+                remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;
+                controllerUiFixture::staminaOf=&liveTargets::staminaOf;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
+                inputRanged::liveBowWatch=true;bowSpawnObserver::remoteAlways=true;}
+            logFile->event("pad_mode_enabled","\"style\":\""+view+"\",\"pitch_lock\":"+(game::padPitchLock.load()?"true":"false")+",\"tilt_degrees\":"+std::to_string(game::padTiltDegrees.load())+
+                ",\"head_steers\":"+(inputHeadIdle::vrLocomotion?"true":"false")+",\"online\":"+(onlineSync::requested?"true":"false"));
         }
         if(liveXr&&rootCamera::mode==2)rootCamera::readKnownHeight();
         if(std::filesystem::exists(calibrationDirectory/"world-camera-mode-fixture.txt")){
@@ -3945,7 +4027,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             // User, 2026-10-12: the HUD hides (fading) five seconds after health, mana or another displayed thing last
             // changed; the game's use / pick-up pins stay. The layer does the look and the fade (hud_fade.hpp).
             std::ifstream uf(calibrationDirectory/"world-ui-auto-hide.txt");std::string magic;uf>>magic>>std::ws;
-            if(!uf||!uf.eof()||magic!="EVR_UI_AUTO_HIDE_1"||!controllerUiFixture::liveRequested)throw std::runtime_error("UI auto-hide requires the live controller input");
+            if(!uf||!uf.eof()||magic!="EVR_UI_AUTO_HIDE_1"||(!controllerUiFixture::liveRequested&&!game::padStyle.load()))throw std::runtime_error("UI auto-hide requires the live controller input or a pad style");
             // The settings' [Picture] UiAutoHide=0 (the loader's EVR_UI_AUTO_HIDE=0; 2026-10-23): the HUD always shown.
             char hide[8]{};const auto hn=GetEnvironmentVariableA("EVR_UI_AUTO_HIDE",hide,sizeof hide);
             if(hn==1&&hide[0]=='0')logFile->event("ui_auto_hide_off","\"reason\":\"[Picture] UiAutoHide=0\"");else{
@@ -4052,7 +4134,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             nativeImpactComponents::requested=true;sequenceColliderObserver::requested=true;impactHierarchyObserver::requested=true;
             motionColliderChannel::requested=motionColliderChannel::live=true;motionColliderApply::requested=motionColliderApply::live=true;
             if(mode=="observe"){motionContactObserver::install();motionHitObserver::install();}
-            if(early){controllerUiFixture::liveMeleeQuickRelease=true;motionEventSelection::requested=true;motionEventSelection::liveRetime=true;motionEventSelection::livePress=&controllerUiFixture::livePressSnapshot;motionEventSelection::liveStill=still;motionEventSelection::callerCensus=observe;motionEventSelection::hideAmmunition=controllerUiFixture::bowDrawRequested&&!motionArrowVisual::requested;motionEventSelection::install();meleeTriggerObserver::install();opportunityTakeObserver::install();sequenceRequestObserver::install();controllerUiFixture::clearAirborneOpportunities=&motionEventSelection::shapeAirborneOpportunities;}
+            if(early){controllerUiFixture::liveMeleeQuickRelease=true;motionEventSelection::requested=true;motionEventSelection::liveRetime=true;motionEventSelection::livePress=&controllerUiFixture::livePressSnapshot;motionEventSelection::liveStill=still;motionEventSelection::callerCensus=observe;motionEventSelection::hideAmmunition=controllerUiFixture::bowDrawRequested&&!motionArrowVisual::requested;motionEventSelection::install();meleeTriggerObserver::install();opportunityTakeObserver::install();sequenceRequestObserver::install();rangedSpecialProbe::install();controllerUiFixture::clearAirborneOpportunities=&motionEventSelection::shapeAirborneOpportunities;}
             logFile->event("live_melee_contact_enabled",std::string("\"collider_follows_tracked_weapon\":true,\"either_hand_slot\":true,\"grip_button_required\":false,\"cancellation\":false,\"ledger_entries\":16,\"observers\":")+(mode=="observe"?"true":"false")+",\"early_impact\":"+(early?"true":"false")+",\"attack_moves_character\":"+(still?"false":"true")+",\"ecs_written_by_mod\":false");
         }
         if(inputRanged::liveBowWatch)logFile->event("native_bow_survey_enabled","\"ranged_read_only\":true,\"maximum_samples\":2048,\"all_local_weapon_states\":true");
@@ -4176,6 +4258,12 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         if(activeContactOwnerTrial&&(!contactQuiescenceObserver::ownerHandoffRequested||!controllerUiFixture::motionAttackRequested))throw std::runtime_error("active contact exit missing explicit input owner bridge");
         if(activeXrExitTrial&&controllerUiFixture::requested&&!activeContactOwnerTrial)throw std::runtime_error("initial active XR exit trial excludes controller/combat fixtures");
         if(inputDirection::requested)inputDirection::install();
+        // A pad style's host parts (as onlineFlat::installHostParts): the event selection (the guests' strokes), the parry and
+        // the shots' spawn; each optional.
+        if(game::padStyle.load()&&onlineSync::requested){
+            const auto part=[](const char* name,void(*install)()){try{install();}catch(const std::exception& e){logFile->event("optional_hook_skipped","\"hook\":"+jsonString(name)+",\"reason\":"+jsonString(e.what()));}};
+            motionEventSelection::hostOnly=true;part("motion_event_selection",[]{motionEventSelection::install();});part("parry",[]{parryObserver::install();});part("bow_spawn",[]{bowSpawnObserver::install();});
+            logFile->event("pad_host_parts","\"parry\":"+std::string(parryObserver::enabled?"true":"false"));}
         if(uiStateObserver::requested)uiStateObserver::install();
         if(equipmentObserver::requested)equipmentObserver::install();
         // 1.0: the readiness, shared-state, terrain and download diagnostics are read-only records; one whose check of the new
@@ -4246,7 +4334,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         // the exact server Ended proof. This avoids racing all hook teardown
         // against process termination and leaves MOD ledger ownership intact.
         if(!contactQuiescenceObserver::terminalRequested)motionEventSelection::disable();
-        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();steamLink::disableGameHooks();motionHitObserver::disable();motionContactObserver::disable();uiStateObserver::disable();bodyUpload::disable();headVisibility::disable();equipmentObserver::disable();if(earlyInputStopped)inputActor::disable();else inputDirection::disable(contactQuiescenceObserver::ownerHandoffRequested);
+        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();rangedSpecialProbe::disable();steamLink::disableGameHooks();motionHitObserver::disable();motionContactObserver::disable();uiStateObserver::disable();bodyUpload::disable();headVisibility::disable();equipmentObserver::disable();if(earlyInputStopped)inputActor::disable();else inputDirection::disable(contactQuiescenceObserver::ownerHandoffRequested);
         if(!contactQuiescenceObserver::terminalRequested){contactQuiescenceObserver::disable();contactLifetimeObserver::disable();}
         bowSpawnObserver::disable();
         rootCamera::disable();
@@ -4312,7 +4400,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         if(cleanup==MH_OK&&quiesceDependentHooks()){
             try{motionEventSelection::disable();}catch(...){}
         try{motionHitObserver::disable();}catch(...){}
-        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();steamLink::disableGameHooks();
+        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();rangedSpecialProbe::disable();steamLink::disableGameHooks();
         try{motionContactObserver::disable();}catch(...){}
             try{uiStateObserver::disable();}catch(...){}
             try{bodyUpload::disable();}catch(...){}
@@ -4534,7 +4622,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ObserveGameplayInput(void* dir
         try{motionTargets::disable();}catch(...){}
         try{motionEventSelection::disable();}catch(...){}
         try{motionHitObserver::disable();}catch(...){}
-        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();steamLink::disableGameHooks();
+        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();rangedSpecialProbe::disable();steamLink::disableGameHooks();
         try{motionContactObserver::disable();}catch(...){}
         try{inputDirection::disable();}catch(...){}
             try{contactQuiescenceObserver::disable();}catch(...){}
