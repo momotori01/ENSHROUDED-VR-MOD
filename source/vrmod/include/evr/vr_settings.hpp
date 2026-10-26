@@ -80,7 +80,9 @@ inline std::vector<std::pair<std::string,std::string>> entries(const std::string
 // keepLogs: how many of the newest log folders stay ([Log] Keep; 0 = all).
 // alternateEyes: one eye drawn a frame, the other shows its last picture ([Picture] AlternateEyes; 2026-10-14, user:
 // "try the PureDark way"; hooks/view_resource_probe.cpp alternateEyes). Off unless switched on.
-// giQuality: the game's dynamicGi while in VR ([Picture] GiQuality; 2026-10-15). Each eye computes its own indirect
+// giQuality: no longer read (2026-10-25, user: "what the player changed is not overwritten - except what is needed"):
+// empty, a VR start keeps the game's own dynamicGi; the recommended-graphics button writes High / Performance into the
+// game's settings instead. Before ([Picture] GiQuality; 2026-10-15): the game's dynamicGi while in VR. Each eye computes its own indirect
 // light and the two converge on their own; on the room route of the self-tests (run_route_check.ps1) High left the
 // eyes about 40 % less apart than Performance (1.05 / 1.66 against 1.93 / 2.44), in the corners and under the bed most of
 // all (user: "the brightness differs, the bed and the window by it"). Keep = the game's own setting.
@@ -126,7 +128,7 @@ inline const std::vector<std::string>& fitViewNames(){static const std::vector<s
 enum class Style {Motion,PadFirst,PadThird};
 inline const std::vector<std::string>& styleNames(){static const std::vector<std::string> names{"Motion","PadFirst","PadThird"};return names;}
 constexpr int padTiltLow=0,padTiltHigh=90;
-struct Values {bool vr=false,online=true;double renderScale=.8;std::string dlss;double sharpness=.2;int keepLogs=8;bool alternateEyes=false;std::string giQuality="High";int eyeWarp=0;
+struct Values {bool vr=false,online=true;double renderScale=.8;std::string dlss;double sharpness=.2;int keepLogs=8;bool alternateEyes=false;std::string giQuality;int eyeWarp=0;
     bool realCrouch=true;int crouchDrop=30;int swingSpeed=100;bool armSwim=true;bool hitStop=true;bool uiAutoHide=true;
     double afwRenderScale=0;std::string afwDlss;int afwPacing=0;
     Style style=Style::Motion;bool padPitchLock=true;int padTilt=0;FitView fitView=FitView::Auto;};
@@ -149,7 +151,7 @@ inline Values read(const std::string& ini){
     out.armSwim=flag("Body","ArmSwim",d.armSwim);out.uiAutoHide=flag("Picture","UiAutoHide",d.uiAutoHide);out.hitStop=flag("Melee","HitStop",d.hitStop);out.swingSpeed=clampSwingSpeed(int(number("Melee","SwingSpeed",d.swingSpeed,swingSpeedLow,swingSpeedHigh)));
     // [Picture] Dlss is no longer read (2026-10-23, user: "the setting exe's DLSS is the same as the game's - remove it"):
     // dlss stays empty, a VR start keeps the game's own DLSS / FSR 3 mode; only AFW's own mode (AfwDlss) is still set.
-    const auto gi=get(ini,"Picture","GiQuality");for(const auto& known:giModes())if(sameText(known,gi))out.giQuality=known;
+    // [Picture] GiQuality is no longer read either (2026-10-25): the game's own GI stays (giQuality empty).
     out.afwRenderScale=number("Picture","AfwRenderScale",0.,.25,2.);if(get(ini,"Picture","AfwRenderScale")=="0")out.afwRenderScale=0;
     {const auto m=get(ini,"Picture","AfwDlss");for(const auto& known:dlssModes())if(sameText(known,m))out.afwDlss=known;}
     out.afwPacing=int(number("Picture","AfwPacing",d.afwPacing,0.,2.));

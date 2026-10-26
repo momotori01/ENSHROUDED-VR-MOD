@@ -52,7 +52,7 @@ The program next to enshrouded.exe holds the settings that cannot be changed in 
 | Put settings back | All settings back to how they came. |
 
 It also shows what the mod did at the last start of the game.
-DLSS / FSR 3 quality is the game's own graphics setting: choose it in the game. A VR start switches anti-aliasing to DLSS (DLAA stays DLAA); cards without DLSS use the game's FSR 3 setting.
+A VR start changes three of the game's graphics settings, the ones that are always right for VR: anti-aliasing to DLSS (DLAA stays DLAA; cards without DLSS use FSR 3), HDR off (VR stops with HDR on) and vertical sync off (the headset sets the frame timing). The DLSS / FSR 3 quality (Quality, Performance and so on) stays your choice in the game. They come back the next time the game is started without VR. The mod changes nothing else. **Recommended graphics (VR)** in this program sets all of the game's graphics settings to the ones recommended for VR on this PC: DLSS Quality (FSR 3 Quality on cards that are not NVIDIA's), indirect lighting and the rest. After that, change anything you like in the game; the mod keeps it.
 Real crouching for sneaking is switched on or off, and its depth set, in the game itself: the **VR settings** button next to the bug report button in the start menu.
 
 ## controller VR
@@ -95,6 +95,13 @@ The changes are kept for the next start.
 ### Staff
 - Hold the trigger to charge; let go to cast. Nothing is cast while you hold it, so you can switch spells while charging.
 - The left trigger charges too (it does not cast); the right trigger's release casts.
+
+### Special abilities
+When the special ability gauge is full:
+- **Melee weapons:** swing while holding the right grip (no trigger needed).
+- **Wand:** hold the right grip and pull the trigger, or swing while holding the right grip.
+- **Staff:** hold the right grip and pull the trigger - while you hold it, it is the game's own RT.
+- **Bow:** take the string with the right grip instead of the trigger, draw and let go: a strong shot.
 
 ### Lock-on
 - The game's own lock-on works as usual. The enemy's health bar and the lock-on arrow are shown above the enemy instead of on the HUD - for the locked enemy, the lock-on candidate and enemies that are aware of you. Moving stays headset-based while locked on.

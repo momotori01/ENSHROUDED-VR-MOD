@@ -21,11 +21,15 @@
 // local_settings.json: textureAnisotropy and models instead; the values below are the executable's own enum names,
 // read from its reflection 2026-10-20): less video memory is met with a smaller eye picture.
 // Game settings written for good (the player may change them again in the game): render.<name> and the two flags.
-// The two the VR start sets itself for each start (antiAliasing, dynamicGi - include/evr/auto_start.hpp) are not touched;
-// GI's VR value goes into the mod's settings ([Picture] GiQuality, with RenderScale). The DLSS mode (dlss, and fsr3 for
+// DLSS (antiAliasing) and GI (dynamicGi) are written here into the game's settings (2026-10-25, user: "the recommended
+// button is there - everything but HDR the player switches themselves": a VR start keeps the player's own; before, it set
+// DLSS and GI High at each start). A card that is not NVIDIA's gets FSR 3 instead (2026-10-25, user: "and FSR 3"), with
+// the fsr3 preset written below like the DLSS mode; a card not known gets DLSS (the game itself falls back to FSR 3 on a
+// card without DLSS). The DLSS mode (dlss, and fsr3 for
 // cards without DLSS) is written here into the game's settings (2026-10-23: the VR start keeps the game's own mode now).
 #include <evr/auto_start.hpp>
 #include <evr/vr_settings.hpp>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -56,9 +60,11 @@ inline Recommendation recommend(const Machine& m){
     char text[32];std::snprintf(text,sizeof text,"%.0f GB",gb);r.tier=m.known?text:"unknown";
     r.renderScale=tier==2?"0.8":"0.7";
     r.giQuality=tier==2?"High":"Performance";
-    r.render={{"preset","Custom"},{"shadows","Low"},{"contactShadows","Disabled"},{"reflections","Balance"},{"water","Balance"},
+    r.render={{"antiAliasing",m.vendor&&m.vendor!=nvidia?"Fsr3":"Dlss"},{"preset","Custom"},{"shadows","Low"},{"contactShadows","Disabled"},{"reflections","Balance"},{"water","Balance"},
         {"fog","Medium"},{"ssao","Disabled"},{"distantObjects","Medium"},{"decoObjects","Medium"},{"detailScattering","Medium"},
-        {"voxelMeshQuality","Low"},{"tessellation","Medium"},{"pointLightShadows","Low"},{"textureAnisotropy",tier==2?"High":tier==1?"Medium":"Low"}};
+        {"voxelMeshQuality","Low"},{"tessellation","Medium"},{"pointLightShadows","Low"},{"textureAnisotropy",tier==2?"High":tier==1?"Medium":"Low"},
+        {"models","Balance"}};   // every quality item (2026-10-25, user: "the button writes every item"); this PC's value as for the looks
+    r.render.push_back({"dynamicGi",r.giQuality});   // into the game's settings (2026-10-25)
     return r;
 }
 // "name": true|false, where it stands exactly once.
@@ -90,10 +96,22 @@ inline std::string applyGame(const std::string& text,const Recommendation& r,App
         out.changed.push_back(name+" "+now+"->"+want);s=s.substr(0,b)+want+s.substr(e);}
     return s;
 }
-// The mod's settings (EnshroudedVR.ini) with the VR side of it: the eyes' picture size, GI in VR.
+// The game's settings the recommendation writes (2026-10-25): the record of an earlier VR start (what it changed, put back
+// at the next start without VR - include/evr/auto_start.hpp) loses them, so that it does not take the player's choice back.
+inline std::vector<std::string> fields(const Recommendation& r){
+    std::vector<std::string> f;for(const auto& kv:r.render)f.push_back(kv.first);
+    for(const char* n:{"dlss","fsr3","vsync","enableHdr"})f.push_back(n);
+    return f;
+}
+inline bool dropFromRecord(autostart::RenderRecord& record,const Recommendation& r){
+    const auto names=fields(r);const auto count=record.changes.size();
+    record.changes.erase(std::remove_if(record.changes.begin(),record.changes.end(),[&](const autostart::Change& c){return std::find(names.begin(),names.end(),c.name)!=names.end();}),record.changes.end());
+    return record.changes.size()!=count;
+}
+// The mod's settings (EnshroudedVR.ini) with the VR side of it: the eyes' picture size (GI goes into the game's settings).
 inline std::string applyIni(const std::string& ini,const Recommendation& r,std::vector<std::string>* changed=nullptr){
     auto out=ini;
-    for(const auto& [key,value]:std::vector<std::pair<std::string,std::string>>{{"RenderScale",r.renderScale},{"GiQuality",r.giQuality}}){
+    for(const auto& [key,value]:std::vector<std::pair<std::string,std::string>>{{"RenderScale",r.renderScale}}){
         const auto now=settings::get(out,"Picture",key);if(now==value)continue;
         if(changed)changed->push_back(key+" "+(now.empty()?"(unset)":now)+"->"+value);
         out=settings::set(out,"Picture",key,value);}
@@ -107,11 +125,14 @@ inline bool pending(const std::string& ini){return settings::get(ini,"Graphics",
 inline std::string setPending(const std::string& ini,bool on,const Machine& m={}){
     auto out=settings::set(ini,"Graphics","Recommended",on?"1":"0");
     if(on&&m.known)out=settings::set(out,"Graphics","VideoMemoryMB",std::to_string(m.videoMemory/(1024ull*1024ull)));
+    if(on&&m.vendor)out=settings::set(out,"Graphics","VideoVendor",std::to_string(m.vendor));   // DLSS or FSR 3 (2026-10-25)
     return out;
 }
 inline Machine pendingMachine(const std::string& ini){
     Machine m;const auto v=settings::get(ini,"Graphics","VideoMemoryMB");char* end=nullptr;const auto mb=std::strtoull(v.c_str(),&end,10);
     if(!v.empty()&&end&&!*end&&mb>0&&mb<1024ull*1024ull){m.known=true;m.videoMemory=mb*1024ull*1024ull;}
+    {const auto id=settings::get(ini,"Graphics","VideoVendor");char* stop=nullptr;const auto n=std::strtoul(id.c_str(),&stop,10);
+     if(!id.empty()&&stop&&!*stop&&n>0&&n<=0xffff)m.vendor=uint32_t(n);}
     return m;
 }
 }

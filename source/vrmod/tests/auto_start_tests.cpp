@@ -39,10 +39,26 @@ int main(int argc,char** argv){try{unsigned n=0;
   {std::string o,why;RenderRecord rec;ck(applyVr(json,"Balanced",nullptr,o,rec,why)&&o.find("\"fsr3\": \"Balance\"")!=std::string::npos&&restore(o,rec)==json);
    const std::string noFsr=json.substr(0,json.find("      \"fsr3\""))+json.substr(json.find("      \"shadows\""));
    ck(applyVr(noFsr,"Performance",nullptr,o,rec,why)&&rec.changes.size()==2&&restore(o,rec)==noFsr);}
-  // no mode (2026-10-23, the setting exe's DLSS row gone): antiAliasing Dlss, the game's own dlss and fsr3 kept; a DLAA kept
-  {std::string o,why;RenderRecord rec;ck(applyVr(json,"",nullptr,o,rec,why)&&o.find("\"antiAliasing\": \"Dlss\"")!=std::string::npos&&o.find("\"dlss\": \"Balanced\"")!=std::string::npos&&restore(o,rec)==json);
+  // 2026-10-25 (user: "everything but HDR the player switches themselves"): no mode and no alternate eyes - nothing but HDR
+  // is changed (the player's FSR 3 here stays); an earlier start's DLSS still standing goes back to the player's own, one
+  // the player changed since stays.
+  {std::string o,why;RenderRecord rec;ck(applyVr(json,"",nullptr,o,rec,why)&&o==json&&rec.changes.empty());
+   std::string f,whyF;RenderRecord forced;ck(applyVr(json,"",nullptr,f,forced,whyF,"",true)&&f.find("\"antiAliasing\": \"Dlss\"")!=std::string::npos);
+   std::string back,whyB;RenderRecord after;ck(applyVr(f,"",&forced,back,after,whyB)&&back==json&&after.changes.empty());
+   std::string mine=f;mine.replace(mine.find("\"antiAliasing\": \"Dlss\""),std::string("\"antiAliasing\": \"Dlss\"").size(),"\"antiAliasing\": \"Taa\"");
+   std::string t,whyT;RenderRecord own;ck(applyVr(mine,"",&forced,t,own,whyT)&&t==mine&&own.changes.empty());
+   ck(applyVr("{}","",nullptr,t,own,whyT)&&t=="{}");
+   // vertical sync off with the upscaler (2026-10-25), put back without VR; not without it
+   std::string vs=json;vs.replace(vs.find("\"vsync\": false"),std::string("\"vsync\": false").size(),"\"vsync\": true");
+   std::string v,whyV;RenderRecord vrec;ck(applyVr(vs,"",nullptr,v,vrec,whyV,"",true)&&v.find("\"vsync\": false")!=std::string::npos&&restore(v,vrec)==vs);
+   RenderRecord vparsed;ck(parseRecord(recordText(vrec),vparsed)&&restore(v,vparsed)==vs);
+   std::string v2,whyV2;RenderRecord vsecond;ck(applyVr(v,"",&vrec,v2,vsecond,whyV2,"",true)&&v2==v&&restore(v2,vsecond)==vs);
+   ck(applyVr(vs,"",nullptr,v,vrec,whyV)&&v==vs);}
+  // the alternate eyes (forceDlss) without a mode (2026-10-23, the setting exe's DLSS row gone): antiAliasing Dlss, the
+  // game's own dlss and fsr3 kept; a DLAA kept
+  {std::string o,why;RenderRecord rec;ck(applyVr(json,"",nullptr,o,rec,why,"",true)&&o.find("\"antiAliasing\": \"Dlss\"")!=std::string::npos&&o.find("\"dlss\": \"Balanced\"")!=std::string::npos&&restore(o,rec)==json);
    std::string dlaa=json;const auto at=dlaa.find("\"antiAliasing\": \"Fsr3\"");ck(at!=std::string::npos);dlaa.replace(at,std::string("\"antiAliasing\": \"Fsr3\"").size(),"\"antiAliasing\": \"Dlaa\"");
-   std::string d;RenderRecord drec;ck(applyVr(dlaa,"",nullptr,d,drec,why)&&d.find("\"antiAliasing\": \"Dlaa\"")!=std::string::npos&&d.find("\"dlss\": \"Balanced\"")!=std::string::npos);}
+   std::string d;RenderRecord drec;ck(applyVr(dlaa,"",nullptr,d,drec,why,"",true)&&d.find("\"antiAliasing\": \"Dlaa\"")!=std::string::npos&&d.find("\"dlss\": \"Balanced\"")!=std::string::npos);}
   ck(!applyVr("{}","Quality",nullptr,out,r,reason)&&!reason.empty()&&out=="{}");
   // HDR (2026-10-23): on in the game -> off for VR, recorded, put back; off is left; vsync (another true/false) untouched.
  {const std::string hdr=json.substr(0,json.find("    \"render\""))+"    \"hdrSettings\": {\r\n      \"enableHdr\": true\r\n    },\r\n"+json.substr(json.find("    \"render\""));
@@ -60,7 +76,13 @@ int main(int argc,char** argv){try{unsigned n=0;
   {std::string o,why;RenderRecord rec;ck(applyVr(gi,"Quality",nullptr,o,rec,why,"High")&&o.find("\"dynamicGi\": \"High\"")!=std::string::npos&&rec.changes.size()==4&&rec.changes[3].name=="dynamicGi"&&rec.changes[3].original=="Performance");
    const auto back=restore(o,rec);ck(back==gi);
    std::string k,whyK;RenderRecord keep;ck(applyVr(gi,"Quality",nullptr,k,keep,whyK,"Keep")&&keep.changes.size()==3&&k.find("\"dynamicGi\": \"Performance\"")!=std::string::npos);
-   std::string m,whyM;RenderRecord missing;ck(!applyVr(json,"Quality",nullptr,m,missing,whyM,"High")&&!whyM.empty());}
+   std::string m,whyM;RenderRecord missing;ck(!applyVr(json,"Quality",nullptr,m,missing,whyM,"High")&&!whyM.empty());
+   // 2026-10-25: no GI given (the loader now) - the player's own stays; an earlier start's High still standing goes back to
+   // the player's own (Performance), and one the player changed since (Ultra) stays.
+   std::string kept,whyN;RenderRecord none;ck(applyVr(gi,"Quality",nullptr,kept,none,whyN)&&kept.find("\"dynamicGi\": \"Performance\"")!=std::string::npos&&none.changes.size()==3);
+   std::string u,whyU;RenderRecord after;ck(applyVr(o,"Quality",&rec,u,after,whyU)&&u.find("\"dynamicGi\": \"Performance\"")!=std::string::npos&&after.changes.size()==3&&restore(u,after)==gi);
+   std::string mine=o;mine.replace(mine.find("\"dynamicGi\": \"High\""),std::string("\"dynamicGi\": \"High\"").size(),"\"dynamicGi\": \"Ultra\"");
+   std::string w,whyW;RenderRecord own;ck(applyVr(mine,"Quality",&rec,w,own,whyW)&&w.find("\"dynamicGi\": \"Ultra\"")!=std::string::npos);}
   ck(!applyVr("{\"antiAliasing\": \"a b\",\"dlss\": \"Quality\"}","Quality",nullptr,out,r,reason));}
  // The environment of a VR start: the layer and the loader come from the package, the logs go to this start's folder.
  {const Paths p{L"G:\\game",L"G:\\game\\EnshroudedVR",L"G:\\game\\EnshroudedVR\\bin",L"G:\\game\\EnshroudedVR\\data",L"G:\\game\\EnshroudedVR\\logs\\20261014-120000"};

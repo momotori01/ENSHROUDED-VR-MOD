@@ -20,9 +20,22 @@ inline const std::wstring gripSwingLabel=L"<RG+swing>";
 struct Style {uint8_t plate=246,ink=34;float rim=.05f,margin=.06f,radius=.24f,text=.56f;bool round=false;};
 // The face buttons (Index LA LB RA RB, Quest X Y A B) are drawn round.
 inline bool faceLabel(const std::wstring& l){return l==L"RA"||l==L"RB"||l==L"LA"||l==L"LB"||l==L"A"||l==L"B"||l==L"X"||l==L"Y";}
+// A stick (2026-10-26, user after the headset: "the letters of the icons are too small to read - at that size two letters, three at
+// the most; work on the icon's shape and keep to two letters: the right stick up could be a circle with RS and a small upward
+// triangle at its top right"): a round plate with the stick's two letters (RS, LS) and a small round badge at its top right holding
+// the direction - a triangle up, down, left or right, two for up and down or left and right - or a dot for the press.
+enum class StickMark : uint8_t {None,Up,Down,Left,Right,Vertical,Horizontal,Press};
+inline std::wstring stickLabel(const std::wstring& stick,StickMark mark){
+    static const wchar_t marks[]=L"-UDLRVHP";return L"<stick:"+stick+L":"+std::wstring(1,marks[size_t(mark)])+L">";}
+inline bool stickOf(const std::wstring& l,std::wstring& stick,StickMark& mark){
+    if(l.size()!=12||l.compare(0,7,L"<stick:")!=0||l[9]!=L':'||l[11]!=L'>')return false;
+    const auto k=std::wstring(L"-UDLRVHP").find(l[10]);if(k==std::wstring::npos)return false;
+    stick=l.substr(7,2);mark=StickMark(k);return true;}
 // width x height x 4 bytes, rows top down.
-inline std::vector<uint8_t> paint(uint32_t width,uint32_t height,const std::wstring& label,const Style& style={}){
+inline std::vector<uint8_t> paint(uint32_t width,uint32_t height,const std::wstring& asked,const Style& askedStyle={}){
     if(width<8||height<8||width>512||height>512)throw std::invalid_argument("glyph size");
+    std::wstring stick;StickMark mark=StickMark::None;const bool isStick=stickOf(asked,stick,mark);
+    const std::wstring& label=isStick?stick:asked;Style style=askedStyle;if(isStick)style.round=true;
     constexpr int s=4;const int W=int(width)*s,H=int(height)*s;
     HDC screen=GetDC(nullptr);HDC dc=CreateCompatibleDC(screen);ReleaseDC(nullptr,screen);
     if(!dc)throw std::runtime_error("glyph dc");
@@ -48,7 +61,10 @@ inline std::vector<uint8_t> paint(uint32_t width,uint32_t height,const std::wstr
     const auto outer=mask([&]{plate(0);});
     const auto inner=mask([&]{plate(rim);});
     // The label as large as fits inside the plate.
-    const int room=style.round?int((right-left-2*rim)*.78f):W-2*(margin+rim)-2*s;int textHeight=int(style.text*H);
+    // a stick's badge: a circle at the top right of the plate, over its rim (pr the plate's radius)
+    const bool badge=isStick&&mark!=StickMark::None;const float pr=float(right-left)*.5f,pcx=float(left)+pr,pcy=float(margin)+pr;
+    const float rb=pr*.5f,bx=pcx+pr*.56f,by=pcy-pr*.56f;
+    const int room=badge?int((right-left-2*rim)*.7f):style.round?int((right-left-2*rim)*.78f):W-2*(margin+rim)-2*s;int textHeight=int((badge?.46f:style.text)*H);
     HFONT font=nullptr;
     for(;textHeight>4*s;textHeight-=s){
         if(font)DeleteObject(font);
@@ -78,13 +94,42 @@ inline std::vector<uint8_t> paint(uint32_t width,uint32_t height,const std::wstr
             DrawTextW(dc,L"RG",2,&r,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);SelectObject(dc,oldFont);DeleteObject(small);
             return;}
         SetBkMode(dc,TRANSPARENT);SetTextColor(dc,RGB(255,255,255));RECT r{0,0,W,H};
+        // with a badge the letters sit a little left and down, clear of it
+        if(badge)r={LONG(-pr*.14f),LONG(pr*.07f),LONG(W-pr*.14f),LONG(H+pr*.07f)};
         DrawTextW(dc,label.c_str(),int(label.size()),&r,DT_CENTER|DT_VCENTER|DT_SINGLELINE|DT_NOPREFIX);});
+    // The badge as a layer of its own over the plate: its circle (light, with the dark rim) and its mark (dark).
+    std::vector<uint8_t> badgeOuter,badgeInner,badgeInk;
+    if(badge){
+        const int brim=std::max(s,int(rim*.8f));
+        const auto disc=[&](float x,float y,float r){Ellipse(dc,LONG(x-r),LONG(y-r),LONG(x+r)+1,LONG(y+r)+1);};
+        const auto fill=[&]{SelectObject(dc,GetStockObject(WHITE_BRUSH));SelectObject(dc,GetStockObject(NULL_PEN));};
+        badgeOuter=mask([&]{fill();disc(bx,by,rb);});
+        badgeInner=mask([&]{fill();disc(bx,by,rb-float(brim));});
+        badgeInk=mask([&]{fill();
+            // a triangle pointing (dx, dy), of half size k (against the badge's radius), its middle at (x, y)
+            const auto tri=[&](float x,float y,float dx,float dy,float k){const float L=rb*k;
+                const POINT p[3]{{LONG(x+dx*L),LONG(y+dy*L)},{LONG(x-dx*L*.7f-dy*L),LONG(y-dy*L*.7f+dx*L)},{LONG(x-dx*L*.7f+dy*L),LONG(y-dy*L*.7f-dx*L)}};
+                Polygon(dc,p,3);};
+            switch(mark){
+            case StickMark::Up:tri(bx,by+rb*.12f,0,-1,.58f);break;
+            case StickMark::Down:tri(bx,by-rb*.12f,0,1,.58f);break;
+            case StickMark::Left:tri(bx+rb*.12f,by,-1,0,.58f);break;
+            case StickMark::Right:tri(bx-rb*.12f,by,1,0,.58f);break;
+            case StickMark::Vertical:tri(bx,by-rb*.36f,0,-1,.36f);tri(bx,by+rb*.36f,0,1,.36f);break;
+            case StickMark::Horizontal:tri(bx-rb*.36f,by,-1,0,.36f);tri(bx+rb*.36f,by,1,0,.36f);break;
+            case StickMark::Press:disc(bx,by,rb*.42f);break;
+            default:break;}});
+    }
     SelectObject(dc,old);if(font)DeleteObject(font);DeleteObject(bmp);DeleteDC(dc);
     std::vector<uint8_t> out(size_t(width)*height*4);
     for(size_t p=0;p<size_t(width)*height;++p){
         const int a=outer[p],i=std::min<int>(inner[p],a),t=std::min<int>(ink[p],i);
-        const int c=(style.ink*(a-i)+style.plate*(i-t)+style.ink*t)/255;   // premultiplied: rim, plate, label
-        out[p*4]=out[p*4+1]=out[p*4+2]=uint8_t(std::min(c,a));out[p*4+3]=uint8_t(a);}
+        int c=(style.ink*(a-i)+style.plate*(i-t)+style.ink*t)/255;   // premultiplied: rim, plate, label
+        int alpha=a;
+        if(badge){const int ba=badgeOuter[p],bn=std::min<int>(badgeInner[p],ba),bt=std::min<int>(badgeInk[p],bn);
+            const int bc=(style.ink*(ba-bn)+style.plate*(bn-bt)+style.ink*bt)/255;   // the badge over the plate
+            c=bc+c*(255-ba)/255;alpha=ba+a*(255-ba)/255;}
+        out[p*4]=out[p*4+1]=out[p*4+2]=uint8_t(std::min(c,alpha));out[p*4+3]=uint8_t(alpha);}
     return out;
 }
 }

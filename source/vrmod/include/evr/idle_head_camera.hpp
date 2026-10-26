@@ -9,6 +9,12 @@ namespace evr::game {
 // (0x570); the camera +0x20 and the action bar +0x60 as before; the equipment change +0x1c0 (0x17c), the movement stick
 // +0x2b8 (0x254), the mask +0x3a0 (0x310), the digital input +0x3a8 (0x318), the input mode +0x5a1 (0x511), the
 // client-only input +0x5a4 (0x514) with its building-camera byte at +6 (+0x5aa, 0x51a).
+// The client input's +0x3a0 is the low byte of keen::ecs::ClientPlayerFlags (a Bitmask16; reflection rva 0x178e280; 2026-10-26, the headset
+// log 20261026-175020: 64 while the fine translation of a piece was on, 128 the fine rotation, 192 both, as the HUD's switches): 0
+// IsInMultiToolBuildingMenu, 1 IsInBlueprintMenu, 2 IsInLogicScrewdriverMode, 3 IsInLootingMenu, 4 IsInFreeCam, 5 IsInFirstPerson,
+// 6 IsInBuildingDetailTranslationMode, 7 IsInBuildingDetailRotationMode. The two detail modes are no reason to leave the head's
+// walking direction (user: "the forward is fixed once I start moving - the original model's heading, not the headset's").
+constexpr uint8_t clientDetailModes=0xc0;
 constexpr size_t clientInputBytes=0x600,clientEquipAction=0x1c0,clientStick=0x2b8,clientMask=0x3a0,clientDigital=0x3a8,
     clientInputMode=0x5a1,clientBuildingCamera=0x5aa;
 // The ECS PlayerInput keeps the client's data from +8 (fromClient: the camera +0x28 / +0x40); 1.0: the stick +0x2c0
@@ -42,7 +48,7 @@ inline IdleHeadResult patchIdleHeadCamera(const ClientInputBytes& source,ClientI
     if(!gate.normalUiBound){r.status=IdleHeadStatus::Ui;return r;}
     if(!gate.playerStateCurrent||!(gate.playerFlags&1u)||(gate.playerFlags&nativeCameraFlags())){
         r.status=IdleHeadStatus::PlayerState;return r;}
-    if(gate.freeCamera||source[clientMask]||source[clientBuildingCamera]||source[clientInputMode]>1){r.status=IdleHeadStatus::SpecialMode;return r;}
+    if(gate.freeCamera||(source[clientMask]&~clientDetailModes)||source[clientBuildingCamera]||source[clientInputMode]>1){r.status=IdleHeadStatus::SpecialMode;return r;}
     std::array<float,2> stick;uint64_t digital;
     std::memcpy(stick.data(),source.data()+clientStick,sizeof(stick));std::memcpy(&digital,source.data()+clientDigital,sizeof(digital));
     if(!std::isfinite(stick[0])||!std::isfinite(stick[1]))return r;

@@ -2,6 +2,7 @@
 #include <evr/body_clip_spirv_patch.hpp>
 #include <evr/vulkan.hpp>
 #include <atomic>
+#include <chrono>
 #include <mutex>
 namespace evr::body {
 inline bool featuresEnabled(const VkDeviceCreateInfo& info){
@@ -14,16 +15,19 @@ inline bool featuresEnabled(const VkDeviceCreateInfo& info){
     }
     return core&&core->shaderClipDistance&&core->shaderInt64&&address;
 }
-// Append-only immutable allocations: never rewrite a payload possibly in flight.
-// Native vkDestroyDevice is the sole release boundary. At most256 unique values
-// per device; exhaustion returns a normal inactive fallback rather than recycling.
+// Immutable allocations: never rewrite a payload possibly in flight. Native vkDestroyDevice is the sole release boundary.
+// At most 256 per device. When they are all taken, the one asked for least recently is rewritten - only when no frame has
+// asked for it for 2 s, so that no GPU work can still read it (2026-10-25, a player's boss fight, log 20261025-135839: the
+// held weapon's model came anew every 0.7 s, each a new payload, and after 256 "body immutable payload budget exhausted"
+// stopped the eyes for good). None that old: the request is refused as before (the caller keeps the game's own constants).
 class PayloadStore {
-    struct Allocation {Payload payload;VkBuffer buffer{};VkDeviceMemory memory{};VkDeviceAddress address=0;};
+    struct Allocation {Payload payload;VkBuffer buffer{};VkDeviceMemory memory{};VkDeviceAddress address=0;uint64_t lastAskedMs=0;};
+    static uint64_t nowMs(){return uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());}
     VkDevice device_;PFN_vkGetDeviceProcAddr get_;VkPhysicalDeviceMemoryProperties memory_{};
     std::mutex mutex_;std::vector<Allocation> values_;bool released_=false;
     template<class T>T fn(const char* name){auto p=reinterpret_cast<T>(get_(device_,name));if(!p)throw std::runtime_error(std::string("body payload entry absent: ")+name);return p;}
 public:
-    std::atomic<unsigned> shaderMask{0};std::atomic<bool> failed{false};
+    std::atomic<unsigned> shaderMask{0};std::atomic<bool> failed{false};std::atomic<unsigned> recycled{0};
     PayloadStore(VkDevice device,VkPhysicalDevice physical,VkInstance instance,PFN_vkGetDeviceProcAddr get,PFN_vkGetInstanceProcAddr gipa):device_(device),get_(get){
         auto query=reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(gipa(instance,"vkGetPhysicalDeviceMemoryProperties"));if(!query)throw std::runtime_error("body memory properties absent");query(physical,&memory_);values_.reserve(256);
     }
@@ -36,9 +40,16 @@ public:
         // clip payload needs both body vertex shaders. 1.0 (2026-10-16): those two are not ported yet (Mock run
         // game-20261016-064254: "body shader/device preparation incomplete", and the head stayed in the eyes).
         if(released_||failed||(!appearanceTag(payload.tag)&&shaderMask.load()!=3))throw std::runtime_error("body shader/device preparation incomplete");
-        for(const auto& value:values_)if(!std::memcmp(&value.payload,&payload,sizeof(payload)))return value.address;
-        if(values_.size()>=256)throw std::runtime_error("body immutable payload budget exhausted");
-        Allocation a;a.payload=payload;void* mapped=nullptr;
+        const auto now=nowMs();
+        for(auto& value:values_)if(!std::memcmp(&value.payload,&payload,sizeof(payload))){value.lastAskedMs=now;return value.address;}
+        if(values_.size()>=256){
+            Allocation* oldest=nullptr;for(auto& value:values_)if(!oldest||value.lastAskedMs<oldest->lastAskedMs)oldest=&value;
+            if(!oldest||now<oldest->lastAskedMs+2000)throw std::runtime_error("body immutable payload budget exhausted");
+            void* mapped=nullptr;vkCheck(fn<PFN_vkMapMemory>("vkMapMemory")(device_,oldest->memory,0,sizeof(Payload),0,&mapped),"body map (reuse)");
+            std::memcpy(mapped,&payload,sizeof(payload));fn<PFN_vkUnmapMemory>("vkUnmapMemory")(device_,oldest->memory);
+            oldest->payload=payload;oldest->lastAskedMs=now;++recycled;created=true;return oldest->address;
+        }
+        Allocation a;a.payload=payload;a.lastAskedMs=now;void* mapped=nullptr;
         try{
             VkBufferCreateInfo buffer{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};buffer.size=sizeof(Payload);buffer.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT|VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
             vkCheck(fn<PFN_vkCreateBuffer>("vkCreateBuffer")(device_,&buffer,nullptr,&a.buffer),"body buffer");

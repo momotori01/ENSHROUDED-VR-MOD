@@ -10,7 +10,9 @@ namespace liveEquipment {
 inline uintptr_t knownWorld=0;inline int selectionType=-1,inventoryType=-1,linkType=-1,setupType=-1,fishingType=-1;inline uint64_t lastRead=0;inline unsigned events=0;
 struct Stack {uint32_t item=0;std::array<uint8_t,8> data{};};
 struct Worn {uint32_t entity=0;uint8_t index=0xff;Stack stack{};};
-struct State {bool valid=false;uint64_t at=0;Worn ranged{},shield{},keptShield{};uint32_t disabled=0;uint8_t selected=0xff;
+// arrow / spell: the ammunition slots (keen::EquipmentSlot 14 Arrow, 15 Spell - the arrows and the staff's spell in use; their
+// stack's first four bytes are the count, Mock 20261026-101514: Fire Ball I 20 at the backpack's row 7250 slot 7).
+struct State {bool valid=false;uint64_t at=0;Worn ranged{},shield{},keptShield{},arrow{},spell{};uint32_t disabled=0;uint8_t selected=0xff;
     // Where an item sits in the rows of the player's inventories (the first slot that holds it), for wearing it again.
     std::vector<std::pair<Worn,uint8_t>> rows;};   // slot and the row's category
 inline std::mutex mutex;inline State latest;inline std::string lastLine;
@@ -77,7 +79,7 @@ inline void fishing(uintptr_t world,uint32_t local,uint64_t now){
 // (+0xf8) - tools/reflection_struct_diff.py on the June and 1.0 executables. keen::EquipmentSlot lost Accessory0/1 and
 // ClimbWall: RangedWeapon 12 (14), Shield 13 (15). keen::ecs::InventoryLink is no component any more (the owner is found
 // through the player's own InventorySetup). Found by June's sizes, none of this was read on 1.0.
-constexpr unsigned selectionBytes=216,selectionDisabled=0xbc,selectionSelected=0xc0,selectionActionItem=0xa8,equipmentSlots=20,slotRanged=12,slotShield=13;
+constexpr unsigned selectionBytes=216,selectionDisabled=0xbc,selectionSelected=0xc0,selectionActionItem=0xa8,equipmentSlots=20,slotRanged=12,slotShield=13,slotArrow=14,slotSpell=15;
 inline void tick(uintptr_t world,uint32_t local){
  const auto now=GetTickCount64();fishing(world,local,now);if(now-lastRead<100)return;lastRead=now;
  try{
@@ -98,7 +100,7 @@ inline void tick(uintptr_t world,uint32_t local){
   const auto raw=read<std::array<uint8_t,selectionBytes>>(selection);
   State next;next.at=now;std::memcpy(&next.disabled,raw.data()+selectionDisabled,4);next.selected=raw[selectionSelected];
   const auto worn=[&](unsigned slot){Worn w;std::memcpy(&w.entity,raw.data()+8*slot,4);w.index=raw[8*slot+4];stackAt(world,w.entity,w.index,w.stack);return w;};
-  next.ranged=worn(slotRanged);next.shield=worn(slotShield);
+  next.ranged=worn(slotRanged);next.shield=worn(slotShield);next.arrow=worn(slotArrow);next.spell=worn(slotSpell);
   // The owner of the rows: the player itself, or whoever the row of a worn item names.
   std::array<uint8_t,84> setup{};uint32_t owner=0;
   const auto setupOf=[&](uint32_t entity){

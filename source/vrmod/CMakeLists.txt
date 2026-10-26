@@ -245,6 +245,9 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/edge_tint_fragment.h"
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_mark_fragment.h"
  COMMAND "${UI_GLSLANG}" -V --vn eyeMarkFragment -o "${CMAKE_BINARY_DIR}/generated/eye_mark_fragment.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/eye_mark.frag"
  DEPENDS shaders/eye_mark.frag)
+add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_panel_fragment.h"
+ COMMAND "${UI_GLSLANG}" -V --vn eyePanelFragment -o "${CMAKE_BINARY_DIR}/generated/eye_panel_fragment.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/eye_panel.frag"
+ DEPENDS shaders/eye_panel.frag)
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/vfx_decal_writeback.h"
  COMMAND "${UI_GLSLANG}" -V --target-env vulkan1.2 -e cs_main --source-entrypoint main --vn vfxDecalWriteback -o "${CMAKE_BINARY_DIR}/generated/vfx_decal_writeback.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/vfx_decal_writeback.comp"
  DEPENDS shaders/vfx_decal_writeback.comp)
@@ -275,7 +278,7 @@ add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_motion_fix.h"
 add_custom_command(OUTPUT "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h"
  COMMAND "${UI_GLSLANG}" -V --vn eyeDepthCopyFragment -o "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/eye_depth_copy.frag"
  DEPENDS shaders/eye_depth_copy.frag)
-add_custom_target(evr_ui_transfer_shaders DEPENDS "${CMAKE_BINARY_DIR}/generated/eye_motion_fix.h" "${CMAKE_BINARY_DIR}/generated/fog_reproject.h" "${CMAKE_BINARY_DIR}/generated/fsr_exposure_copy.h" "${CMAKE_BINARY_DIR}/generated/ssr_reproject.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_capture.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_apply.h" "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_vertex.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_fragment.h" "${CMAKE_BINARY_DIR}/generated/vfx_decal_writeback.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_vertex.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_fragment.h" "${CMAKE_BINARY_DIR}/generated/edge_tint_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_mark_fragment.h")
+add_custom_target(evr_ui_transfer_shaders DEPENDS "${CMAKE_BINARY_DIR}/generated/eye_motion_fix.h" "${CMAKE_BINARY_DIR}/generated/fog_reproject.h" "${CMAKE_BINARY_DIR}/generated/fsr_exposure_copy.h" "${CMAKE_BINARY_DIR}/generated/ssr_reproject.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_capture.h" "${CMAKE_BINARY_DIR}/generated/gi_reproject_apply.h" "${CMAKE_BINARY_DIR}/generated/eye_depth_copy_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_vertex.h" "${CMAKE_BINARY_DIR}/generated/eye_warp_fragment.h" "${CMAKE_BINARY_DIR}/generated/vfx_decal_writeback.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_vertex.h" "${CMAKE_BINARY_DIR}/generated/ui_transfer_fragment.h" "${CMAKE_BINARY_DIR}/generated/edge_tint_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_mark_fragment.h" "${CMAKE_BINARY_DIR}/generated/eye_panel_fragment.h")
 add_library(evr_ui_transfer INTERFACE)
 add_dependencies(evr_ui_transfer evr_ui_transfer_shaders)
 target_link_libraries(evr_ui_transfer INTERFACE evr_core)
@@ -746,6 +749,9 @@ add_test(NAME hud_fade COMMAND evr_hud_fade_tests)
 add_executable(evr_guard_rule_tests tests/guard_rule_tests.cpp)
 target_link_libraries(evr_guard_rule_tests PRIVATE evr_core)
 add_test(NAME guard_rule COMMAND evr_guard_rule_tests)
+# The staff's spell list painted with the game's own font and icons, for looking at it without the game (not a test).
+add_executable(evr_ammo_panel_preview tools/ammo_panel_preview.cpp)
+target_link_libraries(evr_ammo_panel_preview PRIVATE evr_core gdi32)
 add_executable(evr_staff_trigger_tests tests/staff_trigger_tests.cpp)
 target_link_libraries(evr_staff_trigger_tests PRIVATE evr_core)
 add_test(NAME staff_trigger COMMAND evr_staff_trigger_tests)

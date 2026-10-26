@@ -1,3 +1,6 @@
+#include <functional>
+#include <unordered_set>
+#include <algorithm>
 #include <evr/actor_value_hold.hpp>
 #include <evr/game_build.hpp>
 #include <evr/vfx_culling_union.hpp>
@@ -36,6 +39,8 @@
 #include <evr/bow_tracked_shot.hpp>
 #include <evr/bow_draw.hpp>
 #include <evr/ranged_aim.hpp>
+#include <evr/ammo_names.hpp>
+#include <evr/ammo_panel_paint.hpp>
 #include <evr/button_glyph_labels.hpp>
 #include <evr/live_melee.hpp>
 #include <evr/live_throw.hpp>
@@ -130,6 +135,7 @@
 #include <chrono>
 #include <filesystem>
 #include <thread>
+#include <condition_variable>
 #include <windows.h>
 #include <Xinput.h>
 using namespace evr;
@@ -473,6 +479,7 @@ struct PairResources {
         std::array<bool,2> fillOnlyObserved{};
         std::array<uint64_t,2> substitutions{},resets{};
         bool failed=false;
+        bool ownFailure=false;   // set by the bridge itself (culling_history_bridge.hpp failure); not by the head visibility's failure
     } history;
     std::array<std::array<PrivateSsr,2>,2> privateSsr{};
     alignas(16) std::array<std::array<uint8_t,layout::ownerBytes>,2> owners{};
@@ -626,8 +633,11 @@ bool finishEyeCpuTasks(uintptr_t scene,unsigned milliseconds=100);
 #include "live_melee_targets.hpp"
 #include "effect_entity_census.hpp"
 #include "target_mark.hpp"
+#include "own_stamina_ring.hpp"
 #include "live_actionbar_pages.hpp"
 #include "live_equipment.hpp"
+#include "ammo_list_draw.hpp"
+#include "spell_panel.hpp"
 #include "holster_actions.hpp"
 #include "motion_mod_bow_visual.hpp"
 #include "motion_event_selection_observer.hpp"
@@ -689,7 +699,10 @@ inline void apply(){
     // While the game loads (cameras 1..3, or no sample of the player yet - as for the desktop skip) the loading
     // screen is not a HUD to hide: Mock run game203326 faded it after five seconds.
     bool loading=false;try{rootCamera::Sample root;loading=!rootCamera::trySnapshot(root)||root.cameraId<=3;}catch(const std::exception&){loading=true;}
-    const int mode=!loading&&at&&now>=at&&now-at<=500&&controllerUiFixture::liveScreenGameplay.load()?1:2;
+    // 2 always while the game fades the HUD itself (game_hud_visibility.hpp: its own Contextual settings - no fade by regions)
+    // a piece in the hand: shown, as building mode (controller_ui_fixture.hpp pieceHeldAt)
+    const auto piece=controllerUiFixture::pieceHeldAt.load();const bool placing=piece&&now>=piece&&now-piece<=1500;
+    const int mode=!gameHudVisibility::inUse()&&!loading&&!placing&&at&&now>=at&&now-at<=500&&controllerUiFixture::liveScreenGameplay.load()?1:2;
     if(set&&set(mode))throw std::runtime_error("UI HUD mode rejected");
     if(mode!=last){last=mode;logFile->event("ui_hud_mode","\"mode\":"+std::to_string(mode)+",\"gameplay_hud\":"+(mode==1?"true":"false"));}
 }
@@ -2309,11 +2322,19 @@ bool recoverPair(PairResources& pair){
     failureRecovery::holdUntil=now+hold;
     const bool motionAgain=motionVisual::failed&&motionVisual::validated&&failureRecovery::motionRetries<3;
     if(motionAgain){motionVisual::failed=false;++failureRecovery::motionRetries;}
+    // The head's hiding failed (2026-10-26, a player's boss fight, log 20261025-135839: "local appearance immutable payload
+    // unavailable", and all twelve recoveries ended at once on "culling history bridge rejected native state"): it marks the
+    // culling history failed without anything of the history being wrong (it writes the culling constants only after its checks).
+    // Both marks go, three times a session; a failure of the history itself (ownFailure) still ends the eyes for good.
+    static unsigned headRetries=0;
+    const bool headAgain=headVisibility::failed&&pair.history.failed&&!pair.history.ownFailure&&headRetries<3;
+    if(headAgain){headVisibility::failed=false;pair.history.failed=false;++headRetries;}
     sharedRenderDeferredFrames=0;
     pair.failed=false;pair.pairPending=false;pair.frameReady=false;
     logFile->event("world_frame_recovered","\"frame\":"+std::to_string(liveFrame.frame)+",\"recoveries\":"+std::to_string(failureRecovery::count)+
         ",\"streak\":"+std::to_string(r)+",\"plate_ms\":"+std::to_string(hold)+",\"paired_frames\":"+std::to_string(pair.pairedFrames)+
-        ",\"motion_visual_again\":"+(motionAgain?"true":"false")+",\"motion_visual_off\":"+(motionVisual::failed?"true":"false"));
+        ",\"motion_visual_again\":"+(motionAgain?"true":"false")+",\"motion_visual_off\":"+(motionVisual::failed?"true":"false")+
+        ",\"head_visibility_again\":"+(headAgain?"true":"false"));
     return true;
 }
 void finishPair() noexcept {
@@ -2845,7 +2866,17 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
             // on the ground - at most 300 frames late, so that a long glide still refreshes the GI. EVR_FALL_REFRESH_HOLD=0: off.
             static const bool fallRefreshHold=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_FALL_REFRESH_HOLD",v,sizeof v);return !(n==1&&v[0]=='0');}();
             static bool refreshOwed=false;static unsigned refreshPostponed=0,postponeLogs=0;
-            bool refreshNow=desktopSkipEvery&&(!(desktopSkipCandidates%desktopSkipEvery)||refreshOwed);
+            // A piece in the hand with the game's fine rotation or fine translation on (controller_ui_fixture.hpp, the mod's count of
+            // RT + R3 / RT + L3): the original View every frame (2026-10-26, user after the headset: "with the fine rotation or the fine
+            // position on, the box goes away" - reports 170636 / 173321: the gizmo shown, the box mostly not, once seen in between;
+            // guess: in those modes the piece is drawn from what the original View's frame prepares). EVR_PIECE_DETAIL_REFRESH=0: off.
+            static const bool pieceDetailRefresh=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_PIECE_DETAIL_REFRESH",v,sizeof v);return !(n==1&&v[0]=='0');}();
+            bool pieceDetail=false;
+            if(pieceDetailRefresh){const auto at=controllerUiFixture::pieceHeldAt.load();const auto nowMs=GetTickCount64();
+                pieceDetail=at&&nowMs>=at&&nowMs-at<=1500&&controllerUiFixture::pieceDetailOn(nowMs);
+                static bool loggedDetail=false;static unsigned detailLogs=0;
+                if(pieceDetail!=loggedDetail&&detailLogs++<200){loggedDetail=pieceDetail;logFile->event("piece_detail_refresh","\"frame\":"+std::to_string(liveFrame.frame)+",\"every_frame\":"+(pieceDetail?"true":"false"));}}
+            bool refreshNow=desktopSkipEvery&&(!(desktopSkipCandidates%desktopSkipEvery)||refreshOwed||pieceDetail);
             if(refreshNow&&fallRefreshHold){
                 bool airborne=false;{std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;const auto now=GetTickCount64();
                     airborne=s.actorKnown&&s.milliseconds&&now>=s.milliseconds&&now-s.milliseconds<=500&&!(s.actorState&1ull);}
@@ -2929,6 +2960,7 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
         keyScript::frame(liveFrame.frame,keyScript::installed?menuPointer::gameWindow():nullptr);   // the Mock's keys (as in the motion branch below)
         padSettings::frame(menuPointer::screen.load());
         targetMark::frame(liveFrame.frame,GetTickCount64());   // the locked enemy's bar above it (target_mark.hpp)
+        ownStaminaRing::frame();   // the mod's own stamina ring (own_stamina_ring.hpp)
         // the VR bug report (its button: the pad panel's left stick click), after the panel (it takes the overlay elsewhere)
         {const motion::GestureHead head{liveFrame.head,liveFrame.headFlags,liveFrame.frame,liveFrame.sessionGeneration,liveFrame.hands.originGeneration,liveFrame.time};
          bugReport::frame(liveFrame.hands,head,GetTickCount64());}}
@@ -2975,9 +3007,17 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
                 menuPointer::frame(liveFrame.hands,head,GetTickCount64());
                 bugReport::frame(liveFrame.hands,head,GetTickCount64());
                 {const bool held=motionVisual::poseReady&&motionHandVisual::ready;
+                 // Not while the quick slot wheel is open (2026-10-26, user after the headset: "the top of the quick slots is cut out" -
+                 // report 150418 ui-002848: with the staff in hand the wheel's top row, y 690..770, lay in the aim cluster, y 370..770,
+                 // and went to the aimed point). The wheel keeps screen 1 with the auxiliary HUD 1 (input_ui_observer.hpp); the game
+                 // hides its own dot then too.
+                 const auto ui=inputUi::snapshot();const auto nowMs=GetTickCount64();
+                 const bool wheelOpen=ui.number&&ui.readable&&ui.screen==1&&ui.auxiliary==1&&nowMs>=ui.milliseconds&&nowMs-ui.milliseconds<=500;
                  aimMark::frame(liveFrame.hands,held&&motionVisual::bowDrawHeld,held?motionVisual::bowGeometry:motion::BowPhysicalGeometry{},held?motionVisual::rangedItem:0,
-                    held?motionVisual::rangedGeometry:motion::BowPhysicalGeometry{},held&&motionVisual::rangedTwoHanded,menuPointer::screen.load(),GetTickCount64());}
-                targetMark::frame(liveFrame.frame,GetTickCount64());
+                    held?motionVisual::rangedGeometry:motion::BowPhysicalGeometry{},held&&motionVisual::rangedTwoHanded,wheelOpen?uint8_t(255):menuPointer::screen.load(),nowMs);}
+                targetMark::frame(liveFrame.frame,GetTickCount64());ownStaminaRing::frame();
+                ammoListDraw::frame(GetTickCount64());
+                {const bool held=motionVisual::poseReady&&motionHandVisual::ready;spellPanel::frame(held?motionVisual::rangedItem:0,aimMark::shown,GetTickCount64());}   // the staff's spells (spell_panel.hpp)
                 keyScript::frame(liveFrame.frame,keyScript::installed?menuPointer::gameWindow():nullptr);
                 if(controllerUiFixture::liveGuardRequested){
                     // A shield on the left hand, else a melee weapon currently held with both hands.
@@ -3288,7 +3328,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                 sequenceColliderObserver::requested=true;impactHierarchyObserver::requested=true;attachmentObserver::requested=true;
                 motionColliderApply::requested=true;motionColliderApply::live=true;liveTargets::requested=true;
                 remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;
-                controllerUiFixture::staminaOf=&liveTargets::staminaOf;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
+                controllerUiFixture::staminaOf=&liveTargets::staminaOf;controllerUiFixture::staminaMostOf=&liveTargets::staminaMostOf;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
                 inputRanged::liveBowWatch=true;bowSpawnObserver::remoteAlways=true;}
             // The locked enemy's health bar and lock-on arrow above the enemy, not on the UI plate (2026-10-25, user: "in TPS and
             // FPS the enemy's lock is on the UI - the focus does not match, very hard to see; make it look as in VR"): the list of
@@ -3806,6 +3846,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         if(sharedPointLights::requested)optional("shared_point_lights",[&]{sharedPointLights::install();},[&]{sharedPointLights::requested=false;});
         if(liveXr)optional("eye_exposure",[&]{eyeExposure::install();},[&]{});
         if(liveXr)optional("combat_camera_override",[&]{combatCameraOverride::install();},[&]{});   // the fog dragon's camera kept off in VR
+        if(liveXr)optional("ammo_list_draw",[&]{ammoListDraw::install();},[&]{});   // the game's ammunition list beside the crosshair (ammo_list_draw.hpp)
         if(sharedCullingCamera||desktopSkipVfx||stableFrustumBridge::observeEyes)optional("stable_frustum",[&]{stableFrustumBridge::install();},[&]{});
         if(desktopSkipVfx)optional("vfx_culling",[&]{vfxCulling::install();},[&]{});
         if(giShare::requested||giShare::borrowScreen)optional("gi_share",[&]{giShare::install();},[&]{giShare::requested=false;});
@@ -3928,7 +3969,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                     for(auto& r:controllerUiFixture::hitReports)if(r.serial<slot->serial)slot=&r;
                     *slot={++controllerUiFixture::hitReportSerial,now,at,character,false,entity};};
                 remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::hitThing=&liveTargets::thingTouched;
-                controllerUiFixture::creatureNear=&liveTargets::creatureNear;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;controllerUiFixture::staminaOf=&liveTargets::staminaOf;
+                controllerUiFixture::creatureNear=&liveTargets::creatureNear;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;controllerUiFixture::staminaOf=&liveTargets::staminaOf;controllerUiFixture::staminaMostOf=&liveTargets::staminaMostOf;
                 controllerUiFixture::localParryDecided=&parryObserver::localDecided;
                 motionArrowVisual::flightHit=&liveTargets::segmentHit;controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
                 controllerUiFixture::shotSurfaceArrived=&liveTargets::publishSurfaceHit;
@@ -4037,7 +4078,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             // The settings' [Picture] UiAutoHide=0 (the loader's EVR_UI_AUTO_HIDE=0; 2026-10-23): the HUD always shown.
             char hide[8]{};const auto hn=GetEnvironmentVariableA("EVR_UI_AUTO_HIDE",hide,sizeof hide);
             if(hn==1&&hide[0]=='0')logFile->event("ui_auto_hide_off","\"reason\":\"[Picture] UiAutoHide=0\"");else{
-            uiHudBridge::requested=true;
+            uiHudBridge::requested=true;gameHudVisibility::wanted=true;
             logFile->event("ui_auto_hide_enabled","\"hold_ms\":5000,\"fade_out_ms\":800,\"pins_always_shown\":[[420,84,1300,972],[0,280,1480,900]],\"compass_ignored\":true,\"ticking_numbers_ignored\":true");}
         }
         if(std::filesystem::exists(calibrationDirectory/"world-menu-pointer.txt")){
@@ -4343,7 +4384,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         // the exact server Ended proof. This avoids racing all hook teardown
         // against process termination and leaves MOD ledger ownership intact.
         if(!contactQuiescenceObserver::terminalRequested)motionEventSelection::disable();
-        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();rangedSpecialProbe::disable();steamLink::disableGameHooks();motionHitObserver::disable();motionContactObserver::disable();uiStateObserver::disable();bodyUpload::disable();headVisibility::disable();equipmentObserver::disable();if(earlyInputStopped)inputActor::disable();else inputDirection::disable(contactQuiescenceObserver::ownerHandoffRequested);
+        parryObserver::disable();targetMark::disable();spellPanel::finish();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();rangedSpecialProbe::disable();steamLink::disableGameHooks();motionHitObserver::disable();motionContactObserver::disable();uiStateObserver::disable();bodyUpload::disable();headVisibility::disable();equipmentObserver::disable();if(earlyInputStopped)inputActor::disable();else inputDirection::disable(contactQuiescenceObserver::ownerHandoffRequested);
         if(!contactQuiescenceObserver::terminalRequested){contactQuiescenceObserver::disable();contactLifetimeObserver::disable();}
         bowSpawnObserver::disable();
         rootCamera::disable();
@@ -4373,6 +4414,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         objectWatch::uninstall();
         statusVignette::uninstall();
         combatCameraOverride::uninstall();
+        ammoListDraw::uninstall();
         if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
         vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowUpdateOnce::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
         shadowProjection::disable();
@@ -4409,7 +4451,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         if(cleanup==MH_OK&&quiesceDependentHooks()){
             try{motionEventSelection::disable();}catch(...){}
         try{motionHitObserver::disable();}catch(...){}
-        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();rangedSpecialProbe::disable();steamLink::disableGameHooks();
+        parryObserver::disable();targetMark::disable();spellPanel::finish();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();rangedSpecialProbe::disable();steamLink::disableGameHooks();
         try{motionContactObserver::disable();}catch(...){}
             try{uiStateObserver::disable();}catch(...){}
             try{bodyUpload::disable();}catch(...){}
@@ -4422,6 +4464,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             objectWatch::uninstall();
             statusVignette::uninstall();
             combatCameraOverride::uninstall();
+            ammoListDraw::uninstall();
             if(statusVignette::vrTint)try{edgeTintBridge::apply(1,1,1,0);}catch(...){}
             vfxModelBridge::disable();vfxGateProbe::disable();vfxSpringRebase::disable();vfxCpuDrawProbe::disable();vfxDecals::disable();grassMovementBridge::disable();snowDisplacementBridge::disable();waterDisplacementBridge::disable();hitEventIntake::disable();worldRay::disable();shadowUpdateOnce::disable();shadowHistoryProbe::disable();vfxTransparent::disable();
             try{equipmentObserver::disable();}catch(...){}
@@ -4631,7 +4674,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ObserveGameplayInput(void* dir
         try{motionTargets::disable();}catch(...){}
         try{motionEventSelection::disable();}catch(...){}
         try{motionHitObserver::disable();}catch(...){}
-        parryObserver::disable();targetMark::disable();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();rangedSpecialProbe::disable();steamLink::disableGameHooks();
+        parryObserver::disable();targetMark::disable();spellPanel::finish();meleeTriggerObserver::disable();opportunityTakeObserver::disable();sequenceRequestObserver::disable();rangedSpecialProbe::disable();steamLink::disableGameHooks();
         try{motionContactObserver::disable();}catch(...){}
         try{inputDirection::disable();}catch(...){}
             try{contactQuiescenceObserver::disable();}catch(...){}
@@ -4719,7 +4762,7 @@ void prepareHostParts(){
     nativeImpactComponents::requested=true;actionSequenceObserver::requested=true;   // recording stays on (no eye pairs to wait for)
     sequenceColliderObserver::requested=true;impactHierarchyObserver::requested=true;attachmentObserver::requested=true;
     motionColliderApply::requested=true;motionColliderApply::live=true;liveTargets::requested=true;
-    remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;controllerUiFixture::staminaOf=&liveTargets::staminaOf;
+    remoteMelee::nearestTarget=&liveTargets::nearestTo;controllerUiFixture::undoDamage=&liveTargets::undoDamage;controllerUiFixture::guardGiveBack=&liveTargets::guardGiveBack;controllerUiFixture::staminaOf=&liveTargets::staminaOf;controllerUiFixture::staminaMostOf=&liveTargets::staminaMostOf;
     controllerUiFixture::shotHitArrived=&liveTargets::publishShotHit;
     inputRanged::liveBowWatch=true;bowSpawnObserver::remoteAlways=true;   // the own shots known as own (not a guest's)
 }

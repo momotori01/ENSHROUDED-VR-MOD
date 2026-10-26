@@ -34,7 +34,9 @@ struct HudLayout {
  // Both end at y 880 since 2026-10-19 19:10 (user: "the fishing rod's text at the bottom does not go away"): the held
  // item's name and its hints ("Simple fishing rod", "X charge and cast", "LT aim") stand at y 895..975, above the action
  // bar - they were inside the column and stayed shown always. Below 880 is heldItem: it fades with the HUD.
- UiRect pins{420,84,1300,880};
+ // From x 560 since 2026-10-26: the game's floating stamina ring is held off in VR (hooks/floating_stamina.hpp) and its stamina
+ // is a third bar under health and mana, x 20..556, y 74..92 - from 420 the column kept its right end shown after the HUD faded.
+ UiRect pins{560,84,1300,880};
  UiRect pinsWide{0,280,1480,880};
  // The held item's name and hints: fade with the HUD; what changes there (the hints of each fishing step) is no reason
  // to show it. A prompt held at the bottom edge for a thing at the feet (y 941..968) fades with it now.
@@ -69,6 +71,10 @@ struct HudFadeSettings {
  uint64_t fadeOutMs=800,fadeInMs=150;
  unsigned cellThreshold=4;        // of 255: mean difference of one channel of a cell that counts as changed
  unsigned minimumCells=3;         // outside the vitals: cells that have to change at once (one ticking digit is fewer)
+ // In the vitals (2026-10-26, user: "the UI does not go away by itself" - headset run 20261026-180423: of the reasons the HUD stayed,
+ // 41 were one cell of the bars, 6 two, at a second or two apart: the mana bar filling again; a hit or a spell spent moved 7 and more).
+ // The bars' own regeneration is no reason to show the HUD; a loss or a gain of three cells at once is.
+ unsigned minimumVitalCells=3;
  // A cell that keeps changing by itself (a timer's digits) stops counting: this many changes within the window.
  unsigned tickerChanges=6;uint64_t tickerWindowMs=12000,tickerMergeMs=300;
 };
@@ -121,7 +127,7 @@ public:
    }
   }
   previous_.assign(cells,cells+count*4);
-  out.changed=out.vitalCells>0||out.otherCells>=settings_.minimumCells;return out;
+  out.changed=out.vitalCells>=settings_.minimumVitalCells||out.otherCells>=settings_.minimumCells;return out;
  }
 };
 // Opacity of the HUD outside the pins.

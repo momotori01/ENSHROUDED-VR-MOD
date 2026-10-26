@@ -11,8 +11,10 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  auto look=[&](uint64_t step=33){now+=step;return d.update(image.data(),w,h,now);};
  // The first copy is no change; an unchanged copy is none either.
  ck(!look().changed);ck(!look().changed);
- // Health or mana: the smallest change counts (one cell of the bars).
- paint(200,40,90);{const auto c=look();ck(c.changed&&c.vitalCells==1&&c.otherCells==0);}ck(!look().changed);
+ // Health or mana: one or two cells (the bar filling again) are no change; three at once (a hit, a spell) are (2026-10-26).
+ paint(200,40,90);{const auto c=look();ck(!c.changed&&c.vitalCells==1&&c.otherCells==0);}ck(!look().changed);
+ paint(216,40,90);paint(232,40,90);{const auto c=look();ck(!c.changed&&c.vitalCells==2);}
+ paint(248,40,90);paint(264,40,90);paint(280,40,90);{const auto c=look();ck(c.changed&&c.vitalCells==3&&c.otherCells==0);}ck(!look().changed);
  // The compass with the distance to the destination, and the middle of the screen with the pins: never a change.
  for(unsigned x=700;x<1240;x+=16)paint(x,30,200);{const auto c=look();ck(!c.changed&&c.ignoredCells>=30&&c.otherCells==0);}
  for(unsigned x=900;x<1100;x+=16)paint(x,860,180);{const auto c=look();ck(!c.changed&&c.ignoredCells>=12);}
@@ -26,7 +28,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  for(unsigned x=40;x<200;x+=16)paint(x,1040,160);ck(look().changed);for(unsigned x=40;x<200;x+=16)paint(x,1040,0);ck(!look().changed);
  // The band between the HUD's corners (a prompt held at the left or right edge) is part of the always shown middle.
  for(unsigned y=300;y<880;y+=16)paint(30,y,170);{const auto c=look();ck(!c.changed&&c.ignoredCells>=30&&c.otherCells==0);}
- paint(200,40,10);{const auto c=look();ck(c.changed&&c.vitalCells==1&&c.fadingCells==0);}
+ paint(200,40,10);paint(216,40,10);paint(232,40,10);{const auto c=look();ck(c.changed&&c.vitalCells==3&&c.fadingCells==0);}
  // Content that changes without leaving (same coverage, another colour) is a change.
  for(unsigned x=1560;x<1880;x+=16){auto* c=cell(x,60);c[0]=5;c[1]=18;c[2]=20;c[3]=20;}ck(look().changed);
  // A difference below the threshold (blit rounding, compression of a gradient) is nothing.
@@ -47,6 +49,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  // The zones of the layout: prompt positions seen in the Mock runs are inside the pins, the HUD parts are outside.
  {const HudLayout l;auto shown=[&](int x,int y){return l.pins.contains(x,y)||l.pinsWide.contains(x,y);};
   ck(shown(1000,866)&&shown(1100,766)&&shown(1140,868)&&shown(900,120)&&shown(1000,95)&&shown(20,600)&&shown(1470,600));
+  ck(!shown(500,88)&&!shown(540,90));   // the stamina bar's right end fades with the HUD (2026-10-26)
   ck(!shown(1000,955)&&!shown(960,910)&&l.heldItem.contains(1000,955)&&l.heldItem.contains(960,910)&&!l.heldItem.contains(960,980));   // the held item's name and hints fade (2026-10-19)
   ck(!shown(100,40)&&!shown(1700,90)&&!shown(960,1030)&&!shown(960,980)&&!shown(250,105)&&!shown(40,188)&&!shown(1700,140)&&!shown(200,1040)&&!shown(935,18));
   ck(!shown(1900,600)&&!shown(1500,300)&&!shown(1700,880));            // the top right column of pinned recipes fades with the HUD

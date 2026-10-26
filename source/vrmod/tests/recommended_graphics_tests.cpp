@@ -23,9 +23,17 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(find(r,"detailScattering")=="Medium"&&find(r,"textureAnisotropy")=="High"&&find(r,"fog")=="Medium"&&find(r,"contactShadows")=="Disabled"&&find(r,"ssao")=="Disabled");
   // what is seen stays as the user set it on this PC (18:55): distance, deco, tessellation Medium, voxels Low
   ck(find(r,"distantObjects")=="Medium"&&find(r,"decoObjects")=="Medium"&&find(r,"tessellation")=="Medium"&&find(r,"voxelMeshQuality")=="Low");
-  ck(find(r,"antiAliasing")=="?"&&find(r,"dynamicGi")=="?"&&find(r,"dlss")=="?"&&find(r,"models")=="?");}   // the VR start's own, and the unknown "models": not touched
+  ck(find(r,"antiAliasing")=="Dlss"&&find(r,"dlss")=="?"&&find(r,"models")=="Balance");   // DLSS here since 2026-10-25 (the mode below); the unknown "models": not touched
+  // a card that is not NVIDIA's: FSR 3 (2026-10-25); one not known: DLSS
+  {Machine radeon=card(16);radeon.vendor=amd;ck(find(recommend(radeon),"antiAliasing")=="Fsr3"&&find(recommend(Machine{}),"antiAliasing")=="Dlss");
+   const auto asked=pendingMachine(setPending("",true,radeon));ck(asked.known&&asked.vendor==amd&&find(recommend(asked),"antiAliasing")=="Fsr3");
+   ck(pendingMachine(setPending("",true,card(16))).vendor==nvidia);}
+  // the record of an earlier VR start loses what the button wrote, keeps the rest
+  {evr::autostart::RenderRecord rec{{{"antiAliasing","Fsr3","Dlss"},{"dynamicGi","Balance","High"},{"enableHdr","true","false"},{"someOther","A","B"}}};
+   ck(dropFromRecord(rec,r)&&rec.changes.size()==1&&rec.changes[0].name=="someOther"&&!dropFromRecord(rec,r));}
+  ck(find(r,"dynamicGi")=="High");}   // GI into the game's settings (2026-10-25: the VR start keeps the player's own)
  // 10 GB: a smaller picture, GI Performance, filtering Medium
- {const auto r=recommend(card(9.9));ck(r.renderScale=="0.7"&&r.giQuality=="Performance"&&find(r,"textureAnisotropy")=="Medium"&&find(r,"fog")=="Medium"&&find(r,"detailScattering")=="Medium");}
+ {const auto r=recommend(card(9.9));ck(r.renderScale=="0.7"&&r.giQuality=="Performance"&&find(r,"dynamicGi")=="Performance"&&find(r,"textureAnisotropy")=="Medium"&&find(r,"fog")=="Medium"&&find(r,"detailScattering")=="Medium");}
  // 6 GB: fog Low, filtering Low
  {const auto r=recommend(card(6));ck(r.renderScale=="0.7"&&find(r,"textureAnisotropy")=="Low"&&find(r,"fog")=="Medium"&&find(r,"distantObjects")=="Medium"&&find(r,"detailScattering")=="Medium");}   // looks never lowered
  // unknown card: as the usual class
@@ -45,7 +53,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
  // the mod's settings: the VR picture and GI (the DLSS mode goes into the game's settings); the request for the next start and the card's memory
  {const std::string ini="[Mode]\r\nVR=1\r\n\r\n[Picture]\r\nRenderScale=1.0\r\nDlss=Balanced\r\nSharpness=0.2\r\n";
   std::vector<std::string> changed;auto out=applyIni(ini,recommend(card(9.9)),&changed);
-  ck(evr::settings::get(out,"Picture","RenderScale")=="0.7"&&evr::settings::get(out,"Picture","Dlss")=="Balanced"&&evr::settings::get(out,"Picture","GiQuality")=="Performance"&&evr::settings::get(out,"Picture","Sharpness")=="0.2"&&changed.size()==2);
+  ck(evr::settings::get(out,"Picture","RenderScale")=="0.7"&&evr::settings::get(out,"Picture","Dlss")=="Balanced"&&evr::settings::get(out,"Picture","GiQuality").empty()&&evr::settings::get(out,"Picture","Sharpness")=="0.2"&&changed.size()==1);
   ck(!pending(out));out=setPending(out,true,card(9.9));ck(pending(out));
   const auto m=pendingMachine(out);ck(m.known&&gigabytes(m.videoMemory)>9.8&&gigabytes(m.videoMemory)<10.0&&recommend(m).renderScale=="0.7");
   out=setPending(out,false);ck(!pending(out));

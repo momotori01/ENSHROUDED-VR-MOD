@@ -15,14 +15,23 @@ namespace evr::motion {
 // head gesture, a menu). A pull that began while not ready is not the staff's until it is let go; a release while not ready,
 // or a staff no longer ready during the cast, casts nothing (the bow's quick equip: the game still holds the staff for a
 // moment while the trigger draws the shoulder's bow).
+// grip (2026-10-26, user after the headset run 20261026-030628: "the staff's special cannot be fired - did the staff's change
+// stop it?" - it did: the game's special ability is RT without LT (SpecialAbility on PresetA), and since 2026-10-25 RT went
+// only with LT): a pull begun with the right grip held is the game's own RT, alone (no LT), for as long as it is held and at
+// least specialMs - the staff as before 2026-10-25, so whatever the game does with RT (its special ability with a full gauge,
+// a press or a hold) - and its release adds nothing. The wand's and the melee weapons' rule (right grip + trigger).
 struct StaffTrigger {
- struct Out {bool leftTrigger=false,rightTrigger=false,cast=false,cancelled=false;};
- float on=.8f,off=.2f;uint64_t tapMs=100,aimAfterMs=400;
- Out update(float trigger,bool triggerActive,bool ready,uint64_t now){
+ struct Out {bool leftTrigger=false,rightTrigger=false,cast=false,cancelled=false,special=false;};
+ float on=.8f,off=.2f;uint64_t tapMs=100,aimAfterMs=400,specialMs=120;
+ Out update(float trigger,bool triggerActive,bool ready,uint64_t now,bool grip=false){
   Out o;const bool was=pressed;
   // the trigger not read (the controller lost): as not ready - nothing is cast by it
   if(!triggerActive||!std::isfinite(trigger)){pressed=false;ready=false;}else if(trigger>=on)pressed=true;else if(trigger<=off)pressed=false;
-  if(!ready){if(owned)o.cancelled=true;owned=false;castUntil=0;return o;}
+  if(!ready){if(owned)o.cancelled=true;owned=false;castUntil=0;specialHeld=false;specialUntil=0;return o;}
+  if(pressed&&!was&&grip&&!castUntil){specialHeld=true;specialUntil=now+specialMs;o.special=true;}
+  if(specialHeld&&!pressed)specialHeld=false;
+  if(specialUntil&&now>=specialUntil)specialUntil=0;
+  if(specialHeld||specialUntil){o.rightTrigger=true;return o;}
   if(pressed&&!was)owned=true;
   if(owned&&pressed)o.leftTrigger=true;
   if(owned&&!pressed&&was){owned=false;castAt=now;castUntil=now+tapMs+aimAfterMs;o.cast=true;}
@@ -31,6 +40,6 @@ struct StaffTrigger {
  }
  bool held()const{return pressed;}bool charging()const{return owned&&pressed;}bool casting()const{return castUntil!=0;}
 private:
- bool pressed=false,owned=false;uint64_t castAt=0,castUntil=0;
+ bool pressed=false,owned=false,specialHeld=false;uint64_t castAt=0,castUntil=0,specialUntil=0;
 };
 } // namespace evr::motion

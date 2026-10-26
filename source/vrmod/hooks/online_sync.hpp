@@ -110,7 +110,7 @@ inline void action(uint64_t from,const uint8_t* data,size_t size){
     std::rotate(seen.rbegin(),seen.rbegin()+1,seen.rend());seen[0]=key;++actionsHeard;
     if(a->kind==sync::clockAction){clockHeard(from,*a);return;}
     if(a->kind==sync::heldItemAction){remoteConsumables::hear(from,*a);return;}
-    if(a->kind==sync::staminaAction){controllerUiFixture::hostStamina.store(uint64_t(a->stamina)|(GetTickCount64()<<16));
+    if(a->kind==sync::staminaAction){controllerUiFixture::hostStamina.store(uint64_t(a->stamina)|(GetTickCount64()<<16));controllerUiFixture::hostStaminaMost.store(int(a->staminaMost));
         static unsigned heard=0;if(heard++<3)logFile->event("online_sync_stamina_heard","\"player\":\""+steamLink::tail(from)+"\",\"stamina\":"+std::to_string(a->stamina));return;}
     if(a->kind==sync::guardAction){const auto giveBack=controllerUiFixture::guardGiveBack?controllerUiFixture::guardGiveBack:controllerUiFixture::undoDamage;const bool back=a->character&&giveBack&&giveBack(a->at,900);
         if(logs++<200)logFile->event("online_sync_guard_heard","\"player\":\""+steamLink::tail(from)+"\",\"id\":"+std::to_string(a->id)+",\"blocked\":"+(a->character?"true":"false")+",\"damage_given_back\":"+(back?"true":"false"));return;}
@@ -206,7 +206,8 @@ inline void sendStamina(){
     const auto now=steadyUs();if(staminaSentAt&&now-staminaSentAt<250000)return;staminaSentAt=now;
     if(!controllerUiFixture::staminaOf)return;
     for(auto& p:peers.all())if(p.listed&&p.character>=0){const int v=controllerUiFixture::staminaOf(uint32_t(p.character));if(v<0)continue;
-        if(steamLink::send(p.id,sync::encodeStamina(++staminaId,v,0))){++actionsSent;if(staminaSent++<3)logFile->event("online_sync_stamina_sent","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(p.character)+",\"stamina\":"+std::to_string(v));}}
+        const int most=controllerUiFixture::staminaMostOf?controllerUiFixture::staminaMostOf(uint32_t(p.character)):0;   // the most too (2026-10-26)
+        if(steamLink::send(p.id,sync::encodeStamina(++staminaId,v,most>=v?most:0))){++actionsSent;if(staminaSent++<3)logFile->event("online_sync_stamina_sent","\"player\":\""+steamLink::tail(p.id)+"\",\"entity\":"+std::to_string(p.character)+",\"stamina\":"+std::to_string(v));}}
 }
 // The consumable held in this player's right hand (sync::heldItemAction, motion_consumable_visual.hpp): four times a second
 // while one is held and its place in the hand is known from this frame's body, three frames in a row when it changes (0

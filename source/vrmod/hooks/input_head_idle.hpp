@@ -124,6 +124,9 @@ inline void patch(const game::ClientInputBytes& source,game::ClientInputBytes& o
                 ",\"actionbar_selection\":"+jsonString(bytes(bar.data(),bar.size()))+",\"change_equipment\":"+jsonString(bytes(equip.data(),equip.size()))+",\"configured_as_toggle\":"+hex(toggles)+",\"read_only\":true");}catch(...){}}
     }
     const auto now=GetTickCount64();const auto ui=inputUi::snapshot();
+    // the player's client flags (the piece's fine modes among them) for controller_ui_fixture.hpp pieceDetailOn
+    {const uint8_t mask=source[game::clientMask];const auto was=controllerUiFixture::clientPlayerState.exchange(mask);controllerUiFixture::clientPlayerStateAt=now;
+     static std::atomic<unsigned> maskLogs{0};if(mask!=was&&maskLogs.fetch_add(1)<300)try{logFile->event("client_player_flags","\"tick\":"+std::to_string(tick)+",\"flags\":"+std::to_string(mask)+",\"was\":"+std::to_string(was));}catch(...){}}
     State state;{std::lock_guard<std::mutex> lock(mutex);state=latest;}
     const auto value=inputPose::channel.read(entity,now,inputPose::observationMaxAgeMs);
     game::IdleHeadGate guard;guard.normalUiBound=inputUi::boundGameplay(ui,context,entity,now);   // aiming (aux 3) included: report 11 of 2026-10-18

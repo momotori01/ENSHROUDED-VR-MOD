@@ -166,6 +166,32 @@ inline void staminaHints(uintptr_t world,uint32_t local) noexcept {
           o<<"],\"carrier_count\":"<<carriers;}}
         ++lines;logFile->event("guest_stamina_hints",o.str());}catch(...){}
 }
+// The own stamina for the mod's own stamina ring (2026-10-26, user: "draw it yourself - not cut out of the UI"): the local
+// player's keen::ecs::NetworkStamina (two u16: stamina, max) of this World, read on every tick, kept for the drawing
+// (localStaminaNow / localStaminaMax, -1 when not known: a guest's World has none, 10-23). EVR_STAMINA_TRACE=1: every 250 ms
+// (300 lines at most) also its keen::ecs::Stamina (40 bytes) as floats and ints, to learn that layout (stamina_trace).
+inline std::atomic<int> localStaminaNow{-1},localStaminaMax{-1};inline std::atomic<uint64_t> localStaminaAt{0};
+inline void localStamina(uintptr_t world,uint32_t local) noexcept {
+    static int net=-2,full=-2;static uintptr_t typesWorld=0;
+    try{if(typesWorld!=world){typesWorld=world;net=full=-1;
+            for(unsigned i=0;i<nativeImpactComponents::componentCapacity;++i){nativeImpactComponents::ComponentType t;try{t=nativeImpactComponents::componentType(world,i);}catch(...){break;}
+                if(t.qualifiedName=="keen::ecs::NetworkStamina"&&t.bytes==4)net=int(i);else if(t.qualifiedName=="keen::ecs::Stamina"&&t.bytes==40)full=int(i);}}
+        const auto e=nativeImpactComponents::entityAtWorld(world,local);
+        const auto a=net>=0?nativeImpactComponents::component(e,unsigned(net),4):0;
+        int now=-1,most=-1;if(a){now=int(read<uint16_t>(a));most=int(read<uint16_t>(a+2));}
+        // Solo and host (Mock 20261026-094912, stamina_trace): the own character has no NetworkStamina; its keen::ecs::Stamina's
+        // third and fifth i32 are now and the most (266 / 266, falling while running; the most 332 -> 266 when "rested" ended).
+        else if(full>=0){if(const auto f=nativeImpactComponents::component(e,unsigned(full),40)){now=read<int32_t>(f+8);most=read<int32_t>(f+16);}}
+        if(most>0&&most<100000&&now>=0&&now<=most){localStaminaNow=now;localStaminaMax=most;localStaminaAt=GetTickCount64();}
+        static const bool trace=[]{char v[4]{};return GetEnvironmentVariableA("EVR_STAMINA_TRACE",v,sizeof v)==1&&v[0]=='1';}();
+        static uint64_t last=0;static unsigned lines=0;const auto ms=GetTickCount64();
+        if(trace&&lines<300&&ms>=last+250){last=ms;++lines;
+            const auto f=full>=0?nativeImpactComponents::component(e,unsigned(full),40):0;
+            std::ostringstream o;o<<std::setprecision(7)<<"\"ms\":"<<ms<<",\"frame\":"<<liveFrame.frame<<",\"net\":["<<now<<','<<most<<"],\"stamina_f32\":[";
+            for(int k=0;k<10;++k)o<<(k?",":"")<<(f?read<float>(f+k*4):0.f);o<<"],\"stamina_i32\":[";for(int k=0;k<10;++k)o<<(k?",":"")<<(f?read<int32_t>(f+k*4):0);o<<"]";
+            logFile->event("stamina_trace",o.str());}
+    }catch(...){}
+}
 inline void staminaProbe(uintptr_t world,uint32_t local) noexcept {
     static unsigned said=0;if(said>=3)return;++said;
     try{std::string out;unsigned count=0;nativeImpactComponents::Entity e{};bool entity=false;
@@ -310,6 +336,7 @@ inline void tick(uintptr_t world,uint32_t local){
   if(types.world!=world||types.registry!=read<uintptr_t>(world)){++relearns;layouts.clear();cache.clear();cursor=0;guestWorld=false;
    forgetWorldRecords(world);   // (review W11: no writes to an old World's ids)
    learn(world);censusLogs=0;census={};typeCounts={};typePasses=0;}
+  localStamina(world,local);
   if(!types.usable)return;
   lastOrigin=origin;lastOriginKnown=true;estimateLocal=local;estimateProbe(world,local,now);sampleOtherPlayers(now);steerArrows(world,now);thingOutcomes(now);
   // The targets already known: where they are now, or forget them.
@@ -975,6 +1002,10 @@ inline uintptr_t storageValueAt(uint32_t entity,int type,unsigned bytes){   // u
  try{const auto c=nativeImpactComponents::component(nativeImpactComponents::entityAtWorld(types.world,entity),unsigned(type),bytes);if(!c)return 0;
   std::array<uint8_t,8> head{};if(!block(c,head.data(),head.size())||!head[4]||head[4]>8)return 0;return c+8;}catch(...){return 0;}
 }
+// The most stamina of a character (keen::ecs::Stamina's third i32 of its value, 2026-10-26: sent with the stamina to the guest
+// who drives it, for the guest's own stamina ring). -1: not known.
+inline int staminaMostOf(uint32_t entity){std::lock_guard<std::mutex> lock(mutex);if(types.stamina<0)return -1;const auto st=storageValueAt(entity,types.stamina,40);
+ int32_t v=-1;if(!st||!block(st+8,&v,4)||v<=0||v>65535)return -1;return v;}
 // The stamina of a character (keen::ecs::Stamina's value; the host's mod tells it to the guest who drives it, online_sync.hpp
 // sendStamina). -1: not known.
 inline int staminaOf(uint32_t entity){std::lock_guard<std::mutex> lock(mutex);if(types.stamina<0)return -1;const auto st=storageValueAt(entity,types.stamina,40);

@@ -51,7 +51,7 @@ inline uintptr_t object(uintptr_t graph,const std::array<uint8_t,16>& h){
 }
 inline void failure(State& s,const char* reason) noexcept {
     if(!s.failed)try{logFile->event("culling_history_failure","\"reason\":"+jsonString(reason));}catch(...){}
-    s.failed=true;
+    s.failed=true;s.ownFailure=true;
 }
 inline void release(State& s){
     using Free=void(__fastcall*)(void*,void*);

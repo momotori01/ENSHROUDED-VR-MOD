@@ -4,9 +4,12 @@
 namespace evr::motion {
 // Generated from the read-only audit of every hand-held item of the game data; does not certify live handling.
 // Generator: docs/analysis/held_1_0_20261017/generate_held_catalogs_1_0.py (1.0 game data ^/game38/branches/release_1.0)
-// Items thrown with the attack button (weapon type Throwable, 12; item category Weapons, equipment slot 4).
+// Items thrown with the attack button (weapon type Throwable, 12; item category Weapons or Tools, equipment slot 4).
 // None has a model for the hand; the game spawns the projectile on the throw.
-inline constexpr std::array<uint32_t,13> catalogThrowables{{
+// The Tools one (the glowing root torch thrown under water) since 2026-10-26 (user: "check the game data for other throwables" -
+// of the 4262 items of 1.0, 14 have the weapon type Throwable: these 13 Weapons and that one Tool, left out before).
+inline constexpr std::array<uint32_t,14> catalogThrowables{{
+ 32289505u, // Tool_Torch04_GleamRoot_UnderWater
  305542871u, // Consumable_Necromancer_Grenade_T4
  1105258830u, // Consumable_Necromancer_Grenade_T3
  1462961786u, // Consumable_Grenade_Fire_T5

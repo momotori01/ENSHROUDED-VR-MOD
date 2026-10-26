@@ -23,8 +23,8 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(!read("").vr&&read("").online&&read("").keepLogs==8&&read("garbage\n=\n[").dlss.empty()&&read(set(ini,"Log","Keep","0")).keepLogs==0);
   // One eye a frame: off unless [Picture] AlternateEyes=1.
   ck(!read(ini).alternateEyes&&read(set(ini,"Picture","AlternateEyes","1")).alternateEyes&&!read(set(ini,"Picture","AlternateEyes","2")).alternateEyes);
-  // The GI quality of VR: High unless [Picture] GiQuality names another known one (2026-10-15).
-  ck(read(ini).giQuality=="High"&&read(set(ini,"Picture","GiQuality","ultra")).giQuality=="Ultra"&&read(set(ini,"Picture","GiQuality","Keep")).giQuality=="Keep"&&read(set(ini,"Picture","GiQuality","Disabled")).giQuality=="High");
+  // The GI quality of VR: not read any more (2026-10-25) - a VR start keeps the game's own GI, whatever the file says.
+  ck(read(ini).giQuality.empty()&&read(set(ini,"Picture","GiQuality","ultra")).giQuality.empty()&&read(set(ini,"Picture","GiQuality","High")).giQuality.empty());
   // The warp of the eye left out: off unless [Picture] EyeWarp=1 (2026-10-15).
   ck(read(ini).eyeWarp==0&&read(set(ini,"Picture","EyeWarp","1")).eyeWarp==1&&read(set(ini,"Picture","EyeWarp","2")).eyeWarp==2&&read(set(ini,"Picture","EyeWarp","3")).eyeWarp==0);}
  // Sneaking by crouching: on at 30 % unless [Body] says otherwise; a threshold out of 10 .. 50 % gives 30 (2026-10-18).

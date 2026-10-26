@@ -212,6 +212,11 @@ inline void onCopy(uintptr_t rsp) noexcept {
             if(motionArrowVisual::requested&&motionArrowVisual::foreignSerial==pair.serial&&motionArrowVisual::foreignFrame==liveFrame.frame)
                 for(size_t k=0;k<motionArrowVisual::foreignCount;++k){const auto h=motionArrowVisual::foreign[k];const auto i=h&0xffffff;
                     if(motionVisual::currentObject(h)&&i<cpuCount&&indices.size()<body::maximumModels-2&&std::find(indices.begin(),indices.end(),i)==indices.end())indices.push_back(i);}
+            // The game's nocked arrow for a second after it stopped being the arrow at the game's bow (motion_arrow_visual.hpp lostSource,
+            // 2026-10-26: after a release it stays on the original model's hand about 0.3 s, and showed there).
+            if(motionArrowVisual::requested&&motionArrowVisual::lostHiddenSerial==pair.serial&&motionArrowVisual::lostHiddenFrame==liveFrame.frame&&motionArrowVisual::lostSource){
+                const auto h=motionArrowVisual::lostSource;const auto i=h&0xffffff;
+                if(motionVisual::currentObject(h)&&i<cpuCount&&indices.size()<body::maximumModels-2&&std::find(indices.begin(),indices.end(),i)==indices.end())indices.push_back(i);}
             // The nocked arrow takes the third private slot while no shield is shown (a bow fills the shield hand).
             // The game's own arrow stays out of the eyes for as long as it is at the game's bow.
             if(motionArrowVisual::requested&&motionArrowVisual::hiddenSerial==pair.serial&&motionArrowVisual::hiddenFrame==liveFrame.frame&&motionArrowVisual::source){
@@ -230,7 +235,12 @@ inline void onCopy(uintptr_t rsp) noexcept {
             using GetPayload=int(*)(VkDevice,const body::Payload*,uint64_t*);
             const auto module=GetModuleHandleW(L"evr_diagnostic.dll");const auto get=module?reinterpret_cast<GetPayload>(GetProcAddress(module,"evrBodyClipPayload")):nullptr;
             const auto device=read<VkDevice>(read<uintptr_t>(pair.graphics+0x278)+layout::backendDevice);
-            if(!get||get(device,&owned,&gpuAddress)||!gpuAddress)throw std::runtime_error("local appearance immutable payload unavailable");
+            // No payload (2026-10-25: the layer's store full in a player's boss fight, "body immutable payload budget exhausted"):
+            // nothing is written yet - this eye keeps the game's own constants this frame (the head may show for a moment) and
+            // the eyes go on, as without an equipment snapshot above. Before, it stopped the eyes for good.
+            if(!get||get(device,&owned,&gpuAddress)||!gpuAddress){
+                if(++skipped[eye]<=20||skipped[eye]%600==0)logFile->event("head_visibility_fallback","\"eye\":"+std::to_string(eye)+",\"reason\":\"no appearance payload\",\"payload_unchanged\":true,\"skips\":"+std::to_string(skipped[eye]));
+                return;}
             payload={uint32_t(gpuAddress),uint32_t(gpuAddress>>32),owned.tag};
         }else payload=head::pack(indices);
         auto expected=before;

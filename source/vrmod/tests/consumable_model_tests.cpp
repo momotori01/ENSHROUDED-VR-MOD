@@ -17,6 +17,12 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  const auto middle=m.pose.position+rotate(m.pose.orientation,(lo+hi)*(.5f*m.scale));ck(near(middle,grip.position));
  // its +Y (the bottle's neck) goes the way a blade goes out of the fist
  ck(near(rotate(m.pose.orientation,{0,1,0}),rotate(held.orientation,{0,1,0})));
+ // held by a centre of its own (consumable_hand_catalog.hpp gripCentre: the middle of its body, below the neck): that point in the grip
+ {const Vec3 body{.001f,.12f,-.002f};const auto c=mountConsumable(grip,lo,hi,.13f,vhvrWeaponPitchDegrees,&body);ck(c.scale==m.scale);
+  ck(near(c.pose.position+rotate(c.pose.orientation,body*c.scale),grip.position));
+  // the bottle sits higher in the fist (toward the thumb, its +Y) by how far the body's middle is below the box's
+  ck(std::abs(dot(c.pose.position-m.pose.position,rotate(held.orientation,{0,1,0}))-(.1575f-.12f)*m.scale)<1e-5f);
+  bool bad=false;try{const Vec3 nan{std::nanf(""),0,0};mountConsumable(grip,lo,hi,.13f,vhvrWeaponPitchDegrees,&nan);}catch(const std::invalid_argument&){bad=true;}ck(bad);}
  // a model smaller than the hand's size keeps its own size
  m=mountConsumable(grip,{-.03f,0,-.03f},{.03f,.08f,.03f},.13f);ck(m.scale==1.f);
  // bounds that are not a box are refused
@@ -37,7 +43,10 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   // popcorn on that palm: its bottom on the skin, its middle over the palm's
   const Vec3 plo{-.141f,-.005f,-.154f},phi{.141f,.178f,.157f};const auto on=mountOnPalm(palm,plo,phi,.13f);
   const auto base=on.pose.position+rotate(on.pose.orientation,Vec3{0,plo.y,(plo.z+phi.z)*.5f}*on.scale);ck(near(base,palm.position));
-  ck(near(rotate(on.pose.orientation,{0,1,0}),{0,-1,0}));}
+  ck(near(rotate(on.pose.orientation,{0,1,0}),{0,-1,0}));
+  // by the middle of its body: that point's X and Z over the palm's middle, the bottom still on the skin
+  const Vec3 body{.03f,.05f,-.04f};const auto onBody=mountOnPalm(palm,plo,phi,.13f,&body);
+  ck(near(onBody.pose.position+rotate(onBody.pose.orientation,Vec3{body.x,plo.y,body.z}*onBody.scale),palm.position));}
  // the longest side along the fist / the fingers
  {const Vec3 lo{-.43f,-.13f,-.12f},hi{.44f,.14f,.13f};   // a scroll lying along X
   const auto r=longestAlong(lo,hi,ConsumableHold::Fist);Vec3 a,b;turnedBounds(r,lo,hi,a,b);ck(b.y-a.y>.86f&&b.x-a.x<.28f);

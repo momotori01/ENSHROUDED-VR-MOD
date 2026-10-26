@@ -102,6 +102,17 @@ inline std::atomic<bool> liveWieldBusy{true};
 inline bool bowInputTrialRequested=false;inline evr::motion::BowInputTrial bowInputTrial;
 inline bool bowPhysicalTrialRequested=false;inline evr::motion::BowPhysicalTrial bowPhysicalTrial;
 inline bool bowPhysicalReleaseRequested=false;inline evr::motion::BowPhysicalRelease bowPhysicalRelease;
+// The low byte of the local player's keen::ecs::ClientPlayerFlags, as the client input carries it (+0x3a0, include/evr/
+// idle_head_camera.hpp clientDetailModes; published by input_head_idle.hpp at each input): 6 the fine translation of a piece, 7 its
+// fine rotation (2026-10-26; keen::ecs::ClientPlayerState, read before, was not it - 0 throughout).
+inline std::atomic<uint32_t> clientPlayerState{0};inline std::atomic<uint64_t> clientPlayerStateAt{0};
+constexpr uint32_t clientDetailTranslation=1u<<6,clientDetailRotation=1u<<7;
+inline bool clientStateFresh(uint64_t now){const auto at=clientPlayerStateAt.load();return at&&now>=at&&now-at<=500;}
+// The piece's fine rotation / fine translation as the mod counts them (RT + R3 / RT + L3 while a piece is held with the right grip,
+// off when another item is held): only when the game's flags are not at hand - they went apart from the game's own (headset run
+// 20261026-175020: the count off while the game had both on).
+inline bool pieceFineRotate=false,pieceFineMove=false,clientStateProven=false;
+inline bool pieceDetailOn(uint64_t now){return clientStateFresh(now)?(clientPlayerState.load()&(clientDetailRotation|clientDetailTranslation))!=0:(pieceFineRotate||pieceFineMove);}
 inline bool bowTrackedAimRequested=false;inline std::mutex bowShotMutex;inline evr::motion::BowTrackedShot bowTrackedShot;
 // VHVR-style repeatable draw (bow_draw.hpp). Replaces the one-shot release trial on the same route.
 inline bool bowDrawRequested=false;
@@ -260,6 +271,10 @@ inline std::atomic<uint64_t> liveStrikeLeftMs{0},liveStrikeRightMs{0};
 // HUD auto-hide: whether the game shows the HUD of ordinary play (not a menu, the quick wheel or building mode), and when
 // that was seen last.
 inline std::atomic<bool> liveScreenGameplay{false};inline std::atomic<uint64_t> liveScreenAt{0};
+// A building piece in the hand (category 6) on the play screen, last seen at (2026-10-26, user: "keep the UI shown on the screen
+// that places a thing, as in building with the hammer - else the controls cannot be followed"): the HUD auto-hide holds then
+// (view_resource_probe.cpp uiHudBridge sends 2, as for building mode).
+inline std::atomic<uint64_t> pieceHeldAt{0};
 // VHVR: a stroke attacks only when the weapon reaches a target. targetNear (live_melee_targets.hpp, set by the policy
 // word "targets") says whether the blade is near something that has Health; a tool needs no target.
 struct TargetNear {bool reached=true,gated=false;uint32_t entity=0;float distance=0;unsigned cached=0;bool ahead=false;float nearest=-1;bool airborne=false;};
@@ -609,6 +624,12 @@ inline bool (*guardGiveBack)(const std::array<int64_t,3>&,uint64_t)=nullptr;
 // drives (live_melee_targets.hpp, -1 unknown); hostStamina - on a guest, the last stamina the host's mod sent for this
 // player and when (GetTickCount64 ms): value | ms << 16 (0: none). Read by hit_event_intake.hpp guard.
 inline int (*staminaOf)(uint32_t)=nullptr;inline std::atomic<uint64_t> hostStamina{0};
+// and the most (2026-10-26, for the guest's own stamina ring, own_stamina_ring.hpp): staminaMostOf on the host, hostStaminaMost
+// on a guest (0: not sent - an older host's mod)
+inline int (*staminaMostOf)(uint32_t)=nullptr;inline std::atomic<int> hostStaminaMost{0};
+// The staff's trigger in use (the game's LT or RT given for it) at this tick, for the mod's spell list (spell_panel.hpp: the whole
+// list while charging, as the game's HUD).
+inline std::atomic<uint64_t> staffPullAt{0};
 // wandNextShotMs: no swing of the wand shoots before it (motion_event_selection_observer.hpp sets it when a swing's action starts).
 inline std::atomic<uint64_t> wandNextShotMs{0};
 inline std::atomic<uint64_t> playerActorState{0},playerActorStateMs{0},blockOpportunityMs{0},blockingMs{0};   // blockOpportunityMs: the last tick the player's BlockOpportunity (5) was up (parry_observer.hpp relaxed parry)   // the block button is held by the live guard (input_actor_observer.hpp records the actor's look then)
@@ -999,6 +1020,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // roofs): the left trigger is the game's LT, which enters building mode (include/evr/live_pad.hpp). The same for the
                 // summoning staff and the screwdriver, whose LT enters their own modes (include/evr/left_trigger_tools.hpp; 2026-10-24).
                 {bool blueprint=false;if(handItem&&screenKind==evr::motion::LiveScreen::Gameplay){const auto held=handItem(now);
+                  if(held.valid&&held.category==6)pieceHeldAt=now;
                   // and a staff (2026-10-25, user: "with the staff LT charges only"): LT is its aim and charge - not while the
                   // shoulder's bow is out (its draw owns the triggers)
                   blueprint=held.valid&&held.item&&(held.category==10||evr::motion::leftTriggerModeTool(held.item)||(evr::motion::rangedAimStaff(held.item)&&!modBowItem.load()));}
@@ -1338,8 +1360,23 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     // then clicked off by the rule), 2 leaves a mode that is on alone, 3 both (the game's own behaviour).
                     {static uint64_t leaveUntil=0,leaveNext=0;static unsigned leaves=0,withheld=0;const int camera=observeCamera?observeCamera():-1;constexpr uint16_t rightStickClick=0x80;
                      static const unsigned keep=[]{char value[8]{};const auto n=GetEnvironmentVariableA("EVR_FIRST_PERSON_MODE",value,sizeof value);return n&&n<sizeof value?unsigned(std::strtoul(value,nullptr,10))&3:0u;}();
+                     // Not while a piece is held with the right grip (the game's RT, below): RT + R3 is the piece's fine turn, not the
+                     // first person mode (2026-10-26, user after the headset: "the right stick's press for the fine turn does not work").
+                     const bool pieceTurn=held.valid&&held.category==6&&hands.hands[1].grabActive&&hands.hands[1].grab;
+                     {static bool r3Before=false,l3Before=false;
+                      const bool r3=hands.hands[1].stickClickActive&&hands.hands[1].stickClick,l3=hands.hands[0].stickClickActive&&hands.hands[0].stickClick;
+                      const bool play=fresh&&mapped.valid&&screenKind==evr::motion::LiveScreen::Gameplay&&!value.active;
+                      bool changed=false;
+                      if(play&&pieceTurn&&r3&&!r3Before){pieceFineRotate=!pieceFineRotate;changed=true;}
+                      if(play&&pieceTurn&&l3&&!l3Before){pieceFineMove=!pieceFineMove;changed=true;}
+                      if(held.valid&&held.category!=6&&(pieceFineRotate||pieceFineMove)){pieceFineRotate=pieceFineMove=false;changed=true;}
+                      if(held.valid&&held.category==6&&clientStateFresh(now)&&(clientPlayerState.load()&(clientDetailRotation|clientDetailTranslation))&&!clientStateProven){clientStateProven=true;
+                          logFile->event("piece_fine_state_proven","\"frame\":"+std::to_string(hands.frame)+",\"client_player_state\":"+std::to_string(clientPlayerState.load()));}
+                      if(changed){static unsigned logs=0;if(logs++<200)logFile->event("piece_fine_toggle","\"frame\":"+std::to_string(hands.frame)+",\"rotate\":"+(pieceFineRotate?"true":"false")+",\"move\":"+(pieceFineMove?"true":"false")+
+                          ",\"client_player_state\":"+std::to_string(clientPlayerState.load())+",\"state_fresh\":"+(clientStateFresh(now)?"true":"false")+",\"item\":"+std::to_string(held.item));}
+                      r3Before=r3;l3Before=l3;}
                      if(fresh&&mapped.valid&&screenKind==evr::motion::LiveScreen::Gameplay&&!value.active){
-                      if(!(keep&1)&&camera==38&&(pad.buttons&rightStickClick)&&!(pad.buttons&evr::motion::LivePadMapper::RB)){pad.buttons&=~rightStickClick;
+                      if(!(keep&1)&&camera==38&&!pieceTurn&&(pad.buttons&rightStickClick)&&!(pad.buttons&evr::motion::LivePadMapper::RB)){pad.buttons&=~rightStickClick;
                        if(withheld++<20)logFile->event("live_first_person_mode","\"frame\":"+std::to_string(hands.frame)+",\"camera_id\":38,\"click_withheld\":true");}
                       if(!(keep&2)&&(camera==36||camera==37)&&now>=leaveNext){leaveUntil=now+120;leaveNext=now+1500;
                        if(leaves++<20)logFile->event("live_first_person_mode","\"frame\":"+std::to_string(hands.frame)+",\"camera_id\":"+std::to_string(camera)+",\"clicked_off\":true");}
@@ -1347,7 +1384,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     uint32_t swung=0;{std::lock_guard<std::mutex> lock(gestureMutex);if(gestureMeleeWeapon.binding&&gestureMeleeMs&&now>=gestureMeleeMs&&now-gestureMeleeMs<=200)swung=uint32_t(gestureMeleeWeapon.binding>>32);}
                     // Everything that is not a weapon and is not swung (felling axe, pickaxe, rake): the trigger is its use button.
                     static bool usePressed=false;static uint32_t useItem=0;
-                    const bool use=gameplay&&held.valid&&held.item&&held.category!=2&&held.item!=swung&&hands.hands[1].triggerActive&&std::isfinite(hands.hands[1].trigger);
+                    const bool use=gameplay&&held.valid&&held.item&&held.category!=2&&!evr::motion::catalogThrowable(held.item)&&held.item!=swung&&hands.hands[1].triggerActive&&std::isfinite(hands.hands[1].trigger);
                     const bool before=usePressed;
                     if(!use)usePressed=false;
                     else{const float t=hands.hands[1].trigger;if(t>=.8f)usePressed=true;else if(t<=.2f)usePressed=false;
@@ -1506,8 +1543,10 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     // EVR_THROW_TEST_ANY_ITEM=1 (Mock trials only; no save of the tests has a throwable): whatever is held counts as one,
                     // for the guide and the direction - the press then is that item's own attack.
                     static const bool throwTestAny=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_THROW_TEST_ANY_ITEM",v,sizeof v);return n==1&&v[0]=='1';}();
-                    const bool throwable=gameplay&&((held.valid&&held.category==2&&held.typeKnown&&held.weaponType==12&&evr::motion::catalogThrowable(held.item))||throwTestAny);
-                    throwableHeld.store(gameplay&&held.valid&&held.category==2&&held.typeKnown&&held.weaponType==12&&evr::motion::catalogThrowable(held.item)?held.item:0u);
+                    // (category 2 Weapons, and 3 Tools for the underwater root torch - throwable_catalog.hpp)
+                    const bool throwableItem=held.valid&&(held.category==2||held.category==3)&&held.typeKnown&&held.weaponType==12&&evr::motion::catalogThrowable(held.item);
+                    const bool throwable=gameplay&&(throwableItem||throwTestAny);
+                    throwableHeld.store(gameplay&&throwableItem?held.item:0u);
                     // A food the game puts in the hand when it is chosen (2026-10-24, user after the online run: "the fish chosen from the
                     // quick slots did not show in the hand; the caught one does"): in both players' logs the raw fish 2004880509
                     // (_Food_raw_bad_T1_fish_common_01) became the action bar's hand item (category 7) - no consume action, as the other
@@ -1560,12 +1599,20 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     // with the quick slot by hand motion; otherwise it is the wheel and this does not apply.
                     {static unsigned pieceLogged=~0u;unsigned state=0;
                      if(gameplay&&held.valid&&held.category==6&&hands.hands[1].grabActive&&hands.hands[1].grab){
+                        // In the game's fine rotation or fine translation (RT + R3 / RT + L3, ClientPlayerFlags 7 / 6) RT + the right stick
+                        // tilts the piece or lifts it (its HUD: "RT + R left/right: tilt sideways, RT + R up/down: tilt forward", "RT +
+                        // R up/down: up / down"; RT + the left stick turns it): the stick goes to the game as it is, no d-pad (2026-10-26,
+                        // user: "in the fine rotation the stick does not turn it").
+                        const bool detail=pieceDetailOn(now);
                         const auto stick=hands.hands[1].stick;uint16_t direction=0;
-                        if(hands.hands[1].stickActive&&std::isfinite(stick.x)&&std::isfinite(stick.y)&&std::max(std::abs(stick.x),std::abs(stick.y))>=.6f)
+                        if(!detail&&hands.hands[1].stickActive&&std::isfinite(stick.x)&&std::isfinite(stick.y)&&std::max(std::abs(stick.x),std::abs(stick.y))>=.6f)
                             direction=std::abs(stick.x)>std::abs(stick.y)?uint16_t(stick.x>0?0x0008:0x0004):uint16_t(stick.y>0?0x0001:0x0002);
-                        pad.buttons&=uint16_t(~mapped.mappedButtons);pad.buttons|=direction;pad.rightX=pad.rightY=0;pad.rightTrigger=255;state=1u|(unsigned(direction)<<4);
+                        pad.buttons&=uint16_t(~mapped.mappedButtons);pad.buttons|=direction;pad.rightTrigger=255;state=1u|(unsigned(direction)<<4)|(detail?2u:0u);
+                        if(detail){const auto& r=hands.hands[1];
+                            if(r.stickActive&&std::isfinite(r.stick.x)&&std::isfinite(r.stick.y)){pad.rightX=int16_t(std::clamp(r.stick.x,-1.f,1.f)*32767.f);pad.rightY=int16_t(std::clamp(r.stick.y,-1.f,1.f)*32767.f);}}
+                        else pad.rightX=pad.rightY=0;
                      }
-                     if(state!=pieceLogged){pieceLogged=state;logFile->event("live_piece_modifier","\"frame\":"+std::to_string(hands.frame)+",\"held\":"+(state?"true":"false")+",\"direction\":"+std::to_string(state>>4)+
+                     if(state!=pieceLogged){pieceLogged=state;logFile->event("live_piece_modifier","\"frame\":"+std::to_string(hands.frame)+",\"held\":"+(state?"true":"false")+",\"fine\":"+((state&2)?"true":"false")+",\"direction\":"+std::to_string(state>>4)+
                         ",\"item\":"+std::to_string(held.item)+",\"buttons\":"+std::to_string(pad.buttons)+",\"right_trigger\":"+std::to_string(unsigned(pad.rightTrigger)));}}
                 }
                 // Building mode: the game's screen 28 (left trigger with the building hammer). Its HUD names the buttons
@@ -1706,8 +1753,12 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                      if(staffRelease&&handItem&&screenKind==evr::motion::LiveScreen::Gameplay){const auto h=handItem(now);staffInHand=h.valid&&h.item&&evr::motion::rangedAimStaff(h.item);staffItem=h.item;}
                      const bool bowOut=modBowItem.load()!=0||bowGeometry.binding!=0||(bowDrawRequested&&(bowDraw.phase()==evr::motion::BowDraw::Held||bowDraw.phase()==evr::motion::BowDraw::Released));
                      const bool ready=staffInHand&&fresh&&mapped.valid&&!value.active&&!bowOut;
-                     const auto o=staffTrigger.update(hands.hands[1].trigger,hands.hands[1].triggerActive,ready,now);
-                     if(staffInHand&&!bowOut){pad.rightTrigger=0;if(o.leftTrigger)pad.leftTrigger=255;if(o.rightTrigger)pad.rightTrigger=255;}
+                     // the special ability: the pull begun with the right grip held (liveSpecialByGrip, as the wand's above)
+                     staffTrigger.specialMs=liveSpecialRtMs;
+                     const bool staffGrip=liveSpecialByGrip&&hands.hands[1].grabActive&&hands.hands[1].grab;
+                     const auto o=staffTrigger.update(hands.hands[1].trigger,hands.hands[1].triggerActive,ready,now,staffGrip);
+                     if(o.special&&staffLogs++<400)logFile->event("staff_special","\"frame\":"+std::to_string(hands.frame)+",\"item\":"+std::to_string(staffItem)+",\"rt_ms\":"+std::to_string(liveSpecialRtMs));
+                     if(staffInHand&&!bowOut){pad.rightTrigger=0;if(o.leftTrigger)pad.leftTrigger=255;if(o.rightTrigger)pad.rightTrigger=255;if(o.leftTrigger||o.rightTrigger)staffPullAt=now;}
                      if((o.cast||o.cancelled)&&staffLogs++<400)logFile->event("staff_trigger","\"frame\":"+std::to_string(hands.frame)+",\"cast\":"+(o.cast?"true":"false")+
                         ",\"cancelled\":"+(o.cancelled?"true":"false")+",\"item\":"+std::to_string(staffItem)+",\"bow_out\":"+(bowOut?"true":"false")+",\"tap_ms\":"+std::to_string(staffTrigger.tapMs)+",\"aim_after_ms\":"+std::to_string(staffTrigger.aimAfterMs));}
                 }

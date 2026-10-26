@@ -54,43 +54,61 @@ inline bool parseRecord(const std::string& text,RenderRecord& out){
         out.changes.push_back(c);}
     return true;
 }
-// VR draws the eyes with DLSS (user decision 2026-10-06): antiAliasing becomes Dlss (Dlaa for the Dlaa mode) and dlss
-// the chosen mode. What stood there is recorded. With a record of an earlier start that was not put back yet, a field
-// that still holds what that start wrote keeps the original of that record.
-// giQuality (2026-10-15): dynamicGi for the VR start as well (vr_settings.hpp Values::giQuality); "" or Keep leaves it.
+// A VR start's own changes to the game's settings (2026-10-25, user: "the recommended button is there - everything but HDR
+// the player switches themselves"; a player: "it keeps resetting my indirect lighting to Quality though I set High
+// Quality"): only HDR is turned off - on, the game's final picture is not the 8-bit RGBA the eyes are taken from and VR
+// stops (2026-10-23). And the upscaler (forceDlss, the loader always - user, 2026-10-25: "nothing better than FSR 3 and
+// DLSS? then set that by itself; Quality, Performance and so on stay free"): antiAliasing Dlss (a DLAA stays; a card
+// without DLSS gets FSR 3 from the game itself, "Skipping DLSS on non-Nvidia GPU", with the player's fsr3 preset). The
+// vertical sync goes off with it. The DLSS / FSR 3 mode and GI stay the player's own; the recommended-graphics button sets them
+// (include/evr/recommended_graphics.hpp). Before 2026-10-25 GI was set High too (giQuality - the loader gives none now).
+// The loader gives no mode (AfwDlss is not set any more, 2026-10-25); the alternate eyes' warp takes the depth and the
+// motion from DLSS's own evaluation (hooks/dlss_eval_observer.hpp) - DLSS is set for every VR start anyway.
+// What a VR start writes is recorded and put back at the next start without VR. An earlier start's record that was not
+// put back yet: its fields that still hold what it wrote go back to the player's own first (as at a start without VR -
+// an older version's DLSS and GI), HDR keeps that record's original; what the player changed since stays.
 inline std::string fsr3Preset(const std::string& dlssMode){
     if(dlssMode=="Dlaa")return "Native";if(dlssMode=="Balanced")return "Balance";
     if(dlssMode=="Quality"||dlssMode=="Performance"||dlssMode=="UltraPerformance")return dlssMode;
     return "";
 }
-inline bool applyVr(const std::string& text,const std::string& mode,const RenderRecord* earlier,std::string& out,RenderRecord& record,std::string& reason,const std::string& giQuality=""){
+inline bool applyVr(const std::string& text,const std::string& mode,const RenderRecord* earlier,std::string& out,RenderRecord& record,std::string& reason,const std::string& giQuality="",bool forceDlss=false){
     out=text;record.changes.clear();
+    size_t b=0,e=0;
+    if(earlier)for(const auto& c:earlier->changes){
+        if(c.name=="enableHdr"||c.applied==c.original||!word(c.original))continue;
+        if(field(out,c.name,b,e)&&out.substr(b,e-b)==c.applied)out=out.substr(0,b)+c.original+out.substr(e);}
     const auto original=[&](const std::string& name,const std::string& now){
         if(earlier)for(const auto& c:earlier->changes)if(c.name==name&&c.applied==now)return c.original;
         return now;};
     const auto put=[&](const std::string& name,const std::string& value){
-        size_t b=0,e=0;if(!field(out,name,b,e)){reason="the game's setting '"+name+"' was not found exactly once";return false;}
+        if(!field(out,name,b,e)){reason="the game's setting '"+name+"' was not found exactly once";return false;}
         const auto now=out.substr(b,e-b);if(!word(now)){reason="the game's setting '"+name+"' has an unexpected value";return false;}
         record.changes.push_back({name,original(name,now),value});out=out.substr(0,b)+value+out.substr(e);return true;};
-    size_t b=0,e=0;if(!field(text,"dlss",b,e)){reason="the game's setting 'dlss' was not found exactly once";return false;}
-    const auto dlssNow=text.substr(b,e-b);
-    // No mode (2026-10-23: the setting exe's DLSS row is gone): the game's own mode stays, and the player's DLAA with it.
-    size_t ab=0,ae=0;const bool dlaaNow=field(text,"antiAliasing",ab,ae)&&text.substr(ab,ae-ab)=="Dlaa";
-    if(!put("antiAliasing",mode=="Dlaa"||(mode.empty()&&dlaaNow)?"Dlaa":"Dlss"))return false;
-    // DLAA belongs to antiAliasing; the upscaling mode the player chose stays for when they go back to DLSS.
-    if(!put("dlss",mode=="Dlaa"||mode.empty()?dlssNow:mode))return false;
-    // A graphics card without DLSS (2026-10-20, a guest's report: AMD Radeon RX 9070 XT, "Skipping DLSS on non-Nvidia
-    // GPU") draws with FSR 3 and the player's fsr3 preset instead - there "Native", both eyes at 1997x2150 and 16..20
-    // pairs a second. The same scale for FSR 3 (keen::pc::RenderFsr3PresetSetting: UltraPerformance, Performance,
-    // Balance, Quality, Native - "Balance", not "Balanced"); DLAA is FSR 3's Native. A file without the field is left.
-    if(field(out,"fsr3",b,e)){const auto fsr=fsr3Preset(mode);if(!fsr.empty()&&!put("fsr3",fsr))return false;}
+    if(forceDlss||!mode.empty()){
+        if(!field(out,"dlss",b,e)){reason="the game's setting 'dlss' was not found exactly once";return false;}
+        const auto dlssNow=out.substr(b,e-b);
+        // No mode: the game's own mode stays, and the player's DLAA with it.
+        size_t ab=0,ae=0;const bool dlaaNow=field(out,"antiAliasing",ab,ae)&&out.substr(ab,ae-ab)=="Dlaa";
+        if(!put("antiAliasing",mode=="Dlaa"||(mode.empty()&&dlaaNow)?"Dlaa":"Dlss"))return false;
+        // DLAA belongs to antiAliasing; the upscaling mode the player chose stays for when they go back to DLSS.
+        if(!put("dlss",mode=="Dlaa"||mode.empty()?dlssNow:mode))return false;
+        // A graphics card without DLSS (2026-10-20, a guest's report: AMD Radeon RX 9070 XT, "Skipping DLSS on non-Nvidia
+        // GPU") draws with FSR 3 and the player's fsr3 preset instead. The same scale for FSR 3 (keen::pc::RenderFsr3PresetSetting:
+        // UltraPerformance, Performance, Balance, Quality, Native - "Balance", not "Balanced"); DLAA is FSR 3's Native.
+        if(field(out,"fsr3",b,e)){const auto fsr=fsr3Preset(mode);if(!fsr.empty()&&!put("fsr3",fsr))return false;}
+    }
     // HDR (2026-10-23, a player's report, Apple Vision Pro through SteamVR, the game's HDR on): the game's final picture
     // is then not the 8-bit RGBA the mod takes the eyes from ("unsupported calibration target"), and the VR session
     // stopped 10 s into the world. A VR start turns the game's HDR off; put back at the next start without VR. A file
-    // without the field, or with HDR off, is left.
-    // (A second VR start before it was put back keeps the first start's original, as for the others.)
+    // without the field, or with HDR off, is left. (A second VR start before it was put back keeps the first start's original.)
     if(flag(out,"enableHdr",b,e)){const auto now=out.substr(b,e-b),was=original("enableHdr",now);
         if(now=="true"||was=="true"){record.changes.push_back({"enableHdr",was,"false"});out=out.substr(0,b)+"false"+out.substr(e);}}
+    // Vertical sync (2026-10-25, user: "what is surely right may be set - DLSS, HDR off"): off with the upscaler. In VR the
+    // headset's frame timing is the mod's (xrWaitFrame); the monitor's sync could only hold the frames to the monitor's rate
+    // (a 60 Hz monitor under a 90 Hz headset). Recorded and put back at the next start without VR, as HDR.
+    if((forceDlss||!mode.empty())&&flag(out,"vsync",b,e)){const auto now=out.substr(b,e-b),was=original("vsync",now);
+        if(now=="true"||was=="true"){record.changes.push_back({"vsync",was,"false"});out=out.substr(0,b)+"false"+out.substr(e);}}
     if(giQuality.empty()||giQuality=="Keep")return true;
     if(!word(giQuality)){reason="the GI quality '"+giQuality+"' is not a word";return false;}
     return put("dynamicGi",giQuality);

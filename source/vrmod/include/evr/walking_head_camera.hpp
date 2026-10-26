@@ -80,7 +80,7 @@ inline IdleHeadResult patchVrLocomotionCamera(const ClientInputBytes& source,Cli
     if(!player.playerStateCurrent||!(player.playerFlags&1u)||(player.playerFlags&nativeCameraFlags())){
         result.status=IdleHeadStatus::PlayerState;return result;}
     const bool swimming=gate.swimHead&&gate.actorStateCurrent&&(gate.actorState&swimmingStates);
-    if(player.freeCamera||source[clientMask]||source[clientBuildingCamera]||source[clientInputMode]!=1||!gate.actorStateCurrent||!gate.gravityPresent||(!gate.gravityActive&&!swimming)||
+    if(player.freeCamera||(source[clientMask]&~clientDetailModes)||source[clientBuildingCamera]||source[clientInputMode]!=1||!gate.actorStateCurrent||!gate.gravityPresent||(!gate.gravityActive&&!swimming)||
        !finite(gate.gravityDirection)||length(gate.gravityDirection-Vec3{0,-1,0})>1e-5f){result.status=IdleHeadStatus::SpecialMode;return result;}
     std::array<float,2> stick;std::memcpy(stick.data(),source.data()+clientStick,sizeof(stick));
     if(!std::isfinite(stick[0])||!std::isfinite(stick[1])||std::abs(stick[0])>1||std::abs(stick[1])>1)return result;

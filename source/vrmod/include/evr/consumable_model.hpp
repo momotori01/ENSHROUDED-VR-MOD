@@ -14,11 +14,14 @@ namespace evr::motion {
 constexpr uint64_t itemIconModel=0x57c;
 struct ConsumableMount {Pose pose;float scale=1;};
 // lo/hi: the model's bounds (its descriptor +16/+32); size: the longest side in the hand (metres), never enlarged.
-inline ConsumableMount mountConsumable(Pose grip,Vec3 lo,Vec3 hi,float size,float pitchDegrees=vhvrWeaponPitchDegrees){
+// centre: the point of the model held at the grip (consumable_hand_catalog.hpp gripCentre, turned as the model lies; null: the
+// middle of its bounds).
+inline ConsumableMount mountConsumable(Pose grip,Vec3 lo,Vec3 hi,float size,float pitchDegrees=vhvrWeaponPitchDegrees,const Vec3* centre=nullptr){
     if(!finite(lo)||!finite(hi)||!(hi.x>lo.x&&hi.y>lo.y&&hi.z>lo.z)||!(size>0)||!std::isfinite(size))throw std::invalid_argument("consumable model bounds");
+    if(centre&&!finite(*centre))throw std::invalid_argument("consumable grip centre");
     const float longest=std::max({hi.x-lo.x,hi.y-lo.y,hi.z-lo.z});
     ConsumableMount m;m.scale=std::min(1.f,size/longest);m.pose=mountLiveWeapon(grip,pitchDegrees);
-    m.pose.position=m.pose.position-rotate(m.pose.orientation,(lo+hi)*(.5f*m.scale));
+    m.pose.position=m.pose.position-rotate(m.pose.orientation,(centre?*centre:(lo+hi)*.5f)*m.scale);
     return m;
 }
 // How a consumable lies in the hand (2026-10-23, user after the first headset run: "the item is not at the middle of the
@@ -48,12 +51,14 @@ inline Pose palmFrame(Vec3 wrist,Vec3 index,Vec3 middle,Vec3 little,bool right,f
     const Vec3 z=toFingers*-1.f;const Vec3 y=unit(out-z*dot(out,z));const Vec3 x=cross(y,z);
     Pose p;p.orientation=quatFromAxes(x,y,z);p.position=(wrist+middle)*.5f+y*surface;return p;
 }
-// On the palm: the model's +Y along the palm's, the middle of its bounds over the palm's middle, its bottom on the skin.
-inline ConsumableMount mountOnPalm(Pose palm,Vec3 lo,Vec3 hi,float size){
+// On the palm: the model's +Y along the palm's, the middle of its bounds (or centre's X and Z: the middle of its body) over the
+// palm's middle, its bottom on the skin.
+inline ConsumableMount mountOnPalm(Pose palm,Vec3 lo,Vec3 hi,float size,const Vec3* centre=nullptr){
     if(!finite(lo)||!finite(hi)||!(hi.x>lo.x&&hi.y>lo.y&&hi.z>lo.z)||!(size>0)||!std::isfinite(size))throw std::invalid_argument("consumable model bounds");
+    if(centre&&!finite(*centre))throw std::invalid_argument("consumable grip centre");
     const float longest=std::max({hi.x-lo.x,hi.y-lo.y,hi.z-lo.z});
     ConsumableMount m;m.scale=std::min(1.f,size/longest);m.pose.orientation=normalized(palm.orientation);
-    const Vec3 base{(lo.x+hi.x)*.5f,lo.y,(lo.z+hi.z)*.5f};
+    const Vec3 base=centre?Vec3{centre->x,lo.y,centre->z}:Vec3{(lo.x+hi.x)*.5f,lo.y,(lo.z+hi.z)*.5f};
     m.pose.position=palm.position-rotate(m.pose.orientation,base*m.scale);
     return m;
 }

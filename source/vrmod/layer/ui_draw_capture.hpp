@@ -89,6 +89,28 @@ std::shared_ptr<Device> deviceFor(VkCommandBuffer command){
     std::lock_guard<std::mutex> lock(drawMutex);auto inserted=drawDevices.emplace(dispatch.device,result);return inserted.first->second;
 }
 void reset(VkCommandBuffer c) noexcept {if(enabled()){std::lock_guard<std::mutex> lock(drawMutex);commands.erase(c);}}
+// The copies of the game's swapchain images it has given up (2026-10-25, a player's log 20261025-115503, ALVR / VDXR: the game
+// made its swapchain three times - 1920x1080, 3840x2160 and, the window made smaller, 1424x681 - and at the first UI of the
+// next world the ninth copy was refused, "UI target budget"; the capture then stopped for good and the whole UI was gone
+// from the headset for the rest of the start). A copy whose image is in no swapchain any more (or, the same handle again,
+// of another size) and that no frame used for 8 presents goes - out of the command records first. drawMutex is held.
+unsigned retireTargets(Device& d,const std::vector<VkImage>& live,VkImage wsi,uint32_t width,uint32_t height){
+    const auto now=presents.load();unsigned retired=0;
+    for(auto it=d.targets.begin();it!=d.targets.end();){
+        auto& t=*it->second;
+        const bool gone=std::find(live.begin(),live.end(),it->first)==live.end();
+        const bool resized=it->first==wsi&&(t.width!=width||t.height!=height);
+        const bool idle=t.present==UINT64_MAX||t.present+8<now;
+        bool inPass=false;for(const auto& c:commands)if(c.second.pass&&c.second.pass->target==&t)inPass=true;
+        if((gone||resized)&&idle&&!inPass){
+            for(auto& c:commands){auto& r=c.second.recorded;r.erase(std::remove_if(r.begin(),r.end(),[&](const Recorded& x){return x.target==&t;}),r.end());}
+            d.dispose(t);it=d.targets.erase(it);++retired;
+        }else ++it;
+    }
+    if(retired)note("ui_capture_targets_retired","\"retired\":"+std::to_string(retired)+",\"kept\":"+std::to_string(d.targets.size())+
+        ",\"new_size\":["+std::to_string(width)+","+std::to_string(height)+"],\"present\":"+std::to_string(now));
+    return retired;
+}
 void bind(VkCommandBuffer c,VkPipelineBindPoint point,VkPipeline pipe) noexcept {
     if(!enabled()||point!=VK_PIPELINE_BIND_POINT_GRAPHICS)return;
     try{std::lock_guard<std::mutex> lock(drawMutex);if(commands.size()<8192||commands.count(c))commands[c].native=pipe;}catch(...){}
@@ -119,7 +141,7 @@ void began(VkCommandBuffer c,const VkRenderingInfo* info,PFN_vkCmdBeginRendering
         const auto& a=info->pColorAttachments[0];
         if(a.pNext||a.loadOp!=VK_ATTACHMENT_LOAD_OP_LOAD||a.storeOp!=VK_ATTACHMENT_STORE_OP_STORE||a.resolveMode!=VK_RESOLVE_MODE_NONE||
            a.imageLayout!=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)return;
-        VkImage wsi=VK_NULL_HANDLE;
+        VkImage wsi=VK_NULL_HANDLE;std::vector<VkImage> live;
         {std::lock_guard<std::mutex> lock(mutex);
             auto identity=commandIdentities.find(c);if(identity==commandIdentities.end()||identity->second.level!=VK_COMMAND_BUFFER_LEVEL_PRIMARY)return;
             auto views=imageViews.find(key(c));if(views==imageViews.end())return;auto v=views->second.find(a.imageView);if(v==views->second.end())return;
@@ -128,12 +150,16 @@ void began(VkCommandBuffer c,const VkRenderingInfo* info,PFN_vkCmdBeginRendering
                r.range.baseArrayLayer||r.range.levelCount!=1||r.range.layerCount!=1)return;
             for(const auto& s:swapData)if(s.second.width==info->renderArea.extent.width&&s.second.height==info->renderArea.extent.height&&
                 std::find(s.second.images.begin(),s.second.images.end(),r.image)!=s.second.images.end()){wsi=r.image;break;}
+            for(const auto& s:swapData)live.insert(live.end(),s.second.images.begin(),s.second.images.end());
         }
         if(!wsi)return;auto d=deviceFor(c);
         std::lock_guard<std::mutex> lock(drawMutex);auto& command=commands[c];
         if(d->failed||command.blocked||command.pass)return;
         if(d->owner&&d->owner!=GetCurrentThreadId()){d->failed=true;throw std::runtime_error("UI command owner thread changed; capture disabled");}d->owner=GetCurrentThreadId();
         Target* t=nullptr;
+        {const auto known=d->targets.find(wsi);
+         if(known==d->targets.end()||known->second->width!=info->renderArea.extent.width||known->second->height!=info->renderArea.extent.height)
+            retireTargets(*d,live,wsi,info->renderArea.extent.width,info->renderArea.extent.height);}
         try{t=d->target(wsi,info->renderArea.extent.width,info->renderArea.extent.height);}
         catch(...){d->failed=true;throw;}
         const auto frame=presents.load();if(t->present!=frame){t->present=frame;t->passes=0;}++t->passes;t->valid=false;

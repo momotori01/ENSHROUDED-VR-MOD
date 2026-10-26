@@ -81,23 +81,31 @@ inline void retire(const char* event,const std::string& detail){
     if(!invalid||!released)throw std::runtime_error("consumable retirement failed");
 }
 // How the item lies in the hand (consumable_hand_catalog.hpp; not listed: on the palm, 13 cm), EVR_CONSUMABLE_SIZE_CM overriding the size.
-struct Hold {evr::motion::ConsumableHold hold=evr::motion::ConsumableHold::Palm;float size=.13f;bool along=false,skinned=false,heaped=false,turnedKnown=false;Quat turn{0,0,0,1};Vec3 turnedLo{},turnedHi{};};
+// grip: where the hand holds it (consumable_hand_catalog.hpp gripCentre; in the fist its depth on the palm's side and width, m).
+struct Hold {evr::motion::ConsumableHold hold=evr::motion::ConsumableHold::Palm;float size=.13f;bool along=false,skinned=false,heaped=false,turnedKnown=false,gripKnown=false,plate=false;Quat turn{0,0,0,1};Vec3 turnedLo{},turnedHi{},gripCentre{};float gripDepth=0,gripWidth=0;};
 inline Hold holdOf(uint32_t id){
     static const float forced=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_CONSUMABLE_SIZE_CM",v,sizeof v);const float cm=n&&n<sizeof v?float(std::atof(v)):0.f;
         return std::isfinite(cm)&&cm>=3&&cm<=60?cm/100:0.f;}();
     Hold h;if(const auto* c=evr::motion::consumableHand(id)){h.hold=evr::motion::ConsumableHold(c->hold);h.size=c->sizeMm/1000.f;h.along=c->alongLongest;h.skinned=c->skinned;h.heaped=c->heaped;h.turn=normalized(Quat{c->turn[0],c->turn[1],c->turn[2],c->turn[3]});
-        const auto& b=c->turnedBounds;h.turnedLo={b[0],b[1],b[2]};h.turnedHi={b[3],b[4],b[5]};h.turnedKnown=h.turnedHi.x>h.turnedLo.x&&h.turnedHi.y>h.turnedLo.y&&h.turnedHi.z>h.turnedLo.z;}
-    if(forced>0)h.size=forced;return h;
+        const auto& b=c->turnedBounds;h.turnedLo={b[0],b[1],b[2]};h.turnedHi={b[3],b[4],b[5]};h.turnedKnown=h.turnedHi.x>h.turnedLo.x&&h.turnedHi.y>h.turnedLo.y&&h.turnedHi.z>h.turnedLo.z;
+        h.gripKnown=c->gripKnown;h.gripCentre={c->gripCentre[0],c->gripCentre[1],c->gripCentre[2]};h.gripDepth=c->gripDepthMm/1000.f;h.gripWidth=c->gripWidthMm/1000.f;h.plate=c->plate;}
+    if(forced>0){if(h.size>0){h.gripDepth*=forced/h.size;h.gripWidth*=forced/h.size;}h.size=forced;}
+    return h;
 }
 // The item in the hand: the consumable held from the wheel, else a throwable in the hand (no model of its own in the game;
 // 2026-10-23, user: "the water bomb was not in the hand") - not for the moment it is thrown.
 // Diagnostic: EVR_CONSUMABLE_SHOW=<from>:<every>:<item>,<item>,... shows each item in turn, every frames from frame from
-// (Mock pictures of how each lies in the hand; the input side holds nothing). Never in play.
+// (Mock pictures of how each lies in the hand; the input side holds nothing; up to 16 k characters: every held item, 234
+// models, in one list). Never in play.
+inline int shownIndex=-1;   // which of the list is shown (-1: none)
 inline uint32_t shownForTest(){
-    static const auto list=[]{struct L{uint64_t from=0,every=0;std::vector<uint32_t> items;}l;char v[1024]{};const auto n=GetEnvironmentVariableA("EVR_CONSUMABLE_SHOW",v,sizeof v);
-        if(!n||n>=sizeof v)return l;std::string s(v);for(auto& c:s)if(c==':'||c==',')c=' ';std::istringstream in(s);in>>l.from>>l.every;uint32_t i=0;while(in>>i)l.items.push_back(i);
+    shownIndex=-1;
+    static const auto list=[]{struct L{uint64_t from=0,every=0;std::vector<uint32_t> items;}l;std::vector<char> v(16384);const auto n=GetEnvironmentVariableA("EVR_CONSUMABLE_SHOW",v.data(),DWORD(v.size()));
+        if(!n||n>=v.size())return l;std::string s(v.data());
+        for(auto& c:s)if(c==':'||c==',')c=' ';std::istringstream in(s);in>>l.from>>l.every;uint32_t i=0;while(in>>i)l.items.push_back(i);
         if(!l.every)l.items.clear();if(!l.items.empty())logFile->event("consumable_show_test","\"from\":"+std::to_string(l.from)+",\"every\":"+std::to_string(l.every)+",\"items\":"+std::to_string(l.items.size()));return l;}();
-    if(list.items.empty()||liveFrame.frame<list.from)return 0;const auto k=(liveFrame.frame-list.from)/list.every;return k<list.items.size()?list.items[size_t(k)]:0;
+    if(list.items.empty()||liveFrame.frame<list.from)return 0;const auto k=(liveFrame.frame-list.from)/list.every;if(k>=list.items.size())return 0;
+    shownIndex=int(k);return list.items[size_t(k)];
 }
 inline uint32_t heldNow(){
     if(const auto shown=shownForTest())return shown;
@@ -119,7 +127,14 @@ inline evr::motion::ConsumableMount place(const Hold& how,Pose gameGrip,Vec3 lo,
     Vec3 tlo,thi;evr::motion::turnedBounds(r,lo,hi,tlo,thi);
     if(how.turnedKnown&&!how.along){tlo=how.turnedLo;thi=how.turnedHi;}
     Pose palmLocal;const bool palmKnown=motionHandVisual::palmInSocket(1,palmLocal);onPalm=how.hold==evr::motion::ConsumableHold::Palm&&palmKnown;
-    auto mount=onPalm?evr::motion::mountOnPalm(compose(gameGrip,palmLocal),tlo,thi,how.size):evr::motion::mountConsumable(gameGrip,tlo,thi,how.size,-motionVisual::weaponPitchDegrees);
+    // Held by the middle of its body, not of its box (2026-10-26, user: "the water balloon and the bombs: a little more toward
+    // the thumb", then "every item should sit right in the hand"): a bomb's box takes in its fuse, a bottle's its neck, so the
+    // body sat toward the little finger; a skewer by its bare stick (consumable_hand_catalog.hpp gripCentre, grip_centres.py).
+    // EVR_CONSUMABLE_GRIP=0: by the middle of the box, as before.
+    static const bool gripOn=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_CONSUMABLE_GRIP",v,sizeof v);return !(n&&n<sizeof v&&v[0]=='0');}();
+    const bool grip=gripOn&&how.gripKnown;const Vec3 centre=grip?rotate(r,how.gripCentre):Vec3{};
+    auto mount=onPalm?evr::motion::mountOnPalm(compose(gameGrip,palmLocal),tlo,thi,how.size,grip?&centre:nullptr):
+        evr::motion::mountConsumable(gameGrip,tlo,thi,how.size,-motionVisual::weaponPitchDegrees,grip?&centre:nullptr);
     // A heap (nuts, popcorn, berries: consumable_hand_catalog.hpp heaped) lies toward the fingers, in the palm's hollow (2026-10-24,
     // user: "too far toward the wrist - 5 cm more toward the fingers"; then "it sinks well into the palm - 1 cm out of the
     // palm"); then "too far toward the thumb - 2 cm toward the little finger, its middle between the middle and the ring
@@ -129,14 +144,36 @@ inline evr::motion::ConsumableMount place(const Hold& how,Pose gameGrip,Vec3 lo,
     static const auto heapCm=[](const char* name,float fallback){char v[16]{};const auto n=GetEnvironmentVariableA(name,v,sizeof v);const float cm=n&&n<sizeof v?float(std::atof(v)):fallback;
         return std::isfinite(cm)&&cm>=0&&cm<=10?cm/100:fallback/100;};
     static const float heapForward=heapCm("EVR_CONSUMABLE_HEAP_FORWARD_CM",5.f),heapUp=heapCm("EVR_CONSUMABLE_HEAP_UP_CM",1.f),heapSide=heapCm("EVR_CONSUMABLE_HEAP_SIDE_CM",2.f);
-    if(onPalm&&how.heaped)mount.pose.position=mount.pose.position+rotate(compose(gameGrip,palmLocal).orientation,Vec3{heapSide,heapUp,-heapForward});
+    // Every other food on the palm but a plate lies there too (2026-10-26, user with a photo of things on an open hand: "the place
+    // for the foods not on a plate is about here - about the base of the fingers"); the heap's 1 cm out of the palm stays the heaps'.
+    if(onPalm&&!how.plate)mount.pose.position=mount.pose.position+rotate(compose(gameGrip,palmLocal).orientation,Vec3{heapSide,how.heaped?heapUp:0.f,-heapForward});
+    // A dish on a flat plate (consumable_hand_catalog.hpp plate; 2026-10-26, user after the Mock: "the dishes on plates further
+    // out, toward the fingers - like the thumb hooked over the plate's rim", with a photo: the plate out past the fingertips,
+    // the thumb on its near rim): its near rim (the wrist's side, the palm's +Z) EVR_CONSUMABLE_PLATE_RIM_CM (1) toward the
+    // fingers from the palm's middle - the thumb's tip lies 2 cm that way in the rig's rest pose (hand_joints.py).
+    static const float plateRim=heapCm("EVR_CONSUMABLE_PLATE_RIM_CM",1.f);
+    if(onPalm&&how.plate){const float nearRim=(thi.z-(grip?centre.z:(tlo.z+thi.z)*.5f))*mount.scale;
+        mount.pose.position=mount.pose.position+rotate(compose(gameGrip,palmLocal).orientation,Vec3{0,0,-(nearRim+plateRim)});}
     if(!onPalm){
         // A thick thing in the fist (Mock game-20261023-180416: the 26 cm potion's middle in the grip sank half into the hand):
-        // it lies against the palm - its middle out from the grip (a weapon's handle, about 2 cm thick) by what it is thicker -
-        // and the fingers close only as far as it lets them.
-        const float thick=std::max(thi.x-tlo.x,thi.z-tlo.z)*mount.scale;
-        if(palmKnown)mount.pose.position=mount.pose.position+rotate(gameGrip.orientation,rotate(palmLocal.orientation,Vec3{0,1,0}))*std::max(0.f,thick*.5f-.02f);
-        motionHandVisual::rightCurl=std::clamp(.95f-(thick-.03f)*4.f,.45f,.95f);
+        // it lies against the palm - its middle out from the grip (a weapon's handle, about 2 cm thick) by how far its surface on
+        // the palm's side lies from it - and the fingers close only as far as its width there lets them. With a grip known its
+        // own depth and width at the hand (a mug's handle or the crawler bomb's horns are not its body), else half its box.
+        float depth,width;
+        if(grip&&how.gripWidth>0){depth=how.gripDepth;width=how.gripWidth;}
+        else{width=std::max(thi.x-tlo.x,thi.z-tlo.z)*mount.scale;depth=width*.5f;}
+        if(palmKnown)mount.pose.position=mount.pose.position+rotate(gameGrip.orientation,rotate(palmLocal.orientation,Vec3{0,1,0}))*std::max(0.f,depth-.02f);
+        motionHandVisual::rightCurl=std::clamp(.95f-(width-.03f)*4.f,.45f,.95f);
+        // Toward the thumb (the held weapon's +Y): the grip point is the fist's little-finger side. In the rig's rest pose, in the
+        // held item's frame, the knuckles of the index, middle, ring and little fingers lie at +6.5, +4.2, +1.6 and -0.6 cm along
+        // the fist (their middle +2.9 cm), the palm's middle at +0.4 cm (motion_hand_palm palm_in_socket;
+        // docs/analysis/consumable_models_20261023/hand_joints.py, 2026-10-26) - the user saw the water balloon and the bombs toward the little finger. Every item in
+        // the fist 1.5 cm toward the thumb: between the palm's middle and the fingers'. EVR_CONSUMABLE_FIST_THUMB_CM=<0..10> (1.5).
+        // Diagnostic: with EVR_CONSUMABLE_SHOW, EVR_CONSUMABLE_SHOW_ALT_THUMB_CM for every second item of the list (the same item
+        // twice: a picture of each).
+        static const float fistThumb=heapCm("EVR_CONSUMABLE_FIST_THUMB_CM",1.5f),altThumb=heapCm("EVR_CONSUMABLE_SHOW_ALT_THUMB_CM",1.5f);
+        const float thumb=shownIndex>=0&&(shownIndex&1)?altThumb:fistThumb;
+        if(thumb>0)mount.pose.position=mount.pose.position+rotate(mount.pose.orientation,Vec3{0,1,0})*thumb;
     }
     mount.pose.orientation=normalized(multiply(mount.pose.orientation,r));return mount;
 }

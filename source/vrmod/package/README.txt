@@ -40,9 +40,11 @@ VR ON / OFF
   other eye shows the picture it had. It gives more frames a second; things that move
   can look a little doubled. It is a test - switch back to "Both eyes every frame" if it
   does not suit you.
-- While VR is on, the mod sets the game's anti-aliasing to DLSS, and FSR 3 to the same
-  scale (a card without DLSS, such as AMD, uses FSR 3). Your own settings come back the
-  next time the game is started with VR off.
+- While VR is on, the mod sets the game's anti-aliasing to DLSS (DLAA stays DLAA; a card
+  without DLSS, such as AMD, uses FSR 3) and turns HDR (VR stops with it) and vertical sync
+  off. The DLSS / FSR 3 quality stays your choice. They come back the next time the game is
+  started with VR off; nothing else is changed. "Recommended graphics (VR)" sets all graphics settings for
+  VR on this PC (DLSS Quality, or FSR 3 on cards that are not NVIDIA's).
 - Only what your lenses show is drawn: at every start the mod reads your headset's field
   of view and the area its lenses show, turns each eye's camera toward the middle of it
   and draws a picture that just covers it - about 15 to 25 % fewer pixels at the same
@@ -82,8 +84,8 @@ IF SOMETHING GOES WRONG
 
 REMOVE
 Delete dinput8.dll, "Enshrouded VR setting.exe" and the EnshroudedVR folder.
-(If VR was on last, start the game once with VR off before, so your anti-aliasing
-setting comes back.)
+(If VR was on last, start the game once with VR off before, so your anti-aliasing, HDR
+and vertical sync settings come back.)
 
 Third-party parts: OpenXR loader (Apache-2.0), MinHook (BSD-2-Clause) - see
 EnshroudedVR\licenses.

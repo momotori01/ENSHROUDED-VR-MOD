@@ -20,7 +20,10 @@ int main(){
     bool modes=true;for(unsigned mode=0;mode<256;++mode){auto s=source;s[clientInputMode]=uint8_t(mode);auto x=patchIdleHeadCamera(s,out,g,h,0);
         modes&=mode<=1?x.status==IdleHeadStatus::Applied:x.status==IdleHeadStatus::SpecialMode&&out==s;}
     check(modes,"explicit idle diagnostic accepts two existing modes without rewriting either");
-    bool states=true;for(unsigned bit=0;bit<8;++bit){auto s=source;s[clientMask]=uint8_t(1u<<bit);auto x=patchIdleHeadCamera(s,out,g,h,0);states&=x.status==IdleHeadStatus::SpecialMode&&out==s;}
+    // bits 0..5 of the client flags are special modes; 6 and 7 (a piece's fine translation / rotation, 2026-10-26) are not
+    bool states=true;for(unsigned bit=0;bit<8;++bit){auto s=source;s[clientMask]=uint8_t(1u<<bit);auto x=patchIdleHeadCamera(s,out,g,h,0);
+        states&=bit<6?x.status==IdleHeadStatus::SpecialMode&&out==s:x.status==IdleHeadStatus::Applied;}
+    {auto s=source;s[clientMask]=uint8_t(0xc1);auto x=patchIdleHeadCamera(s,out,g,h,0);states&=x.status==IdleHeadStatus::SpecialMode&&out==s;}
     for(unsigned bit:{1u,2u}){auto f=g;f.playerFlags|=1u<<bit;auto x=patchIdleHeadCamera(source,out,f,h,0);states&=x.status==IdleHeadStatus::PlayerState&&out==source;}
     check(states,"every special client bit and UI/target-lock flag preserves native bytes");
     bool actions=true;for(unsigned bit=0;bit<64;++bit){auto s=source;s[clientDigital+bit/8]=uint8_t(1u<<(bit%8));auto x=patchIdleHeadCamera(s,out,g,h,0);actions&=x.status==IdleHeadStatus::ActiveInput&&out==s;}

@@ -78,5 +78,6 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   ck(g.update(h,head,true,true).kept&&!g.update(h,head,true,false).kept);}                 // the wind-up ends: forgotten
  // The catalog of the game data: sorted, the powder ball of the home save is in it, a sword is not.
  for(size_t i=1;i<catalogThrowables.size();i++)ck(catalogThrowables[i-1]<catalogThrowables[i]);
- ck(catalogThrowables.size()==13&&catalogThrowable(2283229289u)&&!catalogThrowable(1125155603u)&&!catalogThrowable(0));
+ ck(catalogThrowables.size()==14&&catalogThrowable(2283229289u)&&!catalogThrowable(1125155603u)&&!catalogThrowable(0));
+ ck(catalogThrowable(32289505u));   // the glowing root thrown under water: a Tool, the first of the list
  std::cout<<n<<" PASS\n";return 0;}catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}}

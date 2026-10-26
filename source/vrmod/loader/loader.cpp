@@ -121,9 +121,13 @@ bool replaceFile(const std::wstring& path,const std::string& bytes){
 }
 void applyRenderSettings(){
     std::string text,recordBytes,out,reason;start::RenderRecord earlier,record;
-    if(!readFile(settingsPath(),text)){say("render settings: the game's settings file is not there yet (first start of the game?); DLSS is not set for this start");return;}
+    if(!readFile(settingsPath(),text)){say("render settings: the game's settings file is not there yet (first start of the game?); HDR is not turned off for this start");return;}
     const bool hadRecord=readFile(recordPath(),recordBytes)&&start::parseRecord(recordBytes,earlier);
-    if(!start::applyVr(text,g.values.dlss,hadRecord?&earlier:nullptr,out,record,reason,g.values.giQuality)){say("render settings: not changed - "+reason);return;}
+    // HDR off and the upscaler DLSS (2026-10-25, user: "the recommended button writes every item; HDR at each start" and
+    // "nothing better than FSR 3 and DLSS? then set that by itself - Quality, Performance and so on stay free"): the DLSS /
+    // FSR 3 mode and everything else stay the player's own; a card without DLSS gets FSR 3 from the game itself, with the
+    // player's FSR 3 preset. (No AFW mode any more - AfwDlss is not set.)
+    if(!start::applyVr(text,std::string(),hadRecord?&earlier:nullptr,out,record,reason,std::string(),true)){say("render settings: not changed - "+reason);return;}
     std::string list;for(const auto& c:record.changes)list+=" "+c.name+" "+c.original+"->"+c.applied;
     if(out==text&&hadRecord){say("render settings: already as VR wants them ("+list+" )");return;}
     if(!hadRecord)CopyFileW(settingsPath().c_str(),(g.paths.mod+L"\\enshrouded_local.before-vr.json").c_str(),FALSE);
@@ -141,6 +145,12 @@ void applyRecommendedGraphics(){
     if(!readFile(settingsPath(),text)){say("recommended graphics: the game's settings file is not there; asked again at the next start");return;}
     evr::recommend::Applied applied;const auto out=evr::recommend::applyGame(text,r,applied);
     if(out!=text&&!replaceFile(settingsPath(),out)){say("recommended graphics: the game's settings file could not be written ("+lastError()+"); asked again at the next start");return;}
+    // What is written here is the player's choice now (2026-10-25): an earlier VR start's record of it (an older version set
+    // DLSS and GI at each VR start, include/evr/auto_start.hpp) must not take it back - neither at the VR start below nor
+    // at a start without VR.
+    {std::string bytes;start::RenderRecord kept;
+     if(readFile(recordPath(),bytes)&&start::parseRecord(bytes,kept)&&evr::recommend::dropFromRecord(kept,r)&&!writeFile(recordPath(),start::recordText(kept)))
+        say("recommended graphics: the record of the last VR start could not be written");}
     const auto ini=evr::recommend::setPending(g.iniText,false);
     if(writeFile(g.ini,ini))g.iniText=ini;else say("recommended graphics: the request could not be cleared in "+narrow(g.ini));
     std::string list;for(const auto& c:applied.changed)list+=" "+c;for(const auto& m:applied.missing)list+=" (not in the file: "+m+")";

@@ -7,8 +7,12 @@
 int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_error(std::to_string(n));};
  char dir[260]{};const auto dump=GetEnvironmentVariableA("EVR_GLYPH_DUMP",dir,sizeof dir);
  struct Case{uint32_t w,h;const wchar_t* label;const char* file;};
+ using evr::glyph::StickMark;   // the stick labels kept alive for the loop below
+ const std::wstring rsDown=evr::glyph::stickLabel(L"RS",StickMark::Down),lsHorizontal=evr::glyph::stickLabel(L"LS",StickMark::Horizontal),rsUp=evr::glyph::stickLabel(L"RS",StickMark::Up),
+  rsPress=evr::glyph::stickLabel(L"RS",StickMark::Press),rsVertical=evr::glyph::stickLabel(L"RS",StickMark::Vertical),rsPlain=evr::glyph::stickLabel(L"RS",StickMark::None);
  for(const auto& c:{Case{64,64,L"LT","LT"},Case{64,64,L"RB","RB"},Case{64,64,L"LG","LG"},Case{64,64,L"A","A"},Case{64,64,L"Y","Y"},
-                    Case{80,64,L"RS▼","RS_down"},Case{96,64,L"LS◀▶","LS_horizontal"},Case{64,64,L"RP","RP"},Case{64,64,evr::glyph::swingLabel.c_str(),"swing"},Case{64,64,L"RG+RT","RG_RT"},Case{64,64,evr::glyph::gripSwingLabel.c_str(),"RG_swing"}}){
+                    Case{64,64,rsDown.c_str(),"RS_down"},Case{64,64,lsHorizontal.c_str(),"LS_horizontal"},
+                    Case{64,64,rsUp.c_str(),"RS_up"},Case{64,64,rsPress.c_str(),"RS_press"},Case{64,64,rsVertical.c_str(),"RS_vertical"},Case{64,64,rsPlain.c_str(),"RS"},Case{64,64,evr::glyph::swingLabel.c_str(),"swing"},Case{64,64,L"RG+RT","RG_RT"},Case{64,64,evr::glyph::gripSwingLabel.c_str(),"RG_swing"}}){
   evr::glyph::Style st;st.round=evr::glyph::faceLabel(c.label);const auto px=evr::glyph::paint(c.w,c.h,c.label,st);ck(px.size()==size_t(c.w)*c.h*4);
   bool premultiplied=true;unsigned opaque=0,dark=0;
   for(size_t p=0;p<size_t(c.w)*c.h;++p){const auto* q=&px[p*4];premultiplied=premultiplied&&q[0]<=q[3]&&q[1]<=q[3]&&q[2]<=q[3];opaque+=q[3]==255;}
@@ -30,8 +34,11 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
   ck(label(Pic::FaceTop,I,Scene::Play,Held::Hammer)==L"RB");ck(label(Pic::FaceTop,Q,Scene::Play,Held::Hammer)==L"B");
   ck(label(Pic::FaceRight,I,Scene::Menu,Held::Nothing)==L"LA");ck(label(Pic::FaceRight,Q,Scene::Menu,Held::Nothing)==L"X");ck(label(Pic::FaceLeft,Q,Scene::Menu,Held::Nothing)==L"Y");
   ck(label(Pic::ShoulderRightUpper,I,Scene::Menu,Held::Nothing)==L"RG");ck(label(Pic::ShoulderLeftLower,I,Scene::Menu,Held::Nothing).empty());
-  ck(label(Pic::FaceRight,I,Scene::Building,Held::Hammer)==L"RG+RB");ck(label(Pic::ShoulderRightLower,I,Scene::Building,Held::Hammer)==L"RG");
-  ck(label(Pic::LeftStickPress,I,Scene::Play,Held::Nothing)==L"RS▲");ck(label(Pic::LeftStickPress,I,Scene::Menu,Held::Nothing).empty());
+  ck(label(Pic::FaceRight,I,Scene::Building,Held::Hammer)==L"RB");   // after the RT shown as RG (2026-10-26)
+  ck(label(Pic::FaceTop,I,Scene::Building,Held::Hammer)==L"LB");ck(label(Pic::DpadUp,I,Scene::Building,Held::Hammer)==stickLabel(L"RS",StickMark::Up));ck(label(Pic::DpadUp,I,Scene::Play,Held::Nothing).empty());ck(label(Pic::DpadRight,I,Scene::Play,Held::BuildTool)==stickLabel(L"RS",StickMark::Right));ck(label(Pic::ShoulderRightLower,I,Scene::Play,Held::BuildTool)==L"RG");ck(label(Pic::RightStickPress,I,Scene::Play,Held::Nothing)==stickLabel(L"RS",StickMark::Press));
+  {std::wstring st;StickMark m{};ck(stickOf(stickLabel(L"LS",StickMark::Horizontal),st,m)&&st==L"LS"&&m==StickMark::Horizontal);ck(!stickOf(L"RS",st,m));ck(label(Pic::Dpad,I,Scene::Building,Held::Hammer)==stickLabel(L"RS",StickMark::None));}
+  ck(label(Pic::ShoulderRightLower,I,Scene::Building,Held::Hammer)==L"RG");
+  ck(label(Pic::LeftStickPress,I,Scene::Play,Held::Nothing)==stickLabel(L"RS",StickMark::Up));ck(label(Pic::LeftStickPress,I,Scene::Play,Held::BuildTool)==stickLabel(L"LS",StickMark::Press));ck(label(Pic::FaceRight,I,Scene::Play,Held::Weapon)==stickLabel(L"RS",StickMark::Down));ck(label(Pic::LeftStickPress,I,Scene::Menu,Held::Nothing).empty());
   ck(findPicture(0x279385bcd2b08183ull,64,64)==Pic::ShoulderRightLower);ck(findPicture(0x279385bcd2b08183ull,80,64)==Pic::None);
   const uint8_t bytes[3]{1,2,3};ck(fnv64(bytes,3)==0x8b26b6b4bf8bc3e5ull||true);}
  std::cout<<"button glyph tests passed: "<<n<<"\n";return 0;}

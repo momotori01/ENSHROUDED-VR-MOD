@@ -6,6 +6,7 @@
 #include <evr/hud_fade.hpp>
 #include <evr/edge_tint.hpp>
 #include <evr/eye_mark.hpp>
+#include <evr/eye_panel.hpp>
 #include <evr/eye_history.hpp>
 #include <evr/eye_warp.hpp>
 #include <evr/aim_mark.hpp>
@@ -27,6 +28,7 @@ struct LiveNativeXr
     // Declared before transfer: destroyed after the transfer fence retired, before the XR client/device.
     std::unique_ptr<EdgeTint> edgeTint;
     std::unique_ptr<EyeMark> eyeMark; // the aim mark's dot (evrSetAimMark), like the tint
+    std::unique_ptr<EyePanel> eyePanel; uint64_t aimPanelSerial=0; // the picture beside the mark (evrSetAimPanel)
     // Alternate-eye warping (eye_warp.hpp; EVR_EYE_WARP=1 with EVR_ALTERNATE_EYES=1): one per eye, as the eyes' extents
     // differ. Declared before the transfer: the transfer's keep copies retire first.
     std::unique_ptr<EyeWarp> warp;   // one for both eyes (the third stage draws one eye from the other's picture)
@@ -170,6 +172,17 @@ std::mutex uiOverlayLock;std::vector<uint8_t> uiOverlayBytes;uint32_t uiOverlayW
 // start menu's empty right half, not the settings page that the same screen opens over it. evrUiOverlayShown: whether it
 // was drawn in the last 300 ms (the pointer's click on it, hooks/menu_pointer.hpp).
 std::atomic<int> uiOverlayOnlyEmpty{0};std::atomic<uint64_t> uiOverlayDrawnAt{0};
+// The mod's own stamina ring (2026-10-26, user: "cutting the UI out goes wrong somewhere - take stamina out of the UI and draw
+// it yourself"; hooks/own_stamina_ring.hpp). evrStaminaStrip: the hooks, on every frame of the play screen while the game's
+// floating ring is held off (hooks/floating_stamina.hpp). evrSetStamina: the stamina now and the most, every frame. The ring
+// is drawn into each eye where VHVR has its stamina (StaminaPanelPlacement CameraLocked: 1 m ahead, 0.33 m left, 0.1 m down),
+// while the stamina is below the most and for a moment after it is full again (as the game's floating ring), red from running
+// out until full. Before (2026-10-26 night): a copy of the HUD's stamina bar there. Since 2026-10-26 13:20 where the game's own ring
+// stood on the HUD plate (afterCopy below).
+std::atomic<uint64_t> staminaStripAt{0},staminaAt{0};std::atomic<int> staminaNow{0},staminaMost{0};
+extern "C" __declspec(dllexport) void evrStaminaStrip() noexcept {staminaStripAt=GetTickCount64();}
+extern "C" __declspec(dllexport) void evrSetStamina(int now,int most) noexcept {if(most>0&&now>=0&&now<=most){staminaNow=now;staminaMost=most;staminaAt=GetTickCount64();}}
+std::atomic<bool> staminaRingFailed{false};std::atomic<uint64_t> staminaRingFrames{0};
 extern "C" __declspec(dllexport) int evrUiOverlayShown() noexcept {const auto at=uiOverlayDrawnAt.load();const auto now=GetTickCount64();return at&&now>=at&&now-at<=300?1:0;}
 // The pictures of the VR bug report: count consecutive pairs of both eyes (1..32), without the diagnostic budget of
 // evrRequestNativeXrBurst; 1 while pictures of an earlier request are still being taken. evrSetCaptureHalf: 1 half size,
@@ -205,6 +218,25 @@ extern "C" __declspec(dllexport) int evrSetAimMark(const float* point,int shown)
         std::lock_guard<std::mutex> l(aimMarkLock);aimMarkPoint={point[0],point[1],point[2]};
     }
     aimMarkShown=shown;aimMarkAt=GetTickCount64();return 0;
+}
+// The mod's own picture beside the aim mark (include/evr/eye_panel.hpp, hooks/spell_panel.hpp - the staff's spells; 2026-10-26, user:
+// "cutting the UI always goes wrong somewhere; take the spell switching out of the UI and draw what is needed at the reticle"). rgba
+// (w x h RGBA8, display values, straight alpha, rows from the top): a new picture; null keeps the last one. degreesWide: its width
+// as seen (its height follows the picture's); anchor: the picture's row (0..1 from the top) at the mark's height; gap: its left edge
+// this many degrees right of the mark; strength 0..1 (0 hides it). Drawn into both eyes at the mark's place, while the mark is
+// shown and for a quarter of a second after the last call.
+std::mutex aimPanelLock;std::vector<uint8_t> aimPanelBytes;uint32_t aimPanelWidth=0,aimPanelHeight=0;uint64_t aimPanelSerialNow=0;
+float aimPanelDegrees=0,aimPanelAnchor=.5f,aimPanelGap=0,aimPanelStrength=0;
+std::atomic<uint64_t> aimPanelAt{0},aimPanelFrames{0};std::atomic<bool> aimPanelFailed{false};
+extern "C" __declspec(dllexport) int evrSetAimPanel(const uint8_t* rgba,uint32_t w,uint32_t h,float degreesWide,float anchor,float gap,float strength) noexcept {
+    try{
+        if(!std::isfinite(degreesWide)||degreesWide<=0||degreesWide>90||!std::isfinite(anchor)||anchor<-1||anchor>2||!std::isfinite(gap)||std::abs(gap)>45||
+           !std::isfinite(strength)||strength<0||strength>1)return 2;
+        std::lock_guard<std::mutex> l(aimPanelLock);
+        if(rgba){if(!w||!h||w>2048||h>2048)return 2;aimPanelBytes.assign(rgba,rgba+size_t(w)*h*4);aimPanelWidth=w;aimPanelHeight=h;++aimPanelSerialNow;}
+        else if(!aimPanelWidth&&strength>0)return 3;
+        aimPanelDegrees=degreesWide;aimPanelAnchor=anchor;aimPanelGap=gap;aimPanelStrength=strength;aimPanelAt=GetTickCount64();return 0;
+    }catch(...){return 1;}
 }
 // The guide of a throw (hooks: controller_ui_fixture.hpp, include/evr/live_throw.hpp ThrowGuide): `count` points (2..16)
 // of the LOCAL space, a small dot drawn into both eyes' images at each - a dotted line of about 30 cm from the left hand.
@@ -342,6 +374,7 @@ int closeLiveNativeXr(bool keepForScreen=false,bool deviceEnds=false) noexcept
              if(o.pool)vk.vkDestroyCommandPool(vk.device,o.pool,nullptr);o={};}
             if(state.edgeTint){state.edgeTint.reset();state.log->event("edge_tint_destroyed","\"frames\":"+std::to_string(edgeTintFrames.load()));}
             if(state.eyeMark){state.eyeMark.reset();state.log->event("aim_mark_destroyed","\"frames\":"+std::to_string(aimMarkFrames.load()));}
+            if(state.eyePanel){state.eyePanel.reset();state.aimPanelSerial=0;state.log->event("aim_panel_destroyed","\"frames\":"+std::to_string(aimPanelFrames.load()));}
             state.xr->abortFrame("native_diagnostic_stopped");state.xr->shutdown();
         }
         state.xr.reset();const auto pendingBurst=nativeCaptureBurst.reset();
@@ -717,6 +750,34 @@ int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice de
                         edgeTintFailed=true;st->log->event("edge_tint_failed","\"reason\":"+jsonString(e.what()));
                     }
                 }
+                // The mod's own stamina ring (evrSetStamina above): head-fixed where VHVR has its stamina, at that point's depth
+                // in both eyes. Shown while the stamina is below the most and 0.7 s after (fading), red from 0 until full.
+                {const auto t=GetTickCount64();const auto at=staminaAt.load(),play=staminaStripAt.load();
+                 static uint64_t belowAt=0;static bool runOut=false;
+                 if(eye<2&&!staminaRingFailed.load()&&at&&t>=at&&t-at<=600&&play&&t>=play&&t-play<=300){
+                    const int most=staminaMost.load(),now=std::min(staminaNow.load(),most);const float share=most>0?float(now)/float(most):1.f;
+                    if(eye==0){if(share<.999f)belowAt=t;if(now<=0)runOut=true;else if(share>=.999f)runOut=false;}
+                    const float strength=share<.999f?1.f:belowAt&&t>=belowAt&&t-belowAt<700?1.f-float(t-belowAt)/700.f:0.f;
+                    if(strength>0)try{
+                        const auto& views=st->xr->pendingFrame().views;const auto& view=views[eye];
+                        const Vec3 middle{(views[0].pose.position.x+views[1].pose.position.x)*.5f,(views[0].pose.position.y+views[1].pose.position.y)*.5f,(views[0].pose.position.z+views[1].pose.position.z)*.5f};
+                        // Where the game's own floating ring stood on the HUD plate (2026-10-26, user after the headset: "the stamina's place is
+                        // hard to see - it may follow as before; mind the focal distance"; the report pictures 200115/200206: about 230 left of
+                        // the middle and 80 below, of a 1080 rows HUD, radius about 25) - on the plate's plane, 1.5 m ahead (2 m wide): 0.24 m
+                        // left, 0.083 m down, radius 0.026 m. The head's turn: both views' (the Index's views turn 6 degrees outwards each).
+                        Quat turn=views[0].pose.orientation;{const auto& b=views[1].pose.orientation;const float sgn=turn.x*b.x+turn.y*b.y+turn.z*b.z+turn.w*b.w<0?-1.f:1.f;
+                            turn=normalized(Quat{turn.x+b.x*sgn,turn.y+b.y*sgn,turn.z+b.z*sgn,turn.w+b.w*sgn});}
+                        const Vec3 point=middle+rotate(turn,Vec3{-.24f,-.083f,-1.5f});
+                        const float metres=length(point-middle);
+                        const auto place=aim::eyePlace(view.pose,view.fov.angleLeft,view.fov.angleRight,view.fov.angleUp,view.fov.angleDown,point,dst.width,dst.height,.026f/std::max(metres,.1f));
+                        if(place.on){
+                            if(!st->eyeMark){st->eyeMark=std::make_unique<EyeMark>(st->xr->vk,st->xr->format);st->log->event("aim_mark_enabled","\"format\":"+std::to_string(st->xr->format)+",\"by\":\"stamina\"");}
+                            st->eyeMark->recordRing(cmd,dst,{place.x,place.y,place.radius,std::max(2.f,place.radius*.28f),share,strength,runOut},drawn);drawn=true;
+                            const auto n=eye==0?++staminaRingFrames:staminaRingFrames.load();
+                            if(n<=4||n%600==0){std::ostringstream o;o<<std::setprecision(6)<<"\"frames\":"<<n<<",\"eye\":"<<eye<<",\"pixel\":["<<place.x<<','<<place.y<<"],\"radius\":"<<place.radius<<",\"share\":"<<share<<",\"run_out\":"<<(runOut?"true":"false")<<",\"strength\":"<<strength;st->log->event("stamina_ring_frame",o.str());}
+                        }
+                    }catch(const std::exception& e){staminaRingFailed=true;st->log->event("stamina_ring_failed","\"reason\":"+jsonString(e.what()));}
+                 }}
                 // The aim mark: the aimed place as this eye sees it (the pose and field of view the eye image is
                 // submitted with), a dot there.
                 Vec3 aimed{};
@@ -735,6 +796,41 @@ int createLiveNativeXr(VkInstance instance,VkPhysicalDevice physical,VkDevice de
                         // As above: nothing was recorded for the mark; the eye stays without it.
                         aimMarkFailed=true;st->log->event("aim_mark_failed","\"reason\":"+jsonString(e.what()));
                     }
+                }
+                // The mod's own picture beside the mark (evrSetAimPanel): its left edge `gap` degrees right of the dot, the anchor row at
+                // the dot's height, in each eye at the dot's place - so at the aimed point's depth, as the dot.
+                if(eye<2&&!aimPanelFailed.load()){
+                    Vec3 at{};const auto t=GetTickCount64();const auto when=aimPanelAt.load();
+                    if(when&&t>=when&&t-when<=250)try{
+                        const bool marked=aimMarkNow(at);
+                        std::vector<uint8_t> picture;uint32_t w=0,h=0;float degrees=0,anchor=.5f,gap=0,strength=0;uint64_t serial=0;
+                        {std::lock_guard<std::mutex> l(aimPanelLock);serial=aimPanelSerialNow;degrees=aimPanelDegrees;anchor=aimPanelAnchor;gap=aimPanelGap;strength=aimPanelStrength;
+                         if(serial!=st->aimPanelSerial){picture=aimPanelBytes;w=aimPanelWidth;h=aimPanelHeight;}}
+                        if(strength>0){
+                            if(!st->eyePanel){st->eyePanel=std::make_unique<EyePanel>(st->xr->vk,st->xr->format);st->log->event("aim_panel_enabled","\"format\":"+std::to_string(st->xr->format));}
+                            if(serial!=st->aimPanelSerial&&!picture.empty()){st->eyePanel->setPicture(picture,w,h);st->aimPanelSerial=serial;}
+                            if(st->eyePanel->hasPicture()){
+                                // a quad in the room where the cluster stands (aim_mark.hpp panelQuad: towards the aimed point, at most 20 m),
+                                // seen by each eye through its own view (2026-10-26: the same pixel shift in both eyes was not one depth on the
+                                // Index, whose views turn 6 degrees outwards)
+                                const auto& views=st->xr->pendingFrame().views;const auto& view=views[eye];
+                                const Vec3 head{(views[0].pose.position.x+views[1].pose.position.x)*.5f,(views[0].pose.position.y+views[1].pose.position.y)*.5f,(views[0].pose.position.z+views[1].pose.position.z)*.5f};
+                                if(!marked){   // no mark (a bow not drawn): where the game's list stood - the HUD plate's middle, 1.5 m ahead
+                                    Quat turn=views[0].pose.orientation;const auto& o=views[1].pose.orientation;const float sgn=turn.x*o.x+turn.y*o.y+turn.z*o.z+turn.w*o.w<0?-1.f:1.f;
+                                    turn=normalized(Quat{turn.x+o.x*sgn,turn.y+o.y*sgn,turn.z+o.z*sgn,turn.w+o.w*sgn});at=head+rotate(turn,Vec3{0,0,-1.5f});}
+                                const auto quad=aim::panelQuad(head,at,degrees,float(st->eyePanel->pictureHeight())/float(st->eyePanel->pictureWidth()),anchor,gap);
+                                EyePanelParams params;std::array<float,4> box{};
+                                if(aim::panelInEye(quad,view.pose,view.fov.angleLeft,view.fov.angleRight,view.fov.angleUp,view.fov.angleDown,dst.width,dst.height,params.h,box)){
+                                    params.x0=box[0];params.y0=box[1];params.x1=box[2];params.y1=box[3];params.strength=strength;
+                                    st->eyePanel->record(cmd,dst,params,drawn);drawn=true;
+                                    const auto n=eye==0?++aimPanelFrames:aimPanelFrames.load();
+                                    if(n<=4||n%600==0){std::ostringstream o;o<<std::setprecision(6)<<"\"frames\":"<<n<<",\"eye\":"<<eye<<",\"box\":["<<box[0]<<','<<box[1]<<','<<box[2]<<','<<box[3]<<"],\"picture\":["
+                                        <<st->eyePanel->pictureWidth()<<','<<st->eyePanel->pictureHeight()<<"],\"degrees\":"<<degrees<<",\"strength\":"<<strength
+                                        <<",\"quad_origin\":["<<quad.origin.x<<','<<quad.origin.y<<','<<quad.origin.z<<"],\"distance_m\":"<<length(quad.origin-head);st->log->event("aim_panel_frame",o.str());}
+                                }
+                            }
+                        }
+                    }catch(const std::exception& e){aimPanelFailed=true;st->log->event("aim_panel_failed","\"reason\":"+jsonString(e.what()));}
                 }
                 // The throw's guide: a short white beam from its first point to its last (user 2026-10-18 12:40: "a short laser
                 // rather than a dotted line", 13:20 "white"), about 5 mm thick near the hand, fainter towards its end.
@@ -822,7 +918,12 @@ extern "C" __declspec(dllexport) int evrBeginNativeXr(VkInstance instance,VkPhys
         if(!liveNativeXr){if(const int made=createLiveNativeXr(instance,physical,device,family,scale,frame->diagnosticFrames))return made;}
         auto &state=*liveNativeXr;
         if(state.thread!=GetCurrentThreadId()||state.device!=device)throw std::runtime_error("native XR thread/device changed");
-        if(!state.worldSession)state.worldPairs=0;
+        if(!state.worldSession){state.worldPairs=0;
+            // A world after the first (2026-10-25: a player's second world had no records of the UI left - every kind had reached its
+            // limit of the first world): the per-name limits start again, for this log and the layer's.
+            if(state.submittedPairs){if(const auto cap=state.log->nameCap())state.log->setNameCap(cap);
+            if(logger){if(const auto cap=logger->nameCap())logger->setNameCap(cap);}
+            state.log->event("native_world_session_again","\"generation\":"+std::to_string(state.generation)+",\"submitted_pairs\":"+std::to_string(state.submittedPairs));}}
         state.worldSession=true;state.lastWorldBegin=GetTickCount64();
         auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(20);
         while(!state.xr->active()){
@@ -1263,6 +1364,8 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
             }
             Vec3 aimedPoint{};const bool aiming=aimMarkNow(aimedPoint);
             // The cluster needs the projection and five quads; a runtime that takes fewer layers keeps the HUD whole.
+            // (2026-10-26 11:40-14:00 none while the mod drew its spell list; back since the game's own stamina ring follows the
+            // reticle again - user: "as the old reticle-following way".)
             const bool cluster=aiming&&aimCluster()&&xr.maxLayers()>=6&&!(uiPlateFixed.load()&&GetTickCount64()-uiPlateAt.load()<=2000);
             if(aiming&&!cluster&&aimMarkHole()>0)uiFade.hole={uiSource.width*.5f,uiSource.height*.5f,aimMarkHole()*uiSource.height/1080.f,0};
             const TransferImage behindUi{mirrorCopy.image,mirrorCopy.width,mirrorCopy.height,mirrorCopy.format,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
@@ -1313,6 +1416,11 @@ extern "C" __declspec(dllexport) int evrFinishNativeXr(uint64_t frame,const VkIm
                 targetHud=std::isfinite(hudX)&&std::isfinite(hudY)&&hudCut.x1>1&&hudCut.y1>1&&hudCut.x0<int32_t(uiSource.width)-1&&hudCut.y0<int32_t(uiSource.height)-1;if(!targetHud)hudState=2;
                 if(targetHud){hudCut.x0=std::max(hudCut.x0,int32_t(1));hudCut.y0=std::max(hudCut.y0,int32_t(1));
                     hudCut.x1=std::min(hudCut.x1,int32_t(uiSource.width)-1);hudCut.y1=std::min(hudCut.y1,int32_t(uiSource.height)-1);
+                    // Not the HUD's fixed bands (2026-10-26, user after the headset run 20261026-030628: "something cuts the UI out up to
+                    // above the quick slot, and the quick slot flickers a little" - target parts such as 452,879 380x180 took in the action
+                    // bar whenever an enemy stood low in the view, and the hole came and went with the enemies): the top band (health,
+                    // mana, stamina, compass, quest) and the bottom one (the held item's name and hints, the action bar) stay on the plate.
+                    hudCut.y0=std::max(hudCut.y0,int32_t(100*s));hudCut.y1=std::min(hudCut.y1,int32_t(878*s));
                     targetHud=hudCut.x1-hudCut.x0>=int32_t(40*s)&&hudCut.y1-hudCut.y0>=int32_t(40*s);}
             }
             if((cluster||targetHud)&&(!placement.localSpace||playPlate)){

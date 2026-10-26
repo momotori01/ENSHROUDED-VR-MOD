@@ -98,9 +98,14 @@ struct PixelRect {int32_t x0=0,y0=0,x1=0,y1=0;};
 // high image. (420 right and 120 up and down until 2026-10-24 - user after the headset: "the staff's spell switching is cut off
 // and cannot be read; the arrows' too, probably". Bug reports 20261024-152947: the spell list, centred on the chosen spell's row,
 // reached 544 pixels right and 93 up / 96 down, the rows 30 pixels apart, so a list of 6 spells reaches 150 up or down.)
+// Since 2026-10-26 14:00 further left and 230 down (user: "use the game's stamina ring; it may follow the reticle as before"): the
+// game's floating ring stood at x 569..906, y 493..718 (its middle; radius about 25) in the report pictures 200115/200206 - inside,
+// it no longer crosses the cut's edge (before: "it goes in and out between the white dot and the HUD"). 730 left since 14:40 (user
+// after the headset: "when the spell starts charging the stamina gauge moves sideways and shows in the old UI; the arrows too"):
+// while aiming the game puts the ring at about x 285, y 565 (Mock 20261026-141336, UI pictures 1648 and 1693).
 inline PixelRect clusterRect(uint32_t width,uint32_t height) {
     const float s=float(height)/1080.f,cx=float(width)*.5f,cy=float(height)*.5f;
-    PixelRect r{int32_t(cx-200*s),int32_t(cy-170*s),int32_t(cx+600*s),int32_t(cy+170*s)};
+    PixelRect r{int32_t(cx-730*s),int32_t(cy-170*s),int32_t(cx+600*s),int32_t(cy+230*s)};
     r.x0=std::clamp(r.x0,1,int32_t(width)-2);r.x1=std::clamp(r.x1,r.x0+1,int32_t(width)-1);
     r.y0=std::clamp(r.y0,1,int32_t(height)-2);r.y1=std::clamp(r.y1,r.y0+1,int32_t(height)-1);
     return r;
@@ -191,6 +196,58 @@ inline QuadPart clusterAt(PixelRect cut,uint32_t imageWidth,uint32_t imageHeight
     const float dx=(float(cut.x0+cut.x1)*.5f-float(imageWidth)*.5f)*s,dy=(float(imageHeight)*.5f-float(cut.y0+cut.y1)*.5f)*s;
     p.pose={fromAxes(x,y,z),place+x*dx+y*dy};p.width=float(cut.x1-cut.x0)*s;p.height=float(cut.y1-cut.y0)*s;
     return p;
+}
+// The mod's picture beside the mark (layer: evrSetAimPanel - the staff's spells; 2026-10-26) as a quad in the room, placed as the
+// cluster is (clusterAt): facing the head from the aimed point's direction, at that point's distance but no further than
+// clusterFarthest, upright; its left edge `gap` degrees right of the mark, its row `anchor` (0..1 from the top) at the mark's height,
+// `degrees` wide, `aspect` (height / width) as its picture. origin: the top-left corner; u, v: the picture's width and height
+// (v downwards). User 2026-10-26 after the headset: "the focal distance is bad, very hard to see - as before, as the bow now".
+struct PanelQuad {bool valid=false;Vec3 origin{},u{},v{};};
+inline PanelQuad panelQuad(Vec3 head,Vec3 point,float degrees,float aspect,float anchor,float gap) {
+    PanelQuad q;
+    if(!finite(head)||!finite(point)||!(degrees>0)||!(aspect>0)||!std::isfinite(anchor)||!std::isfinite(gap))return q;
+    const Vec3 back=head-point;const float away=length(back);
+    if(!std::isfinite(away)||away<.5f)return q;
+    const Vec3 z=back*(1/away);Vec3 x=cross({0,1,0},z);
+    if(length(x)<.05f)x={1,0,0};
+    x=x*(1/length(x));const Vec3 y=cross(z,x);
+    const float distance=std::min(away,clusterFarthest),rad=3.14159265f/180.f;
+    const float width=2*distance*std::tan(degrees*rad*.5f),height=width*aspect,left=distance*std::tan(gap*rad);
+    const Vec3 mark=head-z*distance;
+    q.origin=mark+x*left+y*(anchor*height);q.u=x*width;q.v=y*(-height);q.valid=true;
+    return q;
+}
+// One eye's view of the quad: h maps the eye image's pixel (x, y, 1) to (u, v, w) - u / w, v / w the place on the picture, 0..1 -
+// the inverse of the quad's projection; box: the pixels its corners span (x0, y0, x1, y1), not yet kept inside the image. false
+// when a corner is behind or at the eye. eye: that eye's pose; the four angles its field of view (OpenXR, left and down negative);
+// width, height: its image.
+inline bool panelInEye(const PanelQuad& q,const Pose& eye,float angleLeft,float angleRight,float angleUp,float angleDown,uint32_t width,uint32_t height,
+                       std::array<float,9>& h,std::array<float,4>& box) {
+    if(!q.valid||!unit(eye.orientation)||!finite(eye.position)||!width||!height)return false;
+    const float l=std::tan(angleLeft),r=std::tan(angleRight),u=std::tan(angleUp),d=std::tan(angleDown);
+    if(!(r-l>.01f)||!(u-d>.01f))return false;
+    const float sx=float(width)/(r-l),sy=float(height)/(u-d);
+    const Pose back=inverse(eye);
+    // a point of the eye's space to (x w, y w, w) of its image
+    const auto image=[&](Vec3 e){return std::array<double,3>{double(sx*e.x+l*sx*e.z),double(-sy*e.y-u*sy*e.z),double(-e.z)};};
+    const auto cu=image(rotate(back.orientation,q.u)),cv=image(rotate(back.orientation,q.v)),co=image(rotate(back.orientation,q.origin)+back.position);
+    // m: (u, v, 1) of the picture to the image's (x w, y w, w); columns cu, cv, co
+    const double m[3][3]={{cu[0],cv[0],co[0]},{cu[1],cv[1],co[1]},{cu[2],cv[2],co[2]}};
+    float x0=1e9f,y0=1e9f,x1=-1e9f,y1=-1e9f;
+    for(const auto& c:{std::array<double,2>{0,0},{1,0},{0,1},{1,1}}){
+        const double w=m[2][0]*c[0]+m[2][1]*c[1]+m[2][2];if(!(w>.02))return false;
+        const float px=float((m[0][0]*c[0]+m[0][1]*c[1]+m[0][2])/w),py=float((m[1][0]*c[0]+m[1][1]*c[1]+m[1][2])/w);
+        x0=std::min(x0,px);y0=std::min(y0,py);x1=std::max(x1,px);y1=std::max(y1,py);}
+    const double det=m[0][0]*(m[1][1]*m[2][2]-m[1][2]*m[2][1])-m[0][1]*(m[1][0]*m[2][2]-m[1][2]*m[2][0])+m[0][2]*(m[1][0]*m[2][1]-m[1][1]*m[2][0]);
+    if(!std::isfinite(det)||std::abs(det)<1e-12)return false;
+    const double inv[3][3]={{(m[1][1]*m[2][2]-m[1][2]*m[2][1])/det,(m[0][2]*m[2][1]-m[0][1]*m[2][2])/det,(m[0][1]*m[1][2]-m[0][2]*m[1][1])/det},
+                            {(m[1][2]*m[2][0]-m[1][0]*m[2][2])/det,(m[0][0]*m[2][2]-m[0][2]*m[2][0])/det,(m[0][2]*m[1][0]-m[0][0]*m[1][2])/det},
+                            {(m[1][0]*m[2][1]-m[1][1]*m[2][0])/det,(m[0][1]*m[2][0]-m[0][0]*m[2][1])/det,(m[0][0]*m[1][1]-m[0][1]*m[1][0])/det}};
+    // (u, v, 1) w = inv (x, y, 1): the third row gives 1 / w > 0 in front - kept positive (the shader discards w <= 0)
+    double sign=inv[2][0]*(double(x0+x1)*.5)+inv[2][1]*(double(y0+y1)*.5)+inv[2][2]>0?1:-1;
+    for(int i=0;i<3;++i)for(int j=0;j<3;++j)h[size_t(i*3+j)]=float(inv[i][j]*sign);
+    box={x0,y0,x1,y1};
+    return std::isfinite(x0)&&std::isfinite(y0)&&std::isfinite(x1)&&std::isfinite(y1);
 }
 // Where a point of the tracking space shows in one eye's image, and how many pixels the mark's radius takes there.
 // eye: that eye's pose in the tracking space; the four angles: its field of view as OpenXR gives it (left and down

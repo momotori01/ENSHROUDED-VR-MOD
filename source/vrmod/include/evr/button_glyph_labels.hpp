@@ -19,6 +19,18 @@ inline std::wstring face(Family f,bool right,bool primary){
     if(f==Family::Quest)return right?(primary?L"A":L"B"):(primary?L"X":L"Y");
     return std::wstring(right?L"R":L"L")+(primary?L"A":L"B");
 }
+// A d-pad picture as the right stick with the same direction (two letters and a badge, button_glyph.hpp stickLabel).
+inline std::wstring rightStickFor(Pic pic){
+    switch(pic){
+    case Pic::DpadUp:return stickLabel(L"RS",StickMark::Up);
+    case Pic::DpadDown:return stickLabel(L"RS",StickMark::Down);
+    case Pic::DpadLeft:return stickLabel(L"RS",StickMark::Left);
+    case Pic::DpadRight:return stickLabel(L"RS",StickMark::Right);
+    case Pic::DpadVertical:return stickLabel(L"RS",StickMark::Vertical);
+    case Pic::DpadHorizontal:return stickLabel(L"RS",StickMark::Horizontal);
+    default:return stickLabel(L"RS",StickMark::None);
+    }
+}
 // The label that is the game's own left stick press picture (the spare picture's, for the quick slot change).
 inline const std::wstring originalLeftPress=L"<original:LeftStickPress>";
 inline std::wstring label(Pic pic,Family f,Scene scene,Held held){
@@ -29,7 +41,7 @@ inline std::wstring label(Pic pic,Family f,Scene scene,Held held){
     case Scene::Play:
         switch(pic){
         case Pic::FaceBottom:return RA;                                         // jump
-        case Pic::FaceRight:return L"RS▼";                                 // dodge: the right stick down
+        case Pic::FaceRight:return stickLabel(L"RS",StickMark::Down);          // dodge: the right stick down
         case Pic::FaceTop:return held==Held::Hammer?RB:L"LT";                   // interact (the hammer keeps LT: its short RB)
         case Pic::FaceLeft:                                                     // attack / use
             if(held==Held::Weapon||held==Held::Nothing||held==Held::Wand||held==Held::Throwable)return swingLabel;
@@ -40,8 +52,15 @@ inline std::wstring label(Pic pic,Family f,Scene scene,Held held){
         case Pic::ShoulderLeftLower:return held==Held::Bow?L"RT":held==Held::Hammer?L"LT":L"";   // the bow's draw: the trigger at the string
         // the game's RT: a weapon's and the wand's special ability (2026-10-23: a melee weapon's by a swing with the right grip
         // held since 10-21, the wand's by the right grip and the trigger), the bow's and the staff's shot
-        case Pic::ShoulderRightLower:return held==Held::Weapon?gripSwingLabel:held==Held::Wand?L"RG+RT":(held==Held::Bow||held==Held::Staff||held==Held::Nothing)?L"RT":L"";
-        case Pic::LeftStickPress:return L"RS▲";                            // sprint / sneak: the right stick up
+        case Pic::ShoulderRightLower:return held==Held::Weapon?gripSwingLabel:held==Held::Wand?L"RG+RT":(held==Held::Bow||held==Held::Staff||held==Held::Nothing)?L"RT":
+            held==Held::BuildTool?L"RG":L"";   // a piece in the hand: the right grip is the game's RT (controller_ui_fixture.hpp, category 6)
+        // sprint / sneak: the right stick up - but a piece in the hand takes the right stick as the d-pad while the right grip is held,
+        // so its "RT + L3" (the fine move) is the left stick's press (2026-10-26, user: "the keys shown when placing do not match")
+        case Pic::LeftStickPress:return held==Held::BuildTool?stickLabel(L"LS",StickMark::Press):stickLabel(L"RS",StickMark::Up);
+        case Pic::RightStickPress:return stickLabel(L"RS",StickMark::Press);   // the right stick's press (first person, "RT + R3" fine turn)
+        // a piece in the hand: RT + d-pad is the right stick with the grip
+        case Pic::Dpad:case Pic::DpadUp:case Pic::DpadDown:case Pic::DpadLeft:case Pic::DpadRight:case Pic::DpadVertical:case Pic::DpadHorizontal:
+            return held==Held::BuildTool?rightStickFor(pic):L"";
         default:return L"";
         }
     case Scene::Wheel:
@@ -60,15 +79,24 @@ inline std::wstring label(Pic pic,Family f,Scene scene,Held held){
         case Pic::ShoulderRightUpper:return L"RG";
         default:return L"";
         }
+    // The building screen (2026-10-26, user: "the keys shown when placing a piece do not match the VR buttons"): the HUD shows B and Y
+    // after RT ("RT + B undo", "RT + Y sort") - RT is already shown as RG, so B and Y are the buttons alone (before: "RG+RB" after
+    // "RG"); the d-pad (RT + d-pad nearer / farther / turn, RB + d-pad pages) is the right stick, with the right grip or the piece
+    // menu held; LT (leave) is the VR LT; L3 (RT + L3, the fine move) the left stick's press.
     case Scene::Building:
         switch(pic){
         case Pic::FaceBottom:return RA;
-        case Pic::FaceRight:return L"RG+"+RB;
+        case Pic::FaceRight:return RB;                                          // RT + B: with the right grip
         case Pic::FaceLeft:return L"RT";
-        case Pic::FaceTop:return L"RG+"+LB;
+        case Pic::FaceTop:return LB;                                            // RT + Y: with the right grip
         case Pic::ShoulderLeftUpper:return L"LG";
+        case Pic::ShoulderLeftLower:return L"LT";
         case Pic::ShoulderRightUpper:return LB;                                 // the piece menu (held)
         case Pic::ShoulderRightLower:return L"RG";                              // the game's modifier
+        case Pic::LeftStickPress:return stickLabel(L"LS",StickMark::Press);
+        case Pic::RightStickPress:return stickLabel(L"RS",StickMark::Press);
+        case Pic::Dpad:case Pic::DpadUp:case Pic::DpadDown:case Pic::DpadLeft:case Pic::DpadRight:case Pic::DpadVertical:case Pic::DpadHorizontal:
+            return rightStickFor(pic);
         default:return L"";
         }
     case Scene::WorldMenu:

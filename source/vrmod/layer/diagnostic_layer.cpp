@@ -953,7 +953,7 @@ extern "C" __declspec(dllexport) int evrBodyClipPayload(VkDevice device,const bo
     try{
         std::shared_ptr<body::PayloadStore> store;{std::lock_guard<std::mutex> lock(mutex);auto it=devices.find(key(device));if(it!=devices.end())store=it->second.bodyPayloads;}
         if(!store)throw std::runtime_error("body payload device not prepared");bool created=false;*address=store->get(*payload,created);
-        if(created)note("body_payload_created","\"address\":"+handleText(*address)+",\"models\":"+std::to_string(payload->count)+",\"distance\":"+std::to_string(payload->distance)+",\"tag\":"+std::to_string(payload->tag)+",\"hand_plus_one\":"+std::to_string(payload->reserved)+",\"extra_plus_one\":"+std::to_string(body::appearanceExtra(*payload))+",\"shield_plus_one\":"+std::to_string(body::appearanceShield(*payload))+",\"bytes\":112,\"immutable\":true");return 0;
+        if(created)note("body_payload_created","\"address\":"+handleText(*address)+",\"models\":"+std::to_string(payload->count)+",\"distance\":"+std::to_string(payload->distance)+",\"recycled_so_far\":"+std::to_string(store->recycled.load())+",\"tag\":"+std::to_string(payload->tag)+",\"hand_plus_one\":"+std::to_string(payload->reserved)+",\"extra_plus_one\":"+std::to_string(body::appearanceExtra(*payload))+",\"shield_plus_one\":"+std::to_string(body::appearanceShield(*payload))+",\"bytes\":112,\"immutable\":true");return 0;
     }catch(const std::exception& e){note("body_payload_fallback","\"reason\":"+jsonString(e.what()));return -1;}
 }
 extern "C" __declspec(dllexport) uint32_t evrHandsOnlyShaderStatus(){const auto flag=std::getenv("EVR_HANDS_ONLY");return flag&&!std::strcmp(flag,"1")&&!headShaderFailed.load()?headShaderModules.load():0;}

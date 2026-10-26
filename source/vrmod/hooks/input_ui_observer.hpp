@@ -12,6 +12,11 @@
 #include "input_gamepad_probe.hpp"
 #include "controller_ui_fixture.hpp"
 #include "ui_memory_scan.hpp"
+#include "floating_stamina.hpp"
+#include "game_hud_visibility.hpp"
+#include "memory_string_scan.hpp"
+#include "ui_cursor_config.hpp"
+#include "game_ammo_list.hpp"
 extern "C" void evr_input_ui_stub();
 namespace inputUi {
 using Set=void(__fastcall*)(void*,uint8_t);
@@ -88,6 +93,9 @@ inline void gate(void* sub,uint8_t value,void* frontend,uintptr_t returnAddress)
                 s.senderContext=read<uintptr_t>(controller+senderContextOffset);
                 if(s.senderContext)s.entity=read<uint32_t>(s.senderContext+entityOffset);
                 const auto values=read<std::array<uint8_t,3>>(controller+screenOffset);
+                floatingStamina::apply(owner,values[0]);   // the game's floating stamina ring off on the play screen (floating_stamina.hpp)
+                gameHudVisibility::apply(owner,values[0]);   // the HUD's auto-hide by the game's own Contextual settings (game_hud_visibility.hpp)
+                if(values[0]==1)gameAmmoList::observe(controller,GetTickCount64());   // the HUD's spell / ammunition list (game_ammo_list.hpp)
                 const auto ui=read<uintptr_t>(owner+uiOffset),device=read<uintptr_t>(owner+deviceOffset),localDevice=read<uintptr_t>(controller+localDeviceOffset);
                 if(ui){s.uiMode=read<uint8_t>(ui+9);s.uiBytes=read<std::array<uint8_t,16>>(ui);}
                 // an item menu open in the backpack (hooks/menu_pointer.hpp aPad 3): frontend+0x33a57, 0 with the menu and 7 without (Mock
@@ -128,6 +136,9 @@ inline void gate(void* sub,uint8_t value,void* frontend,uintptr_t returnAddress)
                 }
                 if(localDevice)s.localMode=read<uint8_t>(localDevice);
                 uiScan::maybe(owner,state,controller,ui,device,localDevice);   // diagnostic, EVR_UI_SCAN_FRAMES
+                stringScan::maybe();   // diagnostic, EVR_STRING_SCAN_FRAME / EVR_STRING_SCAN_HEX
+                uiCursorConfig::maybe();   // diagnostic, EVR_SPELL_LIST_OFFSET / EVR_UI_CURSOR_SCAN (ui_cursor_config.hpp)
+                uiCursorConfig::keep(owner,GetTickCount64());   // the game's spell list off the picture while the mod draws its own
                 s.screen=values[0];s.secondary=values[1];s.auxiliary=values[2];s.readable=true;
                 s.stable=values==read<std::array<uint8_t,3>>(controller+screenOffset)&&
                     s.world==read<uintptr_t>(controller+worldOffset)&&controller==read<uintptr_t>(state+controllerOffset)&&
@@ -172,6 +183,8 @@ inline void verify(){
        MH_EnableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("frontend input observer hook failed");
     enabled=true;accepting=true;
     uiScan::install();
+    stringScan::install();
+    uiCursorConfig::install();
     logFile->event("input_ui_observer_enabled","\"rva\":"+hex(rva)+",\"caller\":\"0x84741f\",\"setter\":true,\"screen_offset\":"+std::to_string(screenOffset)+",\"auxiliary_offset\":"+std::to_string(screenOffset+2)+",\"read_only\":true");
 }
 inline void observe(unsigned sample,uint32_t entity,uint32_t tick,uintptr_t senderContext){
@@ -201,6 +214,9 @@ inline void disable(bool handoffToNativeOwner=false){
     if(MH_DisableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("frontend input observer disable failed");
     enabled=false;const auto deadline=GetTickCount64()+500;
     while(callbacks.load()&&GetTickCount64()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    floatingStamina::putBack("the world is left");   // the player's own floating stamina back in the game's memory
+    gameHudVisibility::putBack("the world is left");
+    uiCursorConfig::finish();
     const auto bytes=parsePattern(pattern);
     const bool restored=scan(reinterpret_cast<const uint8_t*>(baseAddress+rva),bytes.size(),bytes)==std::vector<size_t>{0};
     logFile->event("input_ui_observer_removed","\"restored\":"+std::string(restored?"true":"false")+

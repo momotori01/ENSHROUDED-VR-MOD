@@ -10,6 +10,8 @@ namespace evr {
 struct EyeMarkParams { float x=0,y=0,radius=0,strength=1; }; // pixels of the eye image
 // A short beam (the throw's guide): from (x, y) to (toX, toY), radius in pixels.
 struct EyeBeamParams { float x=0,y=0,toX=0,toY=0,radius=0,strength=1; };
+// The stamina ring (2026-10-26): centre (x, y), radius and width in pixels, the filled share 0..1, red when runOut.
+struct EyeRingParams { float x=0,y=0,radius=0,width=0,share=0,strength=1;bool runOut=false; };
 class EyeMark {
     Vulkan& v;
     VkFormat format;
@@ -96,6 +98,29 @@ class EyeMark {
         if(x1>x0&&y1>y0){
             v.vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
             const float push[8]={p.x,p.y,p.radius,p.strength,0,0,0,0};
+            v.vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),push);
+            VkViewport viewport{0,0,float(t.width),float(t.height),0,1};VkRect2D scissor{{x0,y0},{uint32_t(x1-x0),uint32_t(y1-y0)}};
+            v.vkCmdSetViewport(cmd,0,1,&viewport);v.vkCmdSetScissor(cmd,0,1,&scissor);v.vkCmdDraw(cmd,3,1,0,0);
+        }
+        v.vkCmdEndRenderPass(cmd);
+    }
+    // The ring: the same as record() round a ring - only the pixels round it are shaded.
+    void recordRing(VkCommandBuffer cmd,const TransferImage& dst,const EyeRingParams& p,bool attachment){
+        auto& t=target(dst);
+        if(!attachment){
+            VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;b.dstAccessMask=VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+            b.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;b.newLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+            b.image=dst.image;b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+            v.vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,0,0,nullptr,0,nullptr,1,&b);
+        }
+        const float reach=p.radius+p.width+3;
+        const int32_t x0=std::clamp(int32_t(std::floor(p.x-reach)),0,int32_t(t.width)),y0=std::clamp(int32_t(std::floor(p.y-reach)),0,int32_t(t.height));
+        const int32_t x1=std::clamp(int32_t(std::ceil(p.x+reach)),0,int32_t(t.width)),y1=std::clamp(int32_t(std::ceil(p.y+reach)),0,int32_t(t.height));
+        VkRenderPassBeginInfo r{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};r.renderPass=pass;r.framebuffer=t.framebuffer;r.renderArea={{0,0},{t.width,t.height}};
+        v.vkCmdBeginRenderPass(cmd,&r,VK_SUBPASS_CONTENTS_INLINE);
+        if(x1>x0&&y1>y0){
+            v.vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
+            const float push[8]={p.x,p.y,p.radius,p.strength,p.width,p.share,2,p.runOut?1.f:0.f};
             v.vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_FRAGMENT_BIT,0,sizeof(push),push);
             VkViewport viewport{0,0,float(t.width),float(t.height),0,1};VkRect2D scissor{{x0,y0},{uint32_t(x1-x0),uint32_t(y1-y0)}};
             v.vkCmdSetViewport(cmd,0,1,&viewport);v.vkCmdSetScissor(cmd,0,1,&scissor);v.vkCmdDraw(cmd,3,1,0,0);

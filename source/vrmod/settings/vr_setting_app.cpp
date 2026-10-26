@@ -34,13 +34,13 @@ std::string g_ini;                           // EnshroudedVR.ini as read
 bool g_running=false,g_loading=false,g_zipping=false,g_installed=false,g_updating=false;
 void refreshUpdateButton();
 std::vector<HWND> g_controls;                // disabled while the game runs
-HWND g_rbMode[4],g_rbLockOn,g_rbLockOff,g_tbTilt,g_stTilt,g_coSize,g_coSharp,g_coFit,g_coEyes,g_btZip,g_btDefaults,g_status,g_last,g_stZip,g_btUpdate,g_stUpdate;
+HWND g_rbMode[4],g_rbLockOn,g_rbLockOff,g_tbTilt,g_stTilt,g_coSize,g_coSharp,g_coFit,g_coEyes,g_btZip,g_btDefaults,g_status,g_last,g_stZip,g_btUpdate,g_stUpdate,g_btStart;
 // The stroke's speed (a slider, 5 % a step) and swimming by the arms (2026-10-20; also in the game's start menu).
 // The alternate eyes' own picture and pacing (2026-10-23, include/evr/afw_pacing.hpp).
 HWND g_coAfwPacing,g_coAfwSize,g_coAfwDlss;
 HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff,g_btRecommend,g_stRecommend;
 evr::recommend::Machine g_machine;   // the graphics card, read once at the start
-enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS,ID_MODE_MOTION,ID_LOCK_ON,ID_LOCK_OFF,ID_TILT,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP,ID_FIT_VIEW};
+enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS,ID_MODE_MOTION,ID_LOCK_ON,ID_LOCK_OFF,ID_TILT,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP,ID_FIT_VIEW,ID_START};
 constexpr UINT WM_APP_ZIP_DONE=WM_APP+1;     // wParam: exit code, lParam: new std::wstring (the zip's path)
 constexpr UINT WM_APP_LATEST=WM_APP+2;       // lParam: new std::wstring (the newest release's version, or "" when it could not be checked)
 constexpr UINT WM_APP_UPDATE_LINE=WM_APP+3;  // lParam: new std::wstring (a line the updater wrote)
@@ -147,10 +147,10 @@ void show(){
     pick(g_coEyes,kEyes,std::size(kEyes),v.alternateEyes&&v.eyeWarp==2?"2":"0",0);
     pick(g_coAfwPacing,kAfwPacing,std::size(kAfwPacing),std::to_string(v.afwPacing),0);
     SendMessageW(g_coAfwSize,CB_SETCURSEL,0,0);if(v.afwRenderScale>0)pick(g_coAfwSize,kAfwSizes,std::size(kAfwSizes),text(v.afwRenderScale),0);
-    SendMessageW(g_coAfwDlss,CB_SETCURSEL,0,0);if(!v.afwDlss.empty())pick(g_coAfwDlss,kAfwDlss,std::size(kAfwDlss),v.afwDlss,0);
+    
     SendMessageW(g_tbSwing,TBM_SETPOS,TRUE,v.swingSpeed/swingSpeedStep);SetWindowTextW(g_stSwing,(std::to_wstring(v.swingSpeed)+L" %").c_str());
     check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);check(g_rbHudOn,v.uiAutoHide);check(g_rbHudOff,!v.uiAutoHide);
-    for(HWND h:{g_coAfwPacing,g_coAfwSize,g_coAfwDlss})EnableWindow(h,!g_running&&v.vr&&v.alternateEyes);
+    for(HWND h:{g_coAfwPacing,g_coAfwSize})EnableWindow(h,!g_running&&v.vr&&v.alternateEyes);
     SendMessageW(g_coFit,CB_SETCURSEL,size_t(v.fitView),0);
     for(HWND h:{g_coSize,g_coSharp,g_coFit,g_coEyes,g_rbHudOn,g_rbHudOff})EnableWindow(h,!g_running&&v.vr);
     // The motion controllers' rows are off in the gamepad modes; the pad rows only there (FPS and TPS alike).
@@ -204,13 +204,16 @@ void applyRecommended(HWND hwnd){
     evr::recommend::Applied applied;const auto out=evr::recommend::applyGame(text,r,applied);
     if(out!=text){const std::wstring fresh=path+L".evr-new";
         if(!writeFile(fresh,out)||!MoveFileExW(fresh.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING)){DeleteFileW(fresh.c_str());SetWindowTextW(g_stRecommend,L"Could not write the game's settings file.");return;}}
+    // the record of the last VR start loses what was written here (2026-10-25, include/evr/recommended_graphics.hpp dropFromRecord)
+    {const auto recordPath=modPath()+L"\\render-settings-before-vr.txt";std::string bytes;evr::autostart::RenderRecord kept;
+     if(readFile(recordPath,bytes)&&evr::autostart::parseRecord(bytes,kept)&&evr::recommend::dropFromRecord(kept,r))writeFile(recordPath,evr::autostart::recordText(kept));}
     std::string now;if(!readFile(iniPath(),now))now=g_ini;
     std::vector<std::string> iniChanged;auto ini=evr::recommend::applyIni(now,r,&iniChanged);ini=evr::recommend::setPending(ini,false);
     if(!writeFile(iniPath(),ini)){SetWindowTextW(g_stRecommend,L"Could not write EnshroudedVR\\EnshroudedVR.ini.");return;}
     g_ini=ini;show();
     const auto count=applied.changed.size()+iniChanged.size();
     std::wstring done=count?L"Done: "+std::to_wstring(count)+L" settings changed":L"Already as recommended";
-    done+=L" (picture "+wide(r.renderScale)+L", DLSS / FSR3 "+wide(r.dlss)+L", GI "+wide(r.giQuality)+L").\n変更しました。";
+    done+=L" (picture "+wide(r.renderScale)+L", DLSS "+wide(r.dlss)+L", GI "+wide(r.giQuality)+L").\n変更しました。";
     SetWindowTextW(g_stRecommend,done.c_str());
 }
 
@@ -661,7 +664,17 @@ void showVersions(){
     if(!g_updateNote.empty())text+=L"\n"+g_updateNote;
     SetWindowTextW(g_stUpdate,text.c_str());
 }
-void refreshUpdateButton(){EnableWindow(g_btUpdate,!g_running&&!g_zipping&&!g_updating&&exists(updaterPath())&&!upToDate());}
+void refreshUpdateButton(){EnableWindow(g_btUpdate,!g_running&&!g_zipping&&!g_updating&&exists(updaterPath())&&!upToDate());
+    if(g_btStart)EnableWindow(g_btStart,!g_running&&!g_updating);}
+// Start game (2026-10-25, user: "a game start button above the update button"; a player on Discord: "the setting app, which
+// also updates, could launch the game too - otherwise people have to check it separately"): the game through Steam, as a
+// start from the library - the loader takes these settings as at any start.
+void startGame(){
+    if(gameRunning()){refreshRunning();return;}
+    if(g_updating)return;
+    const auto r=reinterpret_cast<INT_PTR>(ShellExecuteW(g_window,L"open",L"steam://rungameid/1203620",nullptr,nullptr,SW_SHOWNORMAL));
+    status(r>32?L"Starting the game through Steam...\nSteam からゲームを起動しています":L"Steam could not be asked to start the game - start it from Steam.\nSteam から起動してください");
+}
 void startLatestCheck(){
     if(!exists(updaterPath())){g_latestChecked=true;showVersions();return;}
     const std::wstring command=updaterCommand(L"-CheckOnly");
@@ -707,6 +720,9 @@ void updateDone(DWORD code){
 }
 void build(){
     g_y=18;
+    row(L"Start game",L"Starts Enshrouded through Steam with these settings.\nこの設定でゲームを開始（Steam 経由）");
+    g_btStart=part(L"BUTTON",L"Start game",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,120,30,ID_START);
+    next(kRowHeight-16);
     row(L"Update",L"Gets the newest version of this mod.\nYour settings are kept.\n最新版に更新します（設定はそのまま）");
     g_btUpdate=part(L"BUTTON",L"Update now",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,120,30,ID_UPDATE);
     g_stUpdate=part(L"STATIC",L"",SS_LEFT|SS_NOPREFIX,kRight+134,g_y+4,kWidth-kRight-134-kLeft,64);
@@ -733,7 +749,7 @@ void build(){
     row(L"AFW frame pacing (VR)",L"AFW only. Steady half rate: no switching between rates while walking. Also in the game's VR settings.\nAFW の表示間隔（ゲーム内の VR 設定でも変更可）");
     g_coAfwPacing=combo(ID_AFW_PACING,kAfwPacing,std::size(kAfwPacing),330);next(kRowHeight-16);
     row(L"AFW picture size (VR)",L"AFW only: its own picture size.\nAFW の時だけの絵の大きさ");g_coAfwSize=combo(ID_AFW_SIZE,kAfwSizes,std::size(kAfwSizes));next(kRowHeight-16);
-    row(L"AFW DLSS / FSR3 (VR)",L"AFW only: its own DLSS / FSR3 mode.\nAFW の時だけの DLSS / FSR3");g_coAfwDlss=combo(ID_AFW_DLSS,kAfwDlss,std::size(kAfwDlss));next(kRowHeight-16);
+    // (the AFW DLSS / FSR3 row is gone, 2026-10-25: the mod changes the game's graphics only by the recommended button and HDR)
     row(L"Swing speed to attack (VR)",L"How fast a swing must be to attack. Lower: a lighter swing attacks.\n攻撃に要る振りの速さ（低いほど軽い振りで攻撃）");
     g_tbSwing=control(part(TRACKBAR_CLASSW,L"",TBS_HORZ|TBS_AUTOTICKS|WS_TABSTOP|WS_GROUP,kRight,g_y+4,250,30,ID_SWING));
     SendMessageW(g_tbSwing,TBM_SETRANGE,TRUE,MAKELPARAM(swingSpeedLow/swingSpeedStep,swingSpeedHigh/swingSpeedStep));SendMessageW(g_tbSwing,TBM_SETTICFREQ,2,0);
@@ -795,6 +811,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
             case ID_ZIP:startZip();break;
             case ID_RECOMMEND:applyRecommended(hwnd);break;
             case ID_UPDATE:startUpdate();break;
+            case ID_START:startGame();break;
             case ID_DEFAULTS:if(!gameRunning()&&MessageBoxW(hwnd,L"Put all settings back to how they came?",L"Enshrouded VR setting",MB_YESNO|MB_ICONQUESTION)==IDYES){
                 std::string defaults;if(readFile(defaultsPath(),defaults)&&writeFile(iniPath(),defaults)){g_ini=defaults;show();}else status(L"EnshroudedVR\\EnshroudedVR.defaults.ini is missing.");}break;}
         if(code==CBN_SELCHANGE){const auto at=size_t(SendMessageW(reinterpret_cast<HWND>(lParam),CB_GETCURSEL,0,0));
@@ -803,8 +820,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
             if(id==ID_FIT_VIEW&&at<std::size(kFitView))store("Picture","FitView",kFitView[at].value);
             if(id==ID_EYES&&at<std::size(kEyes)){store("Picture","AlternateEyes",at?"1":"0");store("Picture","EyeWarp",at?"2":"0");show();}
             if(id==ID_AFW_PACING&&at<std::size(kAfwPacing))store("Picture","AfwPacing",kAfwPacing[at].value);
-            if(id==ID_AFW_SIZE&&at<std::size(kAfwSizes))store("Picture","AfwRenderScale",kAfwSizes[at].value);
-            if(id==ID_AFW_DLSS&&at<std::size(kAfwDlss))store("Picture","AfwDlss",kAfwDlss[at].value);}
+            if(id==ID_AFW_SIZE&&at<std::size(kAfwSizes))store("Picture","AfwRenderScale",kAfwSizes[at].value);}
         return 0;}
     case WM_HSCROLL:if(reinterpret_cast<HWND>(lParam)==g_tbSwing){
         const int percent=clampSwingSpeed(int(SendMessageW(g_tbSwing,TBM_GETPOS,0,0))*swingSpeedStep);

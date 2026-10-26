@@ -20,6 +20,8 @@
 namespace aimMark {
 using MarkFn=int(*)(const float*,int);
 inline MarkFn setMark=nullptr;inline bool enabled=false,shown=false;inline int lastKind=-1;inline unsigned logs=0;inline uint64_t lastLog=0;
+// The kind of this frame's mark (1 bow, 2 one hand's pointer, 3 two hands, 0 none), for the ammunition list (spell_panel.hpp).
+inline int kindNow=0;
 // How far along the line the mark sits (include/evr/aim_mark.hpp markReach): asked with the line in the game's world
 // (live_melee_targets.hpp aimReach, set by view_resource_probe.cpp - this file is read before the world is known).
 // EVR_AIM_MARK_REACH=0 in the game's environment: always 128 m, as before 2026-10-13.
@@ -57,7 +59,7 @@ inline void frame(const evr::motion::HandFrame& f,bool bowHeld,const evr::motion
         }
         if(line.valid){const auto p=evr::aim::markPoint(line,reach);const float v[3]={p.x,p.y,p.z};if(setMark(v,1)){line.valid=false;kind=0;}}
         if(!line.valid&&shown)setMark(nullptr,0);
-        shown=line.valid;
+        shown=line.valid;kindNow=line.valid?kind:0;
         if((kind!=lastKind||(kind&&now>=lastLog+1000))&&logs<400){
             ++logs;lastKind=kind;lastLog=now;std::ostringstream o;o<<std::setprecision(6)<<"\"frame\":"<<f.frame<<",\"kind\":\""<<(kind==1?"bow":kind==2?"pointer":kind==3?"two_hands":"none")<<"\",\"shown\":"<<(shown?"true":"false")
                 <<",\"origin\":["<<line.origin.x<<','<<line.origin.y<<','<<line.origin.z<<"],\"direction\":["<<line.direction.x<<','<<line.direction.y<<','<<line.direction.z<<"],\"reach_m\":"<<reach<<",\"ends_on\":\""<<(by==2?"creature":by==1?"ground":"far")<<"\",\"screen\":"<<unsigned(screen);

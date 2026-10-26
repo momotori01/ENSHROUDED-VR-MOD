@@ -40,12 +40,27 @@ inline bool haveRelative=false,wasHeld=false;inline Quat relative{0,0,0,1};inlin
 // the 62 bows; no skill, perk, buff or arrow changes the speed, the gravity or the drag - docs/analysis/
 // arrow_flight_skills_20261021): the shown ranged weapon's item in include/evr/bow_speed_catalog.hpp, 90 for one not
 // in it. EVR_ARROW_FLIGHT_SPEED=<m/s> sets one speed for every bow (a test).
-struct Flight {bool on=false,stuck=false,reported=false,strong=false;float speed=90,gravity=25;uint32_t item=0;uint64_t serial=0,start=0,stuckAt=0;std::array<uint8_t,56> transform{};Vec3 dir{};Quat rotation{0,0,0,1};float reach=1e9f;std::array<int64_t,3> last{};
+struct Flight {bool on=false,stuck=false,reported=false,strong=false,lookOnly=false;float speed=90,gravity=25;uint32_t item=0;uint64_t serial=0,start=0,stuckAt=0;std::array<uint8_t,56> transform{};Vec3 dir{};Quat rotation{0,0,0,1};float reach=1e9f;std::array<int64_t,3> last{};
     uint64_t firstAsk=0,lastAnswer=0;bool rayHeard=false,wallKnown=false;std::array<int64_t,3> wall{};};
 inline Flight flight;inline uint64_t aimSeen=0;inline unsigned flightLogs=0;
 inline const int flightMode=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT",v,sizeof v);return n==1&&v[0]=='0'?0:n==1&&v[0]=='2'?2:1;}();
 inline const float flightSpeedSet=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT_SPEED",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):0.f;return std::isfinite(f)&&f>1?f:0.f;}();
 inline const float flightGravity=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT_GRAVITY",v,sizeof v);const float f=n&&n<sizeof v?std::strtof(v,nullptr):-1.f;return std::isfinite(f)&&f>=0?f:25.f;}();
+// The host's and a single player's shot too, for the eyes only (2026-10-26, user after the headset: "at the shot the original arrow
+// shows for a moment, and the shot leaves from the original model's place"). The game's arrow itself starts by the hand (headset run
+// 20261026-150250: 11 shots, the spawn 0.2 m below the hand's aim), but the arrow the game nocked stays on the original model's hand
+// for about 0.3 s after the release (motion_arrow_source_lost 0.3 s after bow_tap_released) and was in sight from where it stopped
+// being the arrow at the game's bow. Now the clone on the string flies on at the release as a guest's does, and the game's arrows of
+// the shot - that nocked one among them (lostSource) - stay out of the eyes meanwhile (foreignArrows). Only the look: no hit is told
+// to anyone (flight.reported from the start) - the game's own arrow hits.
+// Off by default since 2026-10-26 16:20 (headset run 20261026-155936: the game crashed in its renderer - a null in a list of what the
+// frame used, exe+0xa209ff - right as the 7th such flight began; not reproduced in Mock, the cause not known. And foreignArrows hid
+// every arrow of that model in sight, those stuck in the ground and walls from earlier shots too). Instead the game's nocked arrow
+// left on the original model's hand after the release (lostSource) is kept out of the eyes for a second, as the nocked one always
+// was (lostHidden*). EVR_ARROW_FLIGHT_LOCAL=1: the look-only flight; =<frame>: from that XR frame on (a diagnostic for Mock).
+inline const uint64_t localFlightFrom=[]{char v[24]{};const auto n=GetEnvironmentVariableA("EVR_ARROW_FLIGHT_LOCAL",v,sizeof v);
+    if(n==1&&v[0]=='1')return 0ull;if(n&&n<sizeof v){const auto f=std::strtoull(v,nullptr,10);if(f>1)return uint64_t(f);}return UINT64_MAX;}();
+inline uint32_t lostSource=0;inline uint64_t lostSourceAt=0,lostHiddenSerial=0,lostHiddenFrame=0;
 inline bool (*flightHit)(const std::array<int64_t,3>&,const std::array<int64_t,3>&,float&,std::array<int64_t,3>&,bool&,uint32_t&)=nullptr;
 inline void (*flightReport)(const std::array<int64_t,3>&,bool,uint32_t)=nullptr;
 inline float (*flightReach)(WorldPositionQ32,Vec3,uint64_t)=nullptr;
@@ -63,11 +78,13 @@ inline WorldPositionQ32 moved(const WorldPositionQ32& p,const Vec3& m){return {p
 inline bool flyFrame(uint64_t now,uint64_t currentSerial){
     controllerUiFixture::BowAim b;{std::lock_guard<std::mutex> lock(controllerUiFixture::fishingAimMutex);b=controllerUiFixture::bowAim;}
     if(b.serial!=aimSeen){aimSeen=b.serial;
-        const bool wanted=flightMode==2||(flightMode==1&&nativeImpactComponents::clientNow(now));
+        const bool client=nativeImpactComponents::clientNow(now);
+        const bool wanted=flightMode==2||(flightMode==1&&(client||liveFrame.frame>=localFlightFrom));
         // the release of this bow's string (a throw sets the same aim: not an arrow)
         if(wanted&&b.serial&&handle&&haveRelative&&lastHeldMs&&now>=lastHeldMs&&now-lastHeldMs<=300){
             Quat q;std::memcpy(&q,b.aim.data()+24,16);q=normalized(q);
             flight={};flight.on=true;flight.serial=b.serial;flight.start=now;flight.transform=lastTransform;flight.dir=rotate(q,{0,0,1});
+            flight.lookOnly=flight.reported=flightMode==1&&!client;   // the host's and a single player's: the look only
             {std::lock_guard<std::mutex> lock(controllerUiFixture::gestureMutex);flight.item=controllerUiFixture::gestureRangedItem;}
             {const float bow=evr::motion::catalogBowSpeed(flight.item);flight.speed=flightSpeedSet>0?flightSpeedSet:bow>0?bow:90.f;}
             // the strong shot's arrow does not drop (its template has no gravity component; the user: "it does not fall")
@@ -76,10 +93,13 @@ inline bool flyFrame(uint64_t now,uint64_t currentSerial){
             WorldPositionQ32 p0;std::memcpy(&p0,lastTransform.data(),24);flight.last={p0.x,p0.y,p0.z};
             if(flightReach){const float r=flightReach(p0,flight.dir,now);if(std::isfinite(r)&&r>0)flight.reach=r;}
             if(flightLogs++<300)logFile->event("arrow_flight_start","\"frame\":"+std::to_string(liveFrame.frame)+",\"serial\":"+std::to_string(b.serial)+",\"item\":"+std::to_string(flight.item)+",\"speed\":"+std::to_string(flight.speed)+",\"strong\":"+(flight.strong?"true":"false")+
-                ",\"gravity\":"+std::to_string(flight.gravity)+",\"reach\":"+std::to_string(flight.reach)+",\"dir\":["+std::to_string(flight.dir.x)+","+std::to_string(flight.dir.y)+","+std::to_string(flight.dir.z)+"]");}}
+                ",\"gravity\":"+std::to_string(flight.gravity)+",\"look_only\":"+(flight.reported?"true":"false")+",\"reach\":"+std::to_string(flight.reach)+",\"dir\":["+std::to_string(flight.dir.x)+","+std::to_string(flight.dir.y)+","+std::to_string(flight.dir.z)+"]");}}
     if(!flight.on||!handle)return false;
     const double t=double(now-flight.start)/1000.0;
-    if(t>1.5||(flight.stuck&&now-flight.stuckAt>1000)){flight.on=false;return false;}
+    // the look only: where it stuck it stays until the game's own arrows come back in sight (foreignArrows, 2 s from the release) -
+    // gone at 1 s, nothing showed where the arrow had hit for a second (Mock 20261026-155047)
+    if(t>1.5&&!(flight.lookOnly&&flight.stuck&&t<=2.0)){flight.on=false;return false;}
+    if(flight.stuck&&!flight.lookOnly&&now-flight.stuckAt>1000){flight.on=false;return false;}
     WorldPositionQ32 p0;std::memcpy(&p0,flight.transform.data(),24);
     auto transform=flight.transform;
     if(!flight.stuck){
@@ -167,7 +187,7 @@ inline void retire(const char* event,const std::string& detail){
 // copy reaching the guest that late, and going up to where the host put it, was the arrow seen. For 2 s from the release
 // the visible unposed models of the arrow's model other than the clone and the arrow at the bow are kept out of the eyes
 // (head_visibility_bridge.hpp), looked for every 100 ms (250 once found); none on the player's body (a quiver) or within 0.8 m of the bow.
-// Only where the own flight runs (a guest; EVR_ARROW_FLIGHT=2 alone, a test). EVR_HIDE_GAME_ARROWS=0: shown.
+// Only where the own flight runs (a guest; since 2026-10-26 the host and a single player too, localFlightFrom). EVR_HIDE_GAME_ARROWS=0: shown.
 inline const bool hideGameArrows=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_HIDE_GAME_ARROWS",v,sizeof v);return !(n==1&&v[0]=='0');}();
 inline std::array<uint32_t,6> foreign{};inline size_t foreignCount=0;inline uint64_t foreignScan=0,foreignSerial=0,foreignFrame=0,foreignShot=0;inline unsigned foreignLogs=0,foreignSeen=0;
 inline void foreignArrows(uint64_t now,uint64_t currentSerial,const WorldPositionQ32& bow){
@@ -211,6 +231,9 @@ inline void foreignArrows(uint64_t now,uint64_t currentSerial,const WorldPositio
         size_t kept=0;for(size_t k=0;k<foreignCount;++k){const auto o=motionVisual::currentObject(foreign[k]);if(!o)continue;const auto res=read<uintptr_t>(o+layout::modelResource);
             if(res==resource||res==sourceResource)foreign[kept++]=foreign[k];}
         foreignCount=kept;}
+    // the game's nocked arrow of this shot, left where the original model holds it after the release (lostSource)
+    if(lostSource&&lostSource!=source&&now>=lostSourceAt&&now-lostSourceAt<=1500&&lostSourceAt>=flight.start&&foreignCount<foreign.size()&&motionVisual::currentObject(lostSource)&&
+       std::find(foreign.begin(),foreign.begin()+ptrdiff_t(foreignCount),lostSource)==foreign.begin()+ptrdiff_t(foreignCount))foreign[foreignCount++]=lostSource;
     foreignSerial=currentSerial;foreignFrame=liveFrame.frame;
 }
 inline void update(const game::StableAnchor& anchor,uint64_t currentSerial){
@@ -230,9 +253,14 @@ inline void update(const game::StableAnchor& anchor,uint64_t currentSerial){
         if(!object||read<uintptr_t>(object+layout::modelResource)!=sourceResource||read<uint32_t>(object+layout::modelPose)||!(metres(read<WorldPositionQ32>(object+0x38),bowPosition)<keepRange)){
             // Shot, put away or replaced: the instance is no longer the arrow on the game's bow.
             logFile->event("motion_arrow_source_lost","\"source_handle\":"+std::to_string(source)+",\"frame\":"+std::to_string(liveFrame.frame)+",\"removed\":"+(object?"false":"true"));
-            source=0;++losses;lookFastUntil=now+2000;
+            lostSource=object?source:0;lostSourceAt=now;source=0;++losses;lookFastUntil=now+2000;
         }
     }
+    // the nocked arrow just lost (a shot, or the bow put away): out of the eyes for a second more, while it still exists
+    if(lostSource&&lostSource!=source&&now>=lostSourceAt&&now-lostSourceAt<=1000&&motionVisual::currentObject(lostSource)){
+        if(lostHiddenSerial+1<currentSerial||!lostHiddenSerial){static unsigned logs=0;if(logs++<300)logFile->event("game_nocked_arrow_hidden","\"frame\":"+std::to_string(liveFrame.frame)+",\"handle\":"+std::to_string(lostSource)+",\"after_loss_ms\":"+std::to_string(now-lostSourceAt));}
+        lostHiddenSerial=currentSerial;lostHiddenFrame=liveFrame.frame;}
+    else lostSource=0;
     // Looked for while the bow is out, not only while the string is held: the game shows its arrow on the hand of the
     // original model as soon as the bow is in the hand and again after each shot, and there it floated at the hip
     // (headset run 20261014-124515, user: "taking the bow from the left shoulder, an arrow floats at about the waist;

@@ -4,7 +4,7 @@
 // finding offline where the UI keeps the thing under the mouse (the hover) and the thing the pad has chosen (the focus).
 // What is copied: the exe's .data, and 32 MB around each
 // of the frontend, its state, the UI controller, the UI object and the two device objects. Nothing is written to the game.
-// EVR_UI_SCAN_FRAMES=<XR frame>:<label>,... and EVR_UI_SCAN_DIR=<folder>; without both nothing happens.
+// EVR_UI_SCAN_FRAMES=<XR frame>:<label>,... (or separated by /) and EVR_UI_SCAN_DIR=<folder>; without both nothing happens.
 // File: "EVRS", u32 region count, u64 exe base, then per region u64 base, u64 size, u32 name length, name, the bytes (pages
 // that cannot be read are zeros).
 #include <filesystem>
@@ -18,7 +18,7 @@ inline void install(){
     if(!n||n>=sizeof frames||!m||m>=sizeof dir)return;
     std::string text(frames);size_t at=0;
     while(at<text.size()){
-        auto comma=text.find(',',at);if(comma==std::string::npos)comma=text.size();
+        auto comma=text.find_first_of(",/",at);if(comma==std::string::npos)comma=text.size();   // '/' too: a test's settings list splits at commas
         const auto item=text.substr(at,comma-at);const auto colon=item.find(':');
         if(colon!=std::string::npos)steps.push_back({std::strtoull(item.substr(0,colon).c_str(),nullptr,10),item.substr(colon+1)});
         at=comma+1;
