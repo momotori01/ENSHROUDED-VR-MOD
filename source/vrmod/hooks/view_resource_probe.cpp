@@ -2876,7 +2876,18 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
                 pieceDetail=at&&nowMs>=at&&nowMs-at<=1500&&controllerUiFixture::pieceDetailOn(nowMs);
                 static bool loggedDetail=false;static unsigned detailLogs=0;
                 if(pieceDetail!=loggedDetail&&detailLogs++<200){loggedDetail=pieceDetail;logFile->event("piece_detail_refresh","\"frame\":"+std::to_string(liveFrame.frame)+",\"every_frame\":"+(pieceDetail?"true":"false"));}}
-            bool refreshNow=desktopSkipEvery&&(!(desktopSkipCandidates%desktopSkipEvery)||refreshOwed||pieceDetail);
+            // While a menu is open, the original View every frame - only when the player turned it on ([Picture] MenuRefresh,
+            // EVR_MENU_REFRESH=1; 2026-10-27, user: "the UI flicker: a setting, on only for those who see it, then no one else is
+            // touched"). The flicker: the character of the inventory's equipment screen going black now and then (an ALVR player's
+            // report 20261025-093518, "had this in all releases"; this PC too). Guess: the game draws that character from what the
+            // original View's frame prepares, which the skip leaves to one frame in desktopSkipEvery. Costs a frame of the original
+            // View on each menu frame (only while a menu is open).
+            static const bool menuRefresh=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_REFRESH",v,sizeof v);return n==1&&v[0]=='1';}();
+            bool menuNow=false;
+            if(menuRefresh){const auto at=menuPointer::menuSeenAt.load();const auto nowMs=GetTickCount64();menuNow=at&&nowMs>=at&&nowMs-at<=500;
+                static bool loggedMenu=false;static unsigned menuLogs=0;
+                if(menuNow!=loggedMenu&&menuLogs++<400){loggedMenu=menuNow;logFile->event("menu_refresh","\"frame\":"+std::to_string(liveFrame.frame)+",\"every_frame\":"+(menuNow?"true":"false"));}}
+            bool refreshNow=desktopSkipEvery&&(!(desktopSkipCandidates%desktopSkipEvery)||refreshOwed||pieceDetail||menuNow);
             if(refreshNow&&fallRefreshHold){
                 bool airborne=false;{std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;const auto now=GetTickCount64();
                     airborne=s.actorKnown&&s.milliseconds&&now>=s.milliseconds&&now-s.milliseconds<=500&&!(s.actorState&1ull);}

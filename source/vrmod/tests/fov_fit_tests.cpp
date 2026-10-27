@@ -21,6 +21,8 @@ int main(){try{unsigned n=0;auto ck=[&](bool b){++n;if(!b)throw std::runtime_err
  // the system name: ALVR in any case; the others not
  ck(alvrName("SteamVR/OpenXR : alvr_server")&&alvrName("ALVR")&&alvrName("Quest via Alvr"));
  ck(!alvrName("SteamVR/OpenXR : lighthouse")&&!alvrName("Oculus Quest2")&&!alvrName(""));
+ // runtimes (openxr_client.hpp Auto, 2026-10-27): the Vision Pro's ALVR client has its own; Virtual Desktop's and the others are not ALVR
+ ck(alvrName("VisionALVR (VDXR)")&&!alvrName("VirtualDesktopXR")&&!alvrName("Oculus")&&!alvrName("SteamVR/OpenXR")&&!alvrName("Windows Mixed Reality Runtime"));
  // the module of a process: this test's own process has kernel32.dll and not ALVR's driver; no process of a made-up name
  {wchar_t self[MAX_PATH]{};GetModuleFileNameW(nullptr,self,MAX_PATH);const wchar_t* name=wcsrchr(self,L'\\');name=name?name+1:self;
   ck(processHasModule(name,L"kernel32.dll")==1);ck(processHasModule(name,L"driver_alvr_server.dll")==0);

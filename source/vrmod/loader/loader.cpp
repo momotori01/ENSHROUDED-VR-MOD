@@ -323,7 +323,7 @@ void begin(){
     if(!readFile(g.ini,g.iniText))say("settings: "+narrow(g.ini)+" is not there; the defaults are used (VR off)");
     g.values=evr::settings::forStart(evr::settings::read(g.iniText));   // with the alternate eyes, their own picture (2026-10-23)
     say("settings: VR="+std::to_string(int(g.values.vr))+" Sync="+std::to_string(int(g.values.online))+" RenderScale="+evr::settings::text(g.values.renderScale)+" Dlss="+g.values.dlss+
-        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+" UiAutoHide="+std::to_string(int(g.values.uiAutoHide))+" AlternateEyes="+std::to_string(int(g.values.alternateEyes))+" AfwPacing="+std::to_string(g.values.afwPacing)+" FitView="+evr::settings::fitViewNames()[size_t(g.values.fitView)]+(given?" (from EVR_AUTO_INI)":""));
+        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+" UiAutoHide="+std::to_string(int(g.values.uiAutoHide))+" MenuRefresh="+std::to_string(int(g.values.menuRefresh))+" AlternateEyes="+std::to_string(int(g.values.alternateEyes))+" AfwPacing="+std::to_string(g.values.afwPacing)+" FitView="+evr::settings::fitViewNames()[size_t(g.values.fitView)]+(given?" (from EVR_AUTO_INI)":""));
     say("settings: Style="+evr::settings::styleNames()[size_t(g.values.style)]+" PitchLock="+std::to_string(int(g.values.padPitchLock))+" Tilt="+std::to_string(g.values.padTilt));
     if(!supportedBuild()){restoreRenderSettings();status("Off: this version of the game is not the one the mod was made for (the game was updated?); the game runs without the mod");return;}
     applyRecommendedGraphics();
@@ -361,6 +361,7 @@ void begin(){
         // The stroke's speed and swimming by the arms (2026-10-20), changeable there too.
         setEnvironment(L"EVR_SWING_SPEED",std::to_wstring(g.values.swingSpeed));setEnvironment(L"EVR_ARM_SWIM",g.values.armSwim?L"":L"0");setEnvironment(L"EVR_HIT_STOP",g.values.hitStop?L"":L"0");
         setEnvironment(L"EVR_UI_AUTO_HIDE",g.values.uiAutoHide?L"":L"0");   // [Picture] UiAutoHide (2026-10-23)
+        setEnvironment(L"EVR_MENU_REFRESH",g.values.menuRefresh?L"1":L"");   // [Picture] MenuRefresh (2026-10-27): off unless set
         // [Picture] FitView (2026-10-25): Fit 1, Normal 0, Auto none (the client finds ALVR itself)
         setEnvironment(L"EVR_FIT_RUNTIME_FOV",g.values.fitView==evr::settings::FitView::Fit?L"1":g.values.fitView==evr::settings::FitView::Normal?L"0":L"");
         // A pad style (2026-10-25): the native body shown but the head, nothing of the motion controllers.

@@ -36,6 +36,9 @@ VR ON / OFF
 - The picture size, DLSS / FSR 3 mode and sharpening for VR are in the same program.
 - "View fit (VR)": Auto fits the picture to the headset's own field of view when the mod finds
   ALVR (with ALVR the view is cross-eyed otherwise). If the view is cross-eyed, choose "Fit".
+- "Menu flicker fix (VR)": off by default. Turn it on only if the character in the inventory
+  flickers black: while a menu is open the game's own view is drawn every frame (menus get a
+  little heavier).
 - "Frame mode (VR)": "One eye a frame" draws the left and the right eye in turn, and the
   other eye shows the picture it had. It gives more frames a second; things that move
   can look a little doubled. It is a test - switch back to "Both eyes every frame" if it
@@ -125,6 +128,8 @@ VR の入・切
 - VR の絵の大きさ・DLSS / FSR 3 のモード・シャープさも同じプログラムで選べます。
 - 「View fit (VR)」：Auto は、MOD が ALVR を見つけた時だけ絵をヘッドセットの視野に合わせます（ALVR
   ではそうしないと寄り目になります）。寄り目になったら「Fit」を選んでください。
+- 「Menu flicker fix (VR)」：既定は切。持ち物のキャラクターが黒くちらつく時だけ入にしてください。
+  メニューを開いている間、ゲーム自身の画面を毎フレーム描きます（メニューが少し重くなります）。
 - 「Frame mode (VR)」の「One eye a frame」は、左右の目を 1 コマずつ交互に描き、描かない
   方の目は前の絵を見せます。1 秒あたりのコマ数が増えます。動く物は少し二重に見える事が
   あります。試験中の機能です。合わなければ「Both eyes every frame」に戻してください。

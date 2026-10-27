@@ -38,9 +38,9 @@ HWND g_rbMode[4],g_rbLockOn,g_rbLockOff,g_tbTilt,g_stTilt,g_coSize,g_coSharp,g_c
 // The stroke's speed (a slider, 5 % a step) and swimming by the arms (2026-10-20; also in the game's start menu).
 // The alternate eyes' own picture and pacing (2026-10-23, include/evr/afw_pacing.hpp).
 HWND g_coAfwPacing,g_coAfwSize,g_coAfwDlss;
-HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff,g_btRecommend,g_stRecommend;
+HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff,g_rbMenuRefreshOn,g_rbMenuRefreshOff,g_btRecommend,g_stRecommend;
 evr::recommend::Machine g_machine;   // the graphics card, read once at the start
-enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS,ID_MODE_MOTION,ID_LOCK_ON,ID_LOCK_OFF,ID_TILT,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP,ID_FIT_VIEW,ID_START};
+enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS,ID_MODE_MOTION,ID_LOCK_ON,ID_LOCK_OFF,ID_TILT,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP,ID_FIT_VIEW,ID_START,ID_MENU_REFRESH_ON,ID_MENU_REFRESH_OFF};
 constexpr UINT WM_APP_ZIP_DONE=WM_APP+1;     // wParam: exit code, lParam: new std::wstring (the zip's path)
 constexpr UINT WM_APP_LATEST=WM_APP+2;       // lParam: new std::wstring (the newest release's version, or "" when it could not be checked)
 constexpr UINT WM_APP_UPDATE_LINE=WM_APP+3;  // lParam: new std::wstring (a line the updater wrote)
@@ -149,10 +149,10 @@ void show(){
     SendMessageW(g_coAfwSize,CB_SETCURSEL,0,0);if(v.afwRenderScale>0)pick(g_coAfwSize,kAfwSizes,std::size(kAfwSizes),text(v.afwRenderScale),0);
     
     SendMessageW(g_tbSwing,TBM_SETPOS,TRUE,v.swingSpeed/swingSpeedStep);SetWindowTextW(g_stSwing,(std::to_wstring(v.swingSpeed)+L" %").c_str());
-    check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);check(g_rbHudOn,v.uiAutoHide);check(g_rbHudOff,!v.uiAutoHide);
+    check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);check(g_rbHudOn,v.uiAutoHide);check(g_rbHudOff,!v.uiAutoHide);check(g_rbMenuRefreshOn,v.menuRefresh);check(g_rbMenuRefreshOff,!v.menuRefresh);
     for(HWND h:{g_coAfwPacing,g_coAfwSize})EnableWindow(h,!g_running&&v.vr&&v.alternateEyes);
     SendMessageW(g_coFit,CB_SETCURSEL,size_t(v.fitView),0);
-    for(HWND h:{g_coSize,g_coSharp,g_coFit,g_coEyes,g_rbHudOn,g_rbHudOff})EnableWindow(h,!g_running&&v.vr);
+    for(HWND h:{g_coSize,g_coSharp,g_coFit,g_coEyes,g_rbHudOn,g_rbHudOff,g_rbMenuRefreshOn,g_rbMenuRefreshOff})EnableWindow(h,!g_running&&v.vr);
     // The motion controllers' rows are off in the gamepad modes; the pad rows only there (FPS and TPS alike).
     for(HWND h:{g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff})EnableWindow(h,!g_running&&v.vr&&!pad);
     for(HWND h:{g_rbLockOn,g_rbLockOff})EnableWindow(h,!g_running&&pad);   // FPS too: RT switches to TPS in the game
@@ -767,6 +767,11 @@ void build(){
     g_rbHudOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_HUD_ON));
     g_rbHudOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_HUD_OFF));
     next(kRowHeight-16);
+    // [Picture] MenuRefresh (2026-10-27): off by default - only for those who see the menus flicker
+    row(L"Menu flicker fix (VR)",L"Only if the character in the inventory flickers: menus get a little heavier.\n持ち物のキャラクターがちらつく時だけオン（メニューが少し重くなる）");
+    g_rbMenuRefreshOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_MENU_REFRESH_ON));
+    g_rbMenuRefreshOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_MENU_REFRESH_OFF));
+    next(kRowHeight-16);
     row(L"Recommended graphics (VR)",L"The game's graphics set for VR on this PC.\n推奨グラフィック設定（この PC 向け）に変更");
     g_btRecommend=control(part(L"BUTTON",L"Set recommended",BS_PUSHBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+6,140,30,ID_RECOMMEND));
     g_stRecommend=part(L"STATIC",machineText().c_str(),SS_LEFT,kRight+154,g_y+4,kWidth-kRight-154-kLeft,56);
@@ -808,6 +813,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
             case ID_SWIM_ON:store("Body","ArmSwim","1");break;case ID_SWIM_OFF:store("Body","ArmSwim","0");break;
             case ID_HITSTOP_ON:store("Melee","HitStop","1");break;case ID_HITSTOP_OFF:store("Melee","HitStop","0");break;
             case ID_HUD_ON:store("Picture","UiAutoHide","1");break;case ID_HUD_OFF:store("Picture","UiAutoHide","0");break;
+            case ID_MENU_REFRESH_ON:store("Picture","MenuRefresh","1");break;case ID_MENU_REFRESH_OFF:store("Picture","MenuRefresh","0");break;
             case ID_ZIP:startZip();break;
             case ID_RECOMMEND:applyRecommended(hwnd);break;
             case ID_UPDATE:startUpdate();break;

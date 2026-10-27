@@ -622,15 +622,19 @@ class OpenXrClient : private OpenXrDispatch
             const std::string name = named ? std::string(sp.systemName) : std::string();
             const char *fitFlag = std::getenv("EVR_FIT_RUNTIME_FOV");
             const bool forced = fitFlag && *fitFlag;
-            // Auto ([Picture] FitView): ALVR found by the headset's name, or by ALVR's driver in SteamVR's server (only with
-            // SteamVR's runtime - ALVR is a driver of SteamVR)
+            // Auto ([Picture] FitView): ALVR found by the headset's name, by ALVR's driver in SteamVR's server (only with
+            // SteamVR's runtime - ALVR is a driver of SteamVR), or by the runtime's own name: an ALVR client with an OpenXR
+            // runtime of its own (2026-10-27, bug report 20261026-131519 of a Vision Pro player: the runtime "VisionALVR (VDXR)",
+            // the headset "Emulated Device" - Auto took the normal view and the action bar and the floating HUD parts came out
+            // cross-eyed; with Fit all was right). Virtual Desktop's VDXR and the others have no "ALVR" in their names.
             const bool alvrByName = fovfit::alvrName(name);
+            const bool alvrRuntime = !alvrByName && fovfit::alvrName(props.runtimeName);
             const bool steamVr = std::string(props.runtimeName).rfind("SteamVR", 0) == 0;
-            const int alvrDriver = !forced && !alvrByName && steamVr ? fovfit::processHasModule(L"vrserver.exe", L"driver_alvr_server.dll") : -3;
-            fitRuntimeFov = forced ? !std::strcmp(fitFlag, "1") : alvrByName || alvrDriver == 1;
+            const int alvrDriver = !forced && !alvrByName && !alvrRuntime && steamVr ? fovfit::processHasModule(L"vrserver.exe", L"driver_alvr_server.dll") : -3;
+            fitRuntimeFov = forced ? !std::strcmp(fitFlag, "1") : alvrByName || alvrRuntime || alvrDriver == 1;
             const char *alternate = std::getenv("EVR_ALTERNATE_EYES");
             const char *why = !fitRuntimeFov ? (forced ? "normal_by_setting" : "not_alvr") : !symmetricFov ? "symmetric_fov_off" :
-                (alternate && !std::strcmp(alternate, "1")) ? "alternate_eyes" : forced ? "fit_by_setting" : alvrByName ? "alvr_by_name" : "alvr_driver_in_vrserver";
+                (alternate && !std::strcmp(alternate, "1")) ? "alternate_eyes" : forced ? "fit_by_setting" : alvrByName ? "alvr_by_name" : alvrRuntime ? "alvr_runtime" : "alvr_driver_in_vrserver";
             if (!std::strcmp(why, "symmetric_fov_off") || !std::strcmp(why, "alternate_eyes")) fitRuntimeFov = false;
             if (fitRuntimeFov) cantedFov = false;
             log.event("xr_system", "\"name\":" + jsonString(name) + ",\"vendor_id\":" + std::to_string(named ? sp.vendorId : 0u) +

@@ -59,6 +59,7 @@ inline unsigned mode=0;inline bool requested=false,installed=false;
 inline bool gameMouse=true;
 inline bool keepPad=true;                          // EVR_MENU_POINTER_KEEP_PAD=0: the game may switch to its mouse prompts
 inline std::atomic<uint64_t> postedAt{0};          // the last mouse message posted to the game (GetTickCount64)
+inline std::atomic<uint64_t> menuSeenAt{0};        // the last frame a menu was open (GetTickCount64; view_resource_probe.cpp menu refresh)
 inline std::atomic<unsigned> padKept{0};
 inline std::atomic<bool> mouseHeld{false};          // a pull is being given to the game (its button down, or about to be)
 // The game's mouse mode for the pull (Mock game-20261018-140143, the backpack): 140 posted moves left the device mode at the
@@ -195,6 +196,7 @@ inline void frame(const evr::motion::HandFrame& f,const evr::motion::GestureHead
         // in 1.0 (LogicEditor came in at 20): the building mode 28 -> 29, the summoner 33 -> 37, and 33 is now the
         // screwdriver's building mode (ScrewdriverMultiToolBuildingMode), which aims at the world as the building mode.
         const bool menu=(open!=1&&open!=29&&open!=33&&open!=37&&open!=255)||(open==1&&uiCover(now));   // + the death screen (uiCover)
+        if(menu)menuSeenAt=now;
         // The world tab (the map, menuTab 1) as the chests (2026-10-24, user after the headset: "on the world screen the buttons
         // change with the pointer and without it"; then, with the left click at the pointed place: "clicking a location drags the
         // map; and with a location picked, A is not taken unless the pointer is on it - dragging is fine, but with a location

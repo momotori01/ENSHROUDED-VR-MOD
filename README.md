@@ -47,6 +47,7 @@ The program next to enshrouded.exe holds the settings that cannot be changed in 
 | Picture size (VR) | Low 0.7 (faster) / Normal 0.8 / High 1.0 (sharper, slower) |
 | Sharpening (VR) | Off / Soft 0.2 / Strong 0.5 |
 | View fit (VR) | How each eye's picture is fitted to the headset's view. **Auto** (the default): fitted only when the mod finds ALVR (with ALVR the view is cross-eyed without it). **Normal**: as always. **Fit (if cross-eyed)**: always fitted - choose it if the view is cross-eyed. |
+| Menu flicker fix (VR) | Off by default. Turn it on only if the character in the inventory flickers black: while a menu is open the game's own view is drawn every frame (menus get a little heavier). |
 | Frame mode (VR) | Both eyes every frame (normal), or one eye a frame (a test for more FPS) |
 | Problem report | **Make zip**: the mod's logs, its settings and the game's log in one zip next to the program, to send with a description. It also finishes a VR bug report that a crash cut short. |
 | Put settings back | All settings back to how they came. |
