@@ -768,7 +768,7 @@ void build(){
     g_rbHudOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_HUD_OFF));
     next(kRowHeight-16);
     // [Picture] MenuRefresh (2026-10-27): off by default - only for those who see the menus flicker
-    row(L"Menu flicker fix (VR)",L"Only if the character in the inventory flickers: menus get a little heavier.\n持ち物のキャラクターがちらつく時だけオン（メニューが少し重くなる）");
+    row(L"Menu flicker fix (VR)",L"If the character in the inventory flickers black: on.\n持ち物のキャラクターが黒くちらつく時はオン");
     g_rbMenuRefreshOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_MENU_REFRESH_ON));
     g_rbMenuRefreshOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_MENU_REFRESH_OFF));
     next(kRowHeight-16);

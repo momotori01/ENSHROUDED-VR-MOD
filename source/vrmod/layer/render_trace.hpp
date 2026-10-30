@@ -57,7 +57,7 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateGraphicsPipelines(VkDevice d, VkPipeline
             s << ']';
             note("graphics_pipeline", s.str());
             uiCapture::pipelineCreated(d,info[i],pipelines[i]);
-            meshDrawGuard::created(info[i],pipelines[i]);
+            meshDrawGuard::created(info[i],pipelines[i]);pipelineCensus::pipelineCreated(info[i],pipelines[i]);
         }
     return r;
 }
@@ -85,7 +85,7 @@ VKAPI_ATTR void VKAPI_CALL evrCmdBindPipeline(VkCommandBuffer c, VkPipelineBindP
         note("trace_pipeline", "\"cmd\":" + handleText(c) + ",\"bind_point\":" + std::to_string(point) +
                                    ",\"pipeline\":" + handleText(pipeline) +
                                    ",\"game_rva_stack\":" + stack());
-    uiDraw::bind(c,point,pipeline);gpuTimingBind(c,point,pipeline);meshDrawGuard::bind(c,point,pipeline);giReprojectBind(c,point,pipeline);
+    uiDraw::bind(c,point,pipeline);gpuTimingBind(c,point,pipeline);meshDrawGuard::bind(c,point,pipeline);giReprojectBind(c,point,pipeline);pipelineCensus::bind(c,point,pipeline);
     deviceFn<PFN_vkCmdBindPipeline>(c, "vkCmdBindPipeline")(c, point, pipeline);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdBindDescriptorSets(VkCommandBuffer c, VkPipelineBindPoint point,

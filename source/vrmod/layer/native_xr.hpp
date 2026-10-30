@@ -973,7 +973,7 @@ extern "C" __declspec(dllexport) int evrBeginNativeXr(VkInstance instance,VkPhys
             // or the runtime's time after them, may not be (2026-10-23: that ended the session on the headset)
             if(state.hands){const XrTime handTime=std::max<XrTime>(snapshot.predictedDisplayTime,state.lastHandTime+1);state.lastHandTime=handTime;
                 frame->hands=state.hands->sample(state.xr->local,handTime,snapshot.frame,1);}
-            frame->frame=snapshot.frame;frame->time=snapshot.predictedDisplayTime;
+            frame->frame=snapshot.frame;frame->time=snapshot.predictedDisplayTime;pipelineCensus::frameNow=snapshot.frame;
             frame->headFlags=flags;frame->sessionGeneration=state.generation;
             if(snapshot.shouldRender&&(flags&3)==3){
                 frame->frame=snapshot.frame;frame->time=snapshot.predictedDisplayTime;frame->views=snapshot.views;frame->eyeMask=snapshot.eyeMask;

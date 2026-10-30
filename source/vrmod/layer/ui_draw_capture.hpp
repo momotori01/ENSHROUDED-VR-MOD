@@ -327,14 +327,18 @@ VKAPI_ATTR void VKAPI_CALL evrCmdClearAttachments(VkCommandBuffer c,uint32_t cou
     uiDraw::block(c);sweepDepthClearAttachments(c,count,attachments,rectangles,rects);deviceFn<PFN_vkCmdClearAttachments>(c,"vkCmdClearAttachments")(c,count,attachments,rectangles,rects);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndirectCount(VkCommandBuffer c,VkBuffer b,VkDeviceSize offset,VkBuffer count,VkDeviceSize countOffset,uint32_t maximum,uint32_t stride){
+    if(pipelineCensus::draw(c))return;
     cmdStack("draw_indirect_count","\"maximum\":"+std::to_string(maximum));sweepDepthDraw(c);gpuTimingNote(c,0);uiDraw::draw(c,false);deviceFn<PFN_vkCmdDrawIndirectCount>(c,"vkCmdDrawIndirectCount")(c,b,offset,count,countOffset,maximum,stride);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndexedIndirectCount(VkCommandBuffer c,VkBuffer b,VkDeviceSize offset,VkBuffer count,VkDeviceSize countOffset,uint32_t maximum,uint32_t stride){
+    if(pipelineCensus::draw(c))return;
     cmdStack("draw_indirect_count","\"maximum\":"+std::to_string(maximum));sweepDepthDraw(c);gpuTimingNote(c,0);uiDraw::draw(c,false);deviceFn<PFN_vkCmdDrawIndexedIndirectCount>(c,"vkCmdDrawIndexedIndirectCount")(c,b,offset,count,countOffset,maximum,stride);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndirectCountKHR(VkCommandBuffer c,VkBuffer b,VkDeviceSize offset,VkBuffer count,VkDeviceSize countOffset,uint32_t maximum,uint32_t stride){
+    if(pipelineCensus::draw(c))return;
     cmdStack("draw_indirect_count","\"maximum\":"+std::to_string(maximum));sweepDepthDraw(c);gpuTimingNote(c,0);uiDraw::draw(c,false);deviceFn<PFN_vkCmdDrawIndirectCountKHR>(c,"vkCmdDrawIndirectCountKHR")(c,b,offset,count,countOffset,maximum,stride);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndexedIndirectCountKHR(VkCommandBuffer c,VkBuffer b,VkDeviceSize offset,VkBuffer count,VkDeviceSize countOffset,uint32_t maximum,uint32_t stride){
+    if(pipelineCensus::draw(c))return;
     cmdStack("draw_indirect_count","\"maximum\":"+std::to_string(maximum));sweepDepthDraw(c);gpuTimingNote(c,0);uiDraw::draw(c,false);deviceFn<PFN_vkCmdDrawIndexedIndirectCountKHR>(c,"vkCmdDrawIndexedIndirectCountKHR")(c,b,offset,count,countOffset,maximum,stride);
 }

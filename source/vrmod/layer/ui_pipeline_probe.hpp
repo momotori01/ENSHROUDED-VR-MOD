@@ -178,10 +178,10 @@ void destroyDevice(VkDevice device) noexcept {
 }
 }
 VKAPI_ATTR void VKAPI_CALL evrDestroyPipeline(VkDevice device,VkPipeline pipeline,const VkAllocationCallbacks* allocator){
-    uiCapture::pipelineDestroyed(device,pipeline);meshDrawGuard::destroyed(pipeline);giReprojectPipelineDestroyed(pipeline);
+    uiCapture::pipelineDestroyed(device,pipeline);meshDrawGuard::destroyed(pipeline);giReprojectPipelineDestroyed(pipeline);pipelineCensus::pipelineDestroyed(pipeline);
     deviceFn<PFN_vkDestroyPipeline>(device,"vkDestroyPipeline")(device,pipeline,allocator);
 }
 VKAPI_ATTR void VKAPI_CALL evrDestroyShaderModule(VkDevice device,VkShaderModule module,const VkAllocationCallbacks* allocator){
-    uiCapture::shaderDestroyed(device,module);giReprojectModuleDestroyed(module);
+    uiCapture::shaderDestroyed(device,module);giReprojectModuleDestroyed(module);pipelineCensus::shaderDestroyed(module);
     deviceFn<PFN_vkDestroyShaderModule>(device,"vkDestroyShaderModule")(device,module,allocator);
 }

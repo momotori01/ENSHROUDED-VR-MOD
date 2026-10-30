@@ -29,11 +29,18 @@ constexpr const char* pattern="48 8b c4 48 89 58 08 4c 89 40 18 48 89 50 10 55 5
 struct Request{uint64_t serial=0,ms=0;float from[3]{},to[3]{};};
 struct Answer{uint64_t serial=0,ms=0;bool hit=false;float at[3]{};};
 inline std::mutex askMutex;inline Request asked;inline Answer answered;inline std::atomic<uint64_t> askSerial{0},cast{0},castHits{0};
+// A slot of its own for a tool's stroke (2026-10-30, controller_ui_fixture.hpp strikeAsk: where the axe's head meets a tree), so
+// that it and a guest's arrow do not take each other's place.
+inline Request strikeAsked;inline Answer strikeAnswered;inline std::atomic<uint64_t> strikeCast{0},strikeHits{0};
 // Any thread: the newest ask replaces an older one not cast yet.
 inline uint64_t ask(const float from[3],const float to[3]){
     std::lock_guard<std::mutex> lock(askMutex);asked.serial=++askSerial;asked.ms=GetTickCount64();for(int k=0;k<3;k++){asked.from[k]=from[k];asked.to[k]=to[k];}return asked.serial;
 }
 inline Answer answer(){std::lock_guard<std::mutex> lock(askMutex);return answered;}
+inline uint64_t askStrike(const float from[3],const float to[3]){
+    std::lock_guard<std::mutex> lock(askMutex);strikeAsked.serial=++askSerial;strikeAsked.ms=GetTickCount64();for(int k=0;k<3;k++){strikeAsked.from[k]=from[k];strikeAsked.to[k]=to[k];}return strikeAsked.serial;
+}
+inline Answer strikeAnswer(){std::lock_guard<std::mutex> lock(askMutex);return strikeAnswered;}
 // The census (EVR_RAYCAST_CENSUS=1 in the game's environment): callers, threads, sample parameters, read only.
 struct Caller{uintptr_t rva=0;uint64_t calls=0,misses=0;uint32_t thread=0;unsigned samples=0;};
 inline std::mutex censusMutex;inline std::array<Caller,64> callers{};inline std::atomic<uint64_t> total{0};inline uint64_t startMs=0,lastSummary=0;inline unsigned summaries=0;
@@ -76,6 +83,18 @@ __declspec(noinline) void* __fastcall ray(void* result,const float* from,const f
             if(v&&c){if(v!=worlds.voxels||c!=worlds.colliders||thread!=worlds.thread)++worldChanges;worlds={v,c,read<uint32_t>(p+0x28),thread,now};}}
         // the arrow's ray, right after the game's own on its thread
         if(worlds.ms&&thread==worlds.thread&&now>=worlds.ms&&now-worlds.ms<=1000){
+            // a tool's stroke (askStrike): the same ray, its own slot
+            {Request q;uint64_t done=0;{std::lock_guard<std::mutex> lock(askMutex);q=strikeAsked;done=strikeAnswered.serial;}
+             if(q.serial&&q.serial>done&&now>=q.ms&&now-q.ms<=300){
+                alignas(16) std::array<uint8_t,0x40> mine{};alignas(16) std::array<uint8_t,0x200> own{};
+                std::memcpy(mine.data()+8,&worlds.voxels,8);std::memcpy(mine.data()+0x10,&worlds.colliders,8);
+                const uint32_t asking=9;std::memcpy(mine.data()+0x20,&asking,4);std::memcpy(mine.data()+0x28,&worlds.extra,4);
+                original(own.data(),q.from,q.to,mine.data());++strikeCast;
+                Answer a;a.serial=q.serial;a.ms=now;a.hit=own[0]==0;std::memcpy(a.at,own.data()+0x10,12);
+                if(a.hit){float len2=0,d2=0;for(int k=0;k<3;k++){len2+=(q.to[k]-q.from[k])*(q.to[k]-q.from[k]);d2+=(a.at[k]-q.from[k])*(a.at[k]-q.from[k]);}
+                    if(!std::isfinite(a.at[0])||!std::isfinite(a.at[1])||!std::isfinite(a.at[2])||d2>len2*1.0201f+.01f)a.hit=false;}
+                if(a.hit)++strikeHits;
+                {std::lock_guard<std::mutex> lock(askMutex);strikeAnswered=a;}}}
             Request q;uint64_t done=0;{std::lock_guard<std::mutex> lock(askMutex);q=asked;done=answered.serial;}
             if(q.serial&&q.serial>done&&now>=q.ms&&now-q.ms<=300){
                 alignas(16) std::array<uint8_t,0x40> mine{};alignas(16) std::array<uint8_t,0x200> own{};
@@ -108,6 +127,6 @@ inline void disable() noexcept {
     if(!enabled)return;
     const auto status=renderHookRetirement::disable(reinterpret_cast<void*>(baseAddress+rva));if(status==MH_OK)enabled=false;
     try{if(census){std::lock_guard<std::mutex> lock(censusMutex);summary(GetTickCount64());}
-        logFile->event("world_ray_removed","\"status\":"+std::to_string(status)+",\"arrow_rays\":"+std::to_string(cast.load())+",\"arrow_ray_hits\":"+std::to_string(castHits.load())+",\"world_changes\":"+std::to_string(worldChanges.load()));}catch(...){}
+        logFile->event("world_ray_removed","\"status\":"+std::to_string(status)+",\"arrow_rays\":"+std::to_string(cast.load())+",\"arrow_ray_hits\":"+std::to_string(castHits.load())+",\"strike_rays\":"+std::to_string(strikeCast.load())+",\"strike_ray_hits\":"+std::to_string(strikeHits.load())+",\"world_changes\":"+std::to_string(worldChanges.load()));}catch(...){}
 }
 }

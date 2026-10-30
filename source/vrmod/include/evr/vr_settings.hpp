@@ -99,9 +99,10 @@ inline std::vector<std::pair<std::string,std::string>> entries(const std::string
 // ([Body] ArmSwim; 2026-10-20, user: "add swimming by hand - VHVR had it; switchable in the settings"). On unless set.
 // hitStop: the hit stop of a melee stroke (include/evr/hit_stop.hpp; [Melee] HitStop; 2026-10-20, user: "make the hit stop
 // switchable in the game's settings"). On unless set.
-// menuRefresh: while a menu is open, the game's own view is drawn every frame (hooks: view_resource_probe.cpp menu refresh;
+// menuRefresh: while a menu is open, the game's own view is not drawn at all (hooks: view_resource_probe.cpp menu refresh;
 // [Picture] MenuRefresh; 2026-10-27, user: "the UI flicker - a setting, on only for those who see it, then no one else is
-// touched"): for the character of the inventory flickering black. Off unless set: menus cost nothing more.
+// touched"): for the character of the inventory flickering black - its black frames are the game's own view's frames
+// (2026-10-30, report 20261027-103753). Off unless set.
 // uiAutoHide: the HUD fades out five seconds after its last change (hooks: uiHudBridge, layer hud_fade.hpp; [Picture]
 // UiAutoHide; 2026-10-23, user: "make the always-shown UI switchable in the settings" - a player found the HUD coming and
 // going hard to play with). On unless set; 0 = the HUD always shown.

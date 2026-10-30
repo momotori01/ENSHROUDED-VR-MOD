@@ -50,5 +50,29 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   f.hands[1].gripFlags=0;t=.02;o=s.apply(f,t);ck(!s.active(1)&&s.active(0));}
  // A stop asked before anything was shown: nothing to stop at
  {HitStop s;s.stop(2,.1);auto o=s.apply(frame({.3f,1,-.1f}),0);ck(!s.active(1)&&apart(o.hands[1].grip.position,{.3f,1,-.1f})<1e-6f);}
+ // a stop that rewinds (2026-10-30): at the pose shown one or two frames before the last
+ {HitStop s;double t=0;s.apply(frame({.3f,1,0}),t);t=.01;s.apply(frame({.3f,1,-.1f}),t);t=.02;s.apply(frame({.3f,1,-.2f}),t);
+  s.stop(2,.1,1);t=.03;auto o=s.apply(frame({.3f,1,-.3f}),t);ck(apart(o.hands[1].grip.position,{.3f,1,-.1f})<1e-6f);}
+ {HitStop s;double t=0;s.apply(frame({.3f,1,0}),t);t=.01;s.apply(frame({.3f,1,-.1f}),t);t=.02;s.apply(frame({.3f,1,-.2f}),t);
+  s.stop(2,.1,2);t=.03;auto o=s.apply(frame({.3f,1,-.3f}),t);ck(apart(o.hands[1].grip.position,{.3f,1,0})<1e-6f);}
+ // a stop at a moment (2026-10-30): between the two frames shown about it (by number); before the oldest kept, the oldest;
+ // after the newest, the newest
+ {HitStop s;double t=0;for(int i=0;i<4;i++){HandFrame a=frame({.3f,1,-.1f*float(i)});a.frame=100+i;s.apply(a,t);t+=.01;}
+  s.stop(2,.1,0,101.5);HandFrame b=frame({.3f,1,-.4f});b.frame=104;auto o=s.apply(b,t);ck(apart(o.hands[1].grip.position,{.3f,1,-.15f})<1e-5f);
+  s.reset();t=0;for(int i=0;i<3;i++){HandFrame a=frame({.3f,1,-.1f*float(i)});a.frame=200+i;s.apply(a,t);t+=.01;}
+  s.stop(2,.1,0,150);b=frame({.3f,1,-.3f});b.frame=203;o=s.apply(b,t);ck(apart(o.hands[1].grip.position,{.3f,1,0})<1e-5f);
+  s.reset();t=0;for(int i=0;i<3;i++){HandFrame a=frame({.3f,1,-.1f*float(i)});a.frame=300+i;s.apply(a,t);t+=.01;}
+  s.stop(2,.1,0,302.5);b=frame({.3f,1,-.3f});b.frame=303;o=s.apply(b,t);ck(apart(o.hands[1].grip.position,{.3f,1,-.25f})<1e-5f);
+  // past the newest by more than 1.5 frames: 1.5
+  s.reset();t=0;for(int i=0;i<3;i++){HandFrame a=frame({.3f,1,-.1f*float(i)});a.frame=400+i;s.apply(a,t);t+=.01;}
+  s.stop(2,.1,0,410);b=frame({.3f,1,-.3f});b.frame=403;o=s.apply(b,t);ck(apart(o.hands[1].grip.position,{.3f,1,-.35f})<1e-5f);}
+ // a turned hand between two frames: the turn halfway
+ {HitStop s;HandFrame a=frame({.3f,1,0},0);a.frame=1;s.apply(a,0);HandFrame b=frame({.3f,1,0},1.f);b.frame=2;s.apply(b,.01);
+  s.stop(2,.1,0,1.5);HandFrame c=frame({.3f,1,0},1.f);c.frame=3;auto o=s.apply(c,.02);const Quat q=euler(.5f,0,0);
+  ck(std::abs(o.hands[1].grip.orientation.y-q.y)<1e-3f&&std::abs(o.hands[1].grip.orientation.w-q.w)<1e-3f);}
+ // five back of six shown
+ {HitStop s;double t=0;for(int i=0;i<7;i++){s.apply(frame({.3f,1,-.1f*float(i)}),t);t+=.01;}s.stop(2,.1,5);auto o=s.apply(frame({.3f,1,-.7f}),t);ck(apart(o.hands[1].grip.position,{.3f,1,-.1f})<1e-5f);}
+ // more than it has: as far back as it has
+ {HitStop s;double t=0;s.apply(frame({.3f,1,0}),t);s.stop(2,.1,2);t=.01;auto o=s.apply(frame({.3f,1,-.1f}),t);ck(apart(o.hands[1].grip.position,{.3f,1,0})<1e-6f);}
  std::cout<<"PASS hit_stop "<<n<<" checks\n";return 0;
 }catch(const std::exception& e){std::cerr<<"FAIL "<<e.what()<<'\n';return 1;}}

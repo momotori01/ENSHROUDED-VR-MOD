@@ -339,11 +339,61 @@ inline std::atomic<uint64_t> strongActionAt{0},bowNativeFireAt{0},bowNativeRefus
 inline std::array<std::atomic<int64_t>,3> remoteSpawnOrigin{};inline std::array<std::atomic<float>,3> remoteSpawnDirection{};
 inline void (*shotHitArrived)(const std::array<int64_t,3>&,bool,uint32_t,uint64_t)=nullptr;
 inline void (*shotSurfaceArrived)(const std::array<int64_t,3>&,evr::Vec3,uint64_t)=nullptr;   // a guest's arrow met a surface (live_melee_targets.hpp publishSurfaceHit)
-struct HitWatch {uint64_t from=0,until=0;unsigned hands=0;double seconds=0;bool left=false;uint64_t binding=0;
+struct HitWatch {uint64_t from=0,until=0;unsigned hands=0;double seconds=0;bool left=false,tool=false;uint64_t binding=0;
  struct Item {uint32_t entity=0;int32_t state=-1;float last=-1,closest=-1;bool touched=false,learned=false,character=false;};std::array<Item,16> items{};size_t count=0;};
 inline HitWatch hitWatch;
+// A tool's stroke at a thing stops where the head meets its surface, by the game's own ray test (2026-10-30, user: "the axe's
+// hit stop misfires a lot - it stops past the tree, or when I swing back; can it stop at the tree's surface?", then, of the
+// ways offered, "remake it with the ray"). Headset run 20261025-014644 (two big trees, 19 axe hits): every point of the game's
+// HitEvents lay on a cylinder 0.86 m about the trunk's centre (to 0.01 m), while the stop took the blade within 0.55 m of the
+// thing's axis ("touch" at 0.36..0.54 m: inside the trunk already) or the turn of a blade that never came so near ("closest":
+// the end of the stroke, or the swing back). On every frame a tool is swung (at 0.8 of the speed of its stroke or more - not
+// from its press on: a tool's press comes late, headset run 20261030-014509: the first answers 78 ms after the press had the
+// blade 0.0..0.2 m from the trunk's centre, the trunk's surface 0.89 m - "it goes to the middle") the head (90 % of the
+// blade from the hilt) asks a ray (world_ray.hpp askStrike: the colliders and the voxels, as the guest's arrows) from where
+// it was on the frame before to where it goes by the next one and strikeLead further (its edge before the haft). The
+// answer comes on the next frame: a surface the edge has reached by then (no further along the ray than the head now and
+// strikeLead), with a thing (not a creature) within 1.5 m of the blade, is the touch of that thing - one a swing (600 ms).
+// The ground or a wall away from things stops nothing (mining the ground did not stop before either). While the ray
+// answers, a stroke no longer stops at the 0.55 m of the axis; without it (world_ray off) it does as before.
+// Every weapon at a thing since 2026-10-30 (user, after the axe: "good - if it costs nothing, why not the ordinary attacks
+// too?", then "then only the things by the ray"): a sword at a pot or a tree the same; a creature as before (the ray meets
+// the world's colliders and voxels - not known to meet a creature's body - and the stroke's look-ahead press comes in time
+// there). The weapon of the right hand (the left one of a pair keeps the old touch). The touch is told to a host (online,
+// hitReport / hitThing) only from a swing at the speed of a stroke - a slower one stops the hand but makes no attack.
+inline uint64_t (*strikeAsk)(const float* from,const float* to)=nullptr;
+inline bool (*strikeAnswer)(uint64_t serial,bool& hit,float* at)=nullptr;
+inline bool strikeRayWorks=false;
+struct ToolRay {bool headKnown=false;std::array<double,3> head{},from{},direction{};uint64_t headAt=0,asked=0,blockedUntil=0,strikeUntil=0,binding=0;float speed=0;
+    double askedHeadAlong=0;uint64_t headFrame=0,askedFrom=0,askedTo=0;};
+inline ToolRay toolRay;
+// A tool's head for its cursor (building_cursor_ray.hpp; 2026-10-30, user: "the pickaxe digs the ground below", headset run
+// 20261030-023058): the game digs where its cursor's ray meets the ground - each dig lay at the cursor's point (0.15 m apart
+// at the nearest sample) - and with a tool the ray came from the right hand's pointer, which points down in a stroke: past
+// the stone to the ground below it. While a tool swings, where its head is and the way it goes; and where the head met a
+// surface in a stroke (the first in 0.4 s). (Laying the cursor nowhere but at a strike - no ring - took the digs away, headset
+// run 20261030-021912: the strike was then kept only out of the strokes' cooldown, whose flag stood nearly always.)
+struct ToolAim {uint64_t heldAt=0,swingAt=0,strikeAt=0;std::array<double,3> head{},way{},strike{},strikeWay{};};
+inline std::mutex toolAimMutex;inline ToolAim toolAim;
+// What a stop by the ray needs (2026-10-30, user: "the axe's hit: pulling it back with the controller inside the tree, it
+// stops - don't stop when it is not a hit that does damage"): the swing at the speed of a stroke (its share 1.0) and the
+// stroke's own press within 0.15 s before the touch or 0.1 s after it - the stop then rewinds to the touch. A first try
+// (the blade coming nearer the axis, no cooldown) refused the hits too, headset run 20261030-021912 ("the axe passes through
+// more"): the cooldown's flag stood through the strokes that did damage, and the blade's distance to the axis does not
+// shrink frame by frame on a stroke past the trunk; every hit that did damage (a HitEvent, -18) had its press 30..80 ms
+// before or after the touch, drawing the axe out had none.
+inline constexpr float strikeStopShare=1.f;
+struct PendingTouch {uint64_t at=0,frame=0;uint32_t entity=0;float distance=0;int32_t state=-1;unsigned rewind=0;bool tool=false,twoHanded=false;uint64_t binding=0;float speed=0;double atFrame=-1;};
+inline PendingTouch pendingTouch;
+inline const double strikeLead=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_STRIKE_RAY_LEAD_CM",v,sizeof v);const double cm=n&&n<sizeof v?std::atof(v):12.0;
+    return std::isfinite(cm)&&cm>=0&&cm<=40?cm/100:.12;}();
+// Where the stop shows the head (90 % of the blade): this far short of the surface along its way (below 0: past it).
+// 8 cm short first; 2026-10-30 03:00, user: "still about 20 cm short of the tree" - 12 cm past since. EVR_STRIKE_SHOW_LEAD_CM=<-30..30>.
+inline const double strikeShowLead=[]{char v[16]{};const auto n=GetEnvironmentVariableA("EVR_STRIKE_SHOW_LEAD_CM",v,sizeof v);const double cm=n&&n<sizeof v?std::atof(v):-12.0;
+    return std::isfinite(cm)&&cm>=-30&&cm<=30?cm/100:-.12;}();
 // To the frame that shows the hands: the latest stop asked (serial), which hands (bit 0 left, bit 1 right), how long (ms).
-inline std::atomic<uint32_t> hitStopSerial{0},hitStopHands{0},hitStopMs{0};
+inline std::atomic<uint32_t> hitStopSerial{0},hitStopHands{0},hitStopMs{0},hitStopRewind{0};   // rewind: frames back (include/evr/hit_stop.hpp stop)
+inline std::atomic<double> hitStopAtFrame{-1};   // or the moment (a hand frame and a fraction) whose tracked pose it stops at; -1: none
 // On or off: the VR settings ([Melee] HitStop, EVR_HIT_STOP=0 from the loader; changed in the game's start menu, 17:40).
 inline std::atomic<bool> hitStopOn{true};
 struct StrokeOutcome {uint32_t entity=0;int32_t before=-1;uint64_t at=0,frame=0;float stick=0,metres=0;bool ahead=false;unsigned serial=0;};
@@ -1248,39 +1298,113 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                     if(specialStroke){if(specialUntil||swing.press)pad.buttons&=~evr::motion::LivePadMapper::X;else specialStroke=false;}
                     // The hit stop's watch (hitWatch above): the blade of the stroke against what is near it, every frame for 0.7 s.
                     if(hitSettle)hitSettle(now);
+                    // A tool's swing: the head's ray on every frame of the swing (strikeAsk above).
+                    {const bool toolHeld=rightWeapon.binding&&rightWeapon.blade&&weaponFrame==hands.frame&&strikeAsk&&strikeAnswer&&hitWatchNear;   // any weapon of the right hand (the name kept)
+                     const bool isTool=rightWeapon.weaponType==255||!rightWeapon.needsTarget;
+                     if(!toolHeld||toolRay.binding!=rightWeapon.binding){toolRay=ToolRay{};toolRay.binding=toolHeld?rightWeapon.binding:0;pendingTouch={};}
+                     if(toolHeld&&isTool){std::lock_guard<std::mutex> lock(toolAimMutex);toolAim.heldAt=now;}
+                     if(toolHeld){
+                        if(swing.sampled)toolRay.speed=swing.required>0?swing.speed/swing.required:0.f;
+                        constexpr double iq=1.0/4294967296.0;std::array<double,3> head{};
+                        for(size_t k=0;k<3;k++)head[k]=(double(rightWeapon.bladeFrom[k])+(double(rightWeapon.bladeTo[k])-double(rightWeapon.bladeFrom[k]))*.9)*iq;
+                        // the answer of the ray asked on the frame before
+                        if(toolRay.asked){bool met=false;float at[3]{};
+                            if(strikeAnswer(toolRay.asked,met,at)){toolRay.asked=0;strikeRayWorks=true;
+                                if(met){double along=0,headAlong=0;for(size_t k=0;k<3;k++){along+=(double(at[k])-toolRay.from[k])*toolRay.direction[k];headAlong+=(head[k]-toolRay.from[k])*toolRay.direction[k];}
+                                    // met by now, or by the next frame as the head goes on (the ray reaches a frame further since 2026-10-30
+                                    // 03:00: the stop then comes before the head is shown in the surface - user: "it looks like a bounce back")
+                                    const double stepNow=std::max(0.0,headAlong-toolRay.askedHeadAlong);
+                                    const bool reached=along<=headAlong+stepNow+strikeLead;
+                                    std::array<HitNear,16> nearby{};const auto n=hitWatchNear(rightWeapon,2.5f,nearby.data(),nearby.size(),now);
+                                    size_t closeBy=n;for(size_t k=0;k<n;++k)if(!nearby[k].character&&nearby[k].distance<=1.5f&&(closeBy==n||nearby[k].distance<nearby[closeBy].distance))closeBy=k;
+                                    const bool stopping=reached&&closeBy<n&&toolRay.speed>=strikeStopShare&&now>=toolRay.blockedUntil&&!pendingTouch.at;
+                                    // the frame whose edge (the head and strikeLead) lay nearest the surface: this one, the one before or the one
+                                    // before that (the ray's start) - the stop rewinds to it
+                                    unsigned rewind=0;{const double now0=std::abs(headAlong+strikeLead-along),one=std::abs(toolRay.askedHeadAlong+strikeLead-along),two=std::abs(strikeLead-along);
+                                        rewind=now0<=one&&now0<=two?0u:one<=two?1u:2u;}
+                                    // the moment the head was strikeShowLead short of the surface, between the frames on the ray's line: the ray's
+                                    // start (askedFrom, 0), the frame it was asked (askedTo, askedHeadAlong) and this one (headAlong)
+                                    double atFrame=double(hands.frame);
+                                    {const double target=along-strikeShowLead,h1=toolRay.askedHeadAlong,h0=headAlong;
+                                     const double f2=double(toolRay.askedFrom),f1=double(toolRay.askedTo),f0=double(hands.frame);
+                                     if(toolRay.askedFrom&&toolRay.askedTo>toolRay.askedFrom&&hands.frame>toolRay.askedTo){
+                                        if(target<=0)atFrame=f2;
+                                        else if(target<=h1)atFrame=f2+(f1-f2)*target/h1;
+                                        else if(h0>h1&&target<h0)atFrame=f1+(f0-f1)*(target-h1)/(h0-h1);
+                                        else if(h0>h1)atFrame=f0+std::min(1.5,(f0-f1)*(target-h0)/(h0-h1));   // ahead of the head now: as it goes on
+                                        else atFrame=f1;}}
+                                    // a tool's strike for its cursor (ToolAim above): the first surface met in 0.4 s while it swings
+                                    if(isTool&&reached&&toolRay.speed>=.8f&&now>=toolRay.strikeUntil){toolRay.strikeUntil=now+400;
+                                        std::lock_guard<std::mutex> lock(toolAimMutex);toolAim.strikeAt=now;for(size_t k=0;k<3;k++){toolAim.strike[k]=double(at[k]);toolAim.strikeWay[k]=toolRay.direction[k];}}
+                                    static unsigned rayLogs=0;
+                                    if(rayLogs<600){++rayLogs;std::ostringstream o;o<<std::setprecision(5)<<"\"frame\":"<<hands.frame<<",\"at\":["<<at[0]<<','<<at[1]<<','<<at[2]<<"],\"ahead_of_head_m\":"<<(along-headAlong)
+                                        <<",\"speed_share\":"<<toolRay.speed<<",\"thing\":"<<(closeBy<n?nearby[closeBy].entity:0u)<<",\"blade_to_axis_m\":"<<(closeBy<n?nearby[closeBy].distance:-1.f)<<",\"touch\":"<<(stopping?"true":"false")<<",\"rewind\":"<<rewind<<",\"at_frame_back\":"<<(double(hands.frame)-atFrame);
+                                        logFile->event("strike_ray_met",o.str());}
+                                    if(stopping){
+                                        pendingTouch={now,hands.frame,nearby[closeBy].entity,nearby[closeBy].distance,nearby[closeBy].state,rewind,isTool,rightWeapon.twoHanded,rightWeapon.binding,toolRay.speed,atFrame};}}}}
+                        // A touch stops when its stroke's press is there: one within 0.15 s before it (strokeMs, this frame's too), or
+                        // the press up to 0.1 s after it - rewound to the touch (PendingTouch above). Without a press it was no hit.
+                        if(pendingTouch.at){const auto pressed=swing.fired?now:strokeMs.load();
+                            const bool pressNear=pressed&&(pressed>=pendingTouch.at?pressed-pendingTouch.at<=100:pendingTouch.at-pressed<=150);
+                            if(pressNear){const auto& pt=pendingTouch;const unsigned back=std::min<unsigned>(6u,pt.rewind+unsigned(hands.frame>pt.frame?hands.frame-pt.frame:0));
+                                toolRay.blockedUntil=now+600;   // one stop a stroke
+                                if(hitStopOn.load()){hitStopHands=pt.twoHanded?3u:2u;hitStopMs=uint32_t(evr::motion::hitStopSeconds(pt.tool,pt.twoHanded)*1000+.5);hitStopRewind=back;hitStopAtFrame=pt.atFrame;hitStopSerial.fetch_add(1);}
+                                static unsigned told=0;if(told++<400){std::ostringstream o;o<<std::setprecision(3)<<"\"entity\":"<<pt.entity<<",\"by\":\"ray\",\"metres\":"<<pt.distance<<",\"rewind\":"<<back
+                                    <<",\"at_frame\":"<<std::setprecision(9)<<pt.atFrame<<std::setprecision(3)<<",\"press_after_touch_ms\":"<<(int64_t(pressed)-int64_t(pt.at))<<",\"speed_share\":"<<pt.speed<<",\"hands\":"<<(pt.twoHanded?3:2)<<",\"seconds\":"<<evr::motion::hitStopSeconds(pt.tool,pt.twoHanded)
+                                    <<",\"tool\":"<<(pt.tool?"true":"false")<<",\"frame\":"<<hands.frame;logFile->event("hit_stop",o.str());}
+                                if(pt.speed>=1.f){   // to a host (online; nothing in solo)
+                                    if(hitReport)hitReport(pt.entity,false,now);
+                                    if(hitThing)hitThing(pt.entity,pt.binding,now);}
+                                pendingTouch={};}
+                            else if(now>pendingTouch.at+100){static unsigned told=0;if(told++<200)logFile->event("ray_touch_without_press","\"entity\":"+std::to_string(pendingTouch.entity)+",\"frame\":"+std::to_string(pendingTouch.frame));pendingTouch={};}}
+                        // the next: from where the head was to where it goes by the next frame and strikeLead further
+                        if(toolRay.headKnown&&now>toolRay.headAt&&now-toolRay.headAt<100&&toolRay.speed>=.5f){
+                            std::array<double,3> step{};double length=0;for(size_t k=0;k<3;k++){step[k]=head[k]-toolRay.head[k];length+=step[k]*step[k];}length=std::sqrt(length);
+                            if(length>.002){float from[3],to[3];
+                                for(size_t k=0;k<3;k++){toolRay.from[k]=toolRay.head[k];toolRay.direction[k]=step[k]/length;from[k]=float(toolRay.head[k]);to[k]=float(head[k]+toolRay.direction[k]*(2*length+strikeLead));}
+                                toolRay.asked=strikeAsk(from,to);toolRay.askedHeadAlong=length;toolRay.askedFrom=toolRay.headFrame;toolRay.askedTo=hands.frame;
+                                if(isTool){std::lock_guard<std::mutex> lock(toolAimMutex);toolAim.swingAt=now;toolAim.head=head;toolAim.way=toolRay.direction;}}}
+                        toolRay.head=head;toolRay.headKnown=true;toolRay.headAt=now;toolRay.headFrame=hands.frame;}}
                     if((hitStopOn.load()||hitPredict)&&hitWatch.until&&hitWatchState&&hitWatchNear){
                         if(now>=hitWatch.until)hitWatch=HitWatch{};
                         else{
                             const auto stop=[&](const HitWatch::Item& it,const char* by,float distance,int32_t is){
                                 if(!hitStopOn.load())return;
-                                hitStopHands=hitWatch.hands;hitStopMs=uint32_t(hitWatch.seconds*1000+.5);hitStopSerial.fetch_add(1);
+                                hitStopHands=hitWatch.hands;hitStopMs=uint32_t(hitWatch.seconds*1000+.5);hitStopRewind=0;hitStopAtFrame=-1;hitStopSerial.fetch_add(1);
                                 static unsigned told=0;if(told++<400){std::ostringstream o;o<<std::setprecision(3)<<"\"entity\":"<<it.entity<<",\"by\":\""<<by<<"\",\"metres\":"<<distance
                                     <<",\"closest\":"<<it.closest<<",\"was\":"<<it.state<<",\"is\":"<<is<<",\"after_press_ms\":"<<(now-hitWatch.from)<<",\"hands\":"<<hitWatch.hands
                                     <<",\"seconds\":"<<hitWatch.seconds<<",\"frame\":"<<hands.frame;logFile->event("hit_stop",o.str());}};
                             // the blade of the hand that struck, as it is on this frame
                             const auto& carried=hitWatch.left?leftWeapon:rightWeapon;
                             const bool fresh=carried.binding==hitWatch.binding&&(hitWatch.left?offhandFrame:weaponFrame)==hands.frame;
-                            if(fresh){std::array<HitNear,16> nearby{};const auto n=hitWatchNear(carried,2.5f,nearby.data(),nearby.size(),now);
+                            if(fresh){
+                                std::array<HitNear,16> nearby{};const auto n=hitWatchNear(carried,2.5f,nearby.data(),nearby.size(),now);
+                                const bool rayed=!hitWatch.left&&strikeAsk&&strikeAnswer&&strikeRayWorks;   // a thing's touch by the right hand's ray (strikeAsk above)
                                 for(size_t k=0;k<n;++k){const auto& x=nearby[k];
                                     size_t at=hitWatch.count;for(size_t j=0;j<hitWatch.count;++j)if(hitWatch.items[j].entity==x.entity){at=j;break;}
                                     if(at==hitWatch.count){if(hitWatch.count>=hitWatch.items.size())continue;at=hitWatch.count++;hitWatch.items[at].entity=x.entity;hitWatch.items[at].state=x.state;hitWatch.items[at].character=x.character;}
                                     auto* it=&hitWatch.items[at];
                                     if(!it->touched){
-                                        const bool inside=x.distance<=x.body;
-                                        const bool turned=it->last>=0&&it->last<=x.reach&&x.distance>it->last+.01f&&it->closest>=0&&it->closest<=x.body+.25f;
+                                        const bool inside=x.distance<=x.body&&!(rayed&&!x.character);
+                                        // A stroke at a thing (a tree, a rock, a pot) - a tool's, or one the ray watches: no stop at the turn of a
+                                        // blade that came near - it was the end of the stroke or the swing back (2026-10-30); the ray's touch.
+                                        const bool turned=!((hitWatch.tool||rayed)&&!x.character)&&it->last>=0&&it->last<=x.reach&&x.distance>it->last+.01f&&it->closest>=0&&it->closest<=x.body+.25f;
                                         if(it->closest<0||x.distance<it->closest)it->closest=x.distance;
                                         if(inside||turned){it->touched=true;stop(*it,inside?"touch":"closest",x.distance,x.state);
                                             if(hitPredict&&x.character)hitPredict(x.entity,hitWatch.binding,now);
                                             if(hitReport)hitReport(x.entity,x.character,now);
                                             if(hitThing&&!x.character)hitThing(x.entity,hitWatch.binding,now);}
                                     }
-                                    it->last=x.distance;}}
+                                    it->last=x.distance;}
+                                }
                             // the game's own hit on what the blade was not seen to touch
                             for(size_t k=0;k<hitWatch.count;++k){auto& it=hitWatch.items[k];
                                 if(it.state==-2)continue;
                                 const int32_t is=hitWatchState(it.entity);
                                 const bool hit=(it.state>=0&&is>=0&&is<it.state)||is==-2;
-                                if(hit&&!it.touched){it.touched=true;stop(it,is==-2?"gone":"health",it.last,is);}
+                                // (a stroke at a thing - a tool's, or one the ray watches: the game's hit comes some 0.1 s after the touch -
+                                // by then the blade is past the surface or swinging back; no stop then - the ray's touch)
+                                if(hit&&!it.touched){it.touched=true;if(!((hitWatch.tool||(!hitWatch.left&&strikeAsk&&strikeAnswer&&strikeRayWorks))&&!it.character))stop(it,is==-2?"gone":"health",it.last,is);}
                                 if(hitLearn&&it.touched&&!it.learned&&it.character&&it.state>=0&&is>=0&&is<it.state){it.learned=true;hitLearn(it.entity,hitWatch.binding,it.state,is);}
                                 if(is!=-1||it.state==-1)it.state=is;}
                         }
@@ -1297,7 +1421,8 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         strokeMs.store(now);
                         if((hitStopOn.load()||hitPredict)&&hitWatchNear){   // the hit stop's watch from this stroke on (it looks from the next frame)
                             hitWatch=HitWatch{};hitWatch.from=now;hitWatch.until=now+700;hitWatch.left=leftStruck;hitWatch.binding=weapon.binding;
-                            hitWatch.hands=weapon.twoHanded?3u:(leftStruck?1u:2u);hitWatch.seconds=evr::motion::hitStopSeconds(weapon.weaponType==255||!weapon.needsTarget,weapon.twoHanded);}
+                            hitWatch.hands=weapon.twoHanded?3u:(leftStruck?1u:2u);hitWatch.seconds=evr::motion::hitStopSeconds(weapon.weaponType==255||!weapon.needsTarget,weapon.twoHanded);
+                            hitWatch.tool=weapon.weaponType==255||!weapon.needsTarget;}
                         {static unsigned serial=0;strokeOutcome.entity=target.entity;strokeOutcome.before=targetHealth&&target.entity?targetHealth(target.entity):-1;strokeOutcome.at=now;strokeOutcome.frame=hands.frame;
                          strokeOutcome.stick=std::hypot(pad.leftX/32767.f,pad.leftY/32767.f);strokeOutcome.metres=target.distance;strokeOutcome.ahead=target.ahead;strokeOutcome.serial=++serial;}   // the hit volume's sweep starts here (motion_collider_apply.hpp replayCurrent)
                         if(observeMeleeNative){const auto running=observeMeleeNative();std::lock_guard<std::mutex> lock(livePressMutex);

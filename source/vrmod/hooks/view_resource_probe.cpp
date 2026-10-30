@@ -1460,7 +1460,7 @@ bool beginLiveFrame(uintptr_t view,uint32_t eyes=3){
         shownHands=handSmoothing.update(handHoldWanted?handHold.update(liveFrame.hands):liveFrame.hands);
         // The hit stop (include/evr/hit_stop.hpp; asked by controller_ui_fixture.hpp when a stroke's hit is seen).
         {static uint32_t seenSerial=0;const auto serial=controllerUiFixture::hitStopSerial.load();
-         if(serial!=seenSerial){seenSerial=serial;hitStop.stop(controllerUiFixture::hitStopHands.load(),controllerUiFixture::hitStopMs.load()/1000.);}
+         if(serial!=seenSerial){seenSerial=serial;hitStop.stop(controllerUiFixture::hitStopHands.load(),controllerUiFixture::hitStopMs.load()/1000.,controllerUiFixture::hitStopRewind.load(),controllerUiFixture::hitStopAtFrame.load());}
          // Never the frame's failure (2026-10-20 14:10: a refused vibration once ended VR): a fault shows the hands as they come.
          try{shownHands=hitStop.apply(shownHands,std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count());}
          catch(const std::exception& e){hitStop.reset();static unsigned told=0;if(told++<5)logFile->event("hit_stop_failure","\"reason\":"+jsonString(e.what()));}}
@@ -2876,18 +2876,21 @@ void * __fastcall render(void *out,void *context,void *view,void *parameters,voi
                 pieceDetail=at&&nowMs>=at&&nowMs-at<=1500&&controllerUiFixture::pieceDetailOn(nowMs);
                 static bool loggedDetail=false;static unsigned detailLogs=0;
                 if(pieceDetail!=loggedDetail&&detailLogs++<200){loggedDetail=pieceDetail;logFile->event("piece_detail_refresh","\"frame\":"+std::to_string(liveFrame.frame)+",\"every_frame\":"+(pieceDetail?"true":"false"));}}
-            // While a menu is open, the original View every frame - only when the player turned it on ([Picture] MenuRefresh,
+            // While a menu is open, no frame of the original View - only when the player turned it on ([Picture] MenuRefresh,
             // EVR_MENU_REFRESH=1; 2026-10-27, user: "the UI flicker: a setting, on only for those who see it, then no one else is
             // touched"). The flicker: the character of the inventory's equipment screen going black now and then (an ALVR player's
-            // report 20261025-093518, "had this in all releases"; this PC too). Guess: the game draws that character from what the
-            // original View's frame prepares, which the skip leaves to one frame in desktopSkipEvery. Costs a frame of the original
-            // View on each menu frame (only while a menu is open).
+            // report 20261025-093518, "had this in all releases"; this PC too). 0.9.18 drew the original View on every menu frame
+            // instead, and the character was black all the time (the same player's report 20261027-103753, ui-003081, "it doesn't
+            // flicker any more, instead it is totally black"): the black comes with the original View's frames - one in
+            // desktopSkipEvery, the flicker. So a menu now draws none: the refresh that falls due waits until the menu has gone
+            // (refreshOwed, then on its first frame). Lighter, not heavier, while a menu is open.
             static const bool menuRefresh=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MENU_REFRESH",v,sizeof v);return n==1&&v[0]=='1';}();
             bool menuNow=false;
             if(menuRefresh){const auto at=menuPointer::menuSeenAt.load();const auto nowMs=GetTickCount64();menuNow=at&&nowMs>=at&&nowMs-at<=500;
                 static bool loggedMenu=false;static unsigned menuLogs=0;
-                if(menuNow!=loggedMenu&&menuLogs++<400){loggedMenu=menuNow;logFile->event("menu_refresh","\"frame\":"+std::to_string(liveFrame.frame)+",\"every_frame\":"+(menuNow?"true":"false"));}}
-            bool refreshNow=desktopSkipEvery&&(!(desktopSkipCandidates%desktopSkipEvery)||refreshOwed||pieceDetail||menuNow);
+                if(menuNow!=loggedMenu&&menuLogs++<400){loggedMenu=menuNow;logFile->event("menu_refresh","\"frame\":"+std::to_string(liveFrame.frame)+",\"original_view_held\":"+(menuNow?"true":"false"));}}
+            bool refreshNow=desktopSkipEvery&&(!(desktopSkipCandidates%desktopSkipEvery)||refreshOwed||pieceDetail);
+            if(refreshNow&&menuNow&&!pieceDetail){refreshOwed=true;refreshNow=false;}   // after the menu (the airborne hold's count is not touched)
             if(refreshNow&&fallRefreshHold){
                 bool airborne=false;{std::lock_guard<std::mutex> lock(inputHeadIdle::mutex);const auto& s=inputHeadIdle::latest;const auto now=GetTickCount64();
                     airborne=s.actorKnown&&s.milliseconds&&now>=s.milliseconds&&now-s.milliseconds<=500&&!(s.actorState&1ull);}
@@ -3967,6 +3970,10 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                     for(size_t k=0;k<n;++k)out[k]={nearby[k].entity,nearby[k].distance,nearby[k].body,nearby[k].reach,nearby[k].state,nearby[k].character};
                     return n;};
                 controllerUiFixture::hitWatchState=&liveTargets::stateNow;
+                // a tool's touch of a thing by the game's ray test (controller_ui_fixture.hpp strikeAsk, world_ray.hpp askStrike)
+                controllerUiFixture::strikeAsk=[](const float* from,const float* to)->uint64_t{return worldRay::enabled?worldRay::askStrike(from,to):0;};
+                controllerUiFixture::strikeAnswer=[](uint64_t serial,bool& hit,float* at){if(!serial)return false;const auto a=worldRay::strikeAnswer();if(a.serial!=serial)return false;
+                    hit=a.hit;for(int k=0;k<3;k++)at[k]=a.at[k];return true;};
                 if(liveTargets::predictWanted){controllerUiFixture::hitPredict=&liveTargets::predictHit;controllerUiFixture::hitSettle=&liveTargets::settlePredictions;controllerUiFixture::hitLearn=&liveTargets::learnHit;
                  // the running action of the local player, for the stroke's attack modifier (live_melee_targets.hpp estimateStroke)
                  liveTargets::runningSequence=[]{actionSequenceObserver::Status a;{std::lock_guard<std::mutex> lock(actionSequenceObserver::mutex);a=actionSequenceObserver::latest;}

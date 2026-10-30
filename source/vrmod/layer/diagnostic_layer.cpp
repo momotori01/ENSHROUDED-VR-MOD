@@ -208,6 +208,7 @@ void cmdStack(const char *kind, const std::string &detail) noexcept
 }
 } // namespace
 #include "mesh_draw_guard.hpp"
+#include "pipeline_census.hpp"
 #include "exit_progress.hpp"
 #include "present_retirement.hpp"
 void giReprojectModuleDestroyed(VkShaderModule module) noexcept;void giReprojectPipelineDestroyed(VkPipeline pipeline) noexcept;
@@ -919,7 +920,7 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateShaderModule(VkDevice d, const VkShaderM
         }catch(const std::exception& e){store->failed=true;note("body_shader_patch_failure","\"reason\":"+jsonString(e.what()));}
     }
     if(!replaced)r=fn(d,info,a,module);
-    if(r==VK_SUCCESS)uiCapture::shaderCreated(d,info,*module);
+    if(r==VK_SUCCESS){uiCapture::shaderCreated(d,info,*module);pipelineCensus::shaderCreated(info,*module);}
     uint64_t h = 14695981039346656037ull;
     for (size_t i = 0; i < info->codeSize / 4; i++)
     {
@@ -962,6 +963,7 @@ extern "C" __declspec(dllexport) uint32_t evrVfxTransparentShaderStatus(){return
 extern "C" __declspec(dllexport) uint32_t evrVfxDecalShaderStatus(){return vfxDecalShaderModules.load();}
 VKAPI_ATTR void VKAPI_CALL evrCmdDraw(VkCommandBuffer c, uint32_t a, uint32_t b, uint32_t d, uint32_t e)
 {
+    if (pipelineCensus::draw(c)) return;   // the tool ring left out (pipeline_census.hpp)
     draws++;
     sweepDepthDraw(c,a<=6?2:1);gpuTimingNote(c,0);uiDraw::draw(c,true);
     deviceFn<PFN_vkCmdDraw>(c, "vkCmdDraw")(c, a, b, d, e);
@@ -969,6 +971,7 @@ VKAPI_ATTR void VKAPI_CALL evrCmdDraw(VkCommandBuffer c, uint32_t a, uint32_t b,
 VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndexed(VkCommandBuffer c, uint32_t a, uint32_t b, uint32_t d, int32_t e,
                                              uint32_t f)
 {
+    if (pipelineCensus::draw(c)) return;   // the tool ring left out (pipeline_census.hpp)
     draws++;
     sweepDepthDraw(c,a<=6?2:1);gpuTimingNote(c,0);uiDraw::draw(c,true);
     deviceFn<PFN_vkCmdDrawIndexed>(c, "vkCmdDrawIndexed")(c, a, b, d, e, f);
@@ -976,6 +979,7 @@ VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndexed(VkCommandBuffer c, uint32_t a, uint
 VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndirect(VkCommandBuffer c, VkBuffer b, VkDeviceSize o, uint32_t n,
                                               uint32_t s)
 {
+    if (pipelineCensus::draw(c)) return;   // the tool ring left out (pipeline_census.hpp)
     indirects++;cmdStack("draw_indirect","\"draws\":"+std::to_string(n));
     sweepDepthDraw(c);gpuTimingNote(c,0);uiDraw::draw(c,false);
     deviceFn<PFN_vkCmdDrawIndirect>(c, "vkCmdDrawIndirect")(c, b, o, n, s);
@@ -983,6 +987,7 @@ VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndirect(VkCommandBuffer c, VkBuffer b, VkD
 VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndexedIndirect(VkCommandBuffer c, VkBuffer b, VkDeviceSize o,
                                                      uint32_t n, uint32_t s)
 {
+    if (pipelineCensus::draw(c)) return;   // the tool ring left out (pipeline_census.hpp)
     indirects++;cmdStack("draw_indexed_indirect","\"draws\":"+std::to_string(n));
     sweepDepthDraw(c);gpuTimingNote(c,0);uiDraw::draw(c,false);
     deviceFn<PFN_vkCmdDrawIndexedIndirect>(c, "vkCmdDrawIndexedIndirect")(c, b, o, n, s);
