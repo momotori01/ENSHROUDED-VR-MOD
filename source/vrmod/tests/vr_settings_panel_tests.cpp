@@ -38,7 +38,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   // the slim rows (2026-10-20): crouch on / off, its depth, the stroke's speed, swimming on / off; the labels' side is no button
   ck(hitAt(1000,rowY(0)+26,false)==Hit::None&&hitAt(1000,rowY(0)+26,true)==Hit::CrouchOn&&hitAt(1100,rowY(0)+26,true)==Hit::CrouchOff&&hitAt(1068,rowY(0)+26,true)==Hit::None);
   ck(hitAt(720,rowY(1)+26,true)==Hit::DropSlider&&hitAt(1160,rowY(1)+26,true)==Hit::DropSlider&&hitAt(900,rowY(2)+26,true)==Hit::SwingSlider);
-  ck(hitAt(1000,rowY(3)+26,true)==Hit::SwimOn&&hitAt(1100,rowY(3)+26,true)==Hit::SwimOff&&hitAt(300,rowY(2)+26,true)==Hit::None&&hitAt(1000,rowY(7)+26,true)==Hit::None);
+  ck(hitAt(1000,rowY(3)+26,true)==Hit::SwimOn&&hitAt(1100,rowY(3)+26,true)==Hit::SwimOff&&hitAt(300,rowY(2)+26,true)==Hit::None&&hitAt(1000,rowY(8)+26,true)==Hit::None);
   // the hit stop on / off (17:40), the fifth row
   ck(hitAt(1000,rowY(4)+26,true)==Hit::HitStopOn&&hitAt(1100,rowY(4)+26,true)==Hit::HitStopOff&&hitAt(1000,rowY(4)+26,false)==Hit::None);
   // the recommended graphics (18:50), the sixth row: one button
@@ -48,6 +48,17 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   ck(pacingOf(Hit::PacingMax)==0&&pacingOf(Hit::PacingHalf)==1&&pacingOf(Hit::PacingFill)==2&&pacingOf(Hit::Recommend)==-1&&hitNamed("pacing_2")==Hit::PacingFill&&int(Hit::PacingFill)<16);
   {const std::string ini="[Picture]\r\nAlternateEyes=1\r\n";const auto out=storePacing(ini,1);ck(evr::settings::read(out).afwPacing==1&&evr::settings::read(storePacing(out,2)).afwPacing==2&&evr::settings::read(storePacing(out,7)).afwPacing==2&&evr::settings::read(out).alternateEyes);
    ck(apply(Body{},Hit::PacingHalf).realCrouch&&store(out,Body{}).find("AfwPacing=1")!=std::string::npos);}
+  // the snap turn (2026-11-01), the eighth row: its slider and its two pills; off and 30 degrees; 10 .. 90 in steps of 5
+  ck(hitAt(1000,rowY(7)+26,true)==Hit::SnapOn&&hitAt(1100,rowY(7)+26,true)==Hit::SnapOff&&hitAt(800,rowY(7)+26,true)==Hit::SnapSlider&&hitAt(800,rowY(7)+26,false)==Hit::None&&hitAt(300,rowY(7)+26,true)==Hit::None);
+  {Body s;ck(!s.snapTurn&&s.snapAngle==30&&apply(s,Hit::SnapOn).snapTurn&&!apply(apply(s,Hit::SnapOn),Hit::SnapOff).snapTurn&&apply(s,Hit::SnapSlider).snapAngle==30&&isSlider(Hit::SnapSlider)&&!isSlider(Hit::SnapOn));
+   ck(sliderSnap(trackStart(snapSlider))==10&&sliderSnap(trackEnd(snapSlider))==90&&sliderSnap(-9)==10&&sliderSnap(9999)==90&&sliderSnap((trackStart(snapSlider)+trackEnd(snapSlider))/2)==50);
+   for(int v=10;v<=90;v+=5)ck(sliderSnap(snapX(v))==v);
+   ck(hitNamed("snap_on")==Hit::SnapOn&&hitNamed("snap_off")==Hit::SnapOff&&hitNamed("snap_slider")==Hit::SnapSlider&&int(Hit::SnapSlider)<32);
+   s.snapTurn=true;s.snapAngle=45;const auto w=store("[Mode]\r\nVR=1\r\n",s);const auto r=evr::settings::read(w);
+   ck(r.snapTurn&&r.snapTurnAngle==45&&w.find("SnapTurn=1\r\n")!=std::string::npos&&w.find("SnapTurnAngle=45\r\n")!=std::string::npos);
+   ck(!evr::settings::read(store(w,Body{})).snapTurn&&evr::settings::read(store(w,Body{})).snapTurnAngle==30);
+   ck(testPresses("10:settings,20:snap_on,30:snap_slider=45").size()==3&&testPresses("10:settings,20:snap_on,30:snap_slider=45")[2].value==45);
+   const auto q=testPresses("10:snap_slider=60;20:snap_on");ck(q.size()==2&&q[0].hit==Hit::SnapSlider&&q[0].value==60&&q[1].hit==Hit::SnapOn);}
   ck(settingsButton.y1-settingsButton.y0<buttonHeight&&settingsButton.x1-settingsButton.x0<bugButton.x1-bugButton.x0);   // only the bug report's button stands out
   {const auto all=boxes(true);for(size_t i=0;i<all.size();++i)for(size_t j=i+1;j<all.size();++j){const auto& a=all[i];const auto& b=all[j];ck(a.x1<=b.x0||b.x1<=a.x0||a.y1<=b.y0||b.y1<=a.y0);}}   // no two overlap
   for(const auto& b:boxes(true))ck(b.y1<=noteTop);
@@ -58,6 +69,7 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
   const auto x=texts(l);ck(x.button&&x.crouch&&x.on&&x.off&&x.drop&&x.note&&x.unsaved&&x.swing&&x.swim&&x.hitStop&&std::wcschr(x.hitStop,L'\n')&&x.recommend&&x.recommendSet&&x.recommendDone&&std::wcschr(x.recommend,L'\n')&&x.pacing&&std::wcschr(x.pacing,L'\n')&&x.pacingMax&&x.pacingHalf&&x.pacingFill&&x.pacingNext&&std::wcschr(x.crouch,L'\n')&&std::wcschr(x.swing,L'\n')&&std::wcschr(x.swim,L'\n'));
   wchar_t b[256]{};ck(std::swprintf(b,256,x.drop,42)>0&&std::wcsstr(b,L"42")!=nullptr);
   wchar_t c[256]{};ck(std::swprintf(c,256,x.swing,135)>0&&std::wcsstr(c,L"135")!=nullptr&&std::wcschr(c,L'%')!=nullptr);
+  wchar_t d[256]{};ck(x.snap&&std::wcschr(x.snap,L'\n')&&std::swprintf(d,256,x.snap,45)>0&&std::wcsstr(d,L"45")!=nullptr&&std::wcschr(d,L'%')==nullptr);
   if(std::string(l)!="english"&&std::string(l)!="klingon")ck(std::wcscmp(x.button,texts("english").button)!=0);}
  ck(hitNamed("borrow_fog")==Hit::None);   // the borrowing's switches are gone (2026-10-18 12:40)
  // The Mock's presses (the slider with its value).

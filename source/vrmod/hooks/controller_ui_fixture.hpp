@@ -12,6 +12,8 @@
 #include <evr/consumable_hand_catalog.hpp>
 #include <evr/room_sneak.hpp>
 #include <evr/swim_stroke.hpp>
+#include <evr/snap_turn.hpp>
+#include <evr/camera_mode.hpp>
 #include <evr/hit_stop.hpp>
 #include <evr/vr_settings_panel.hpp>
 #include <evr/equip_planner.hpp>
@@ -199,6 +201,11 @@ inline std::atomic<int> fishingComponentType{-1};inline std::atomic<uintptr_t> f
 inline std::atomic<uint64_t> castTapAt{0};   // when the trigger's release last tapped the cast (the rod's flick waits a second after it)
 // Set at install (view_resource_probe.cpp): until then the game's orbit input is no turn of the view (camera_control_observer.hpp).
 inline void (*holdTurn)(uint64_t until)=nullptr;
+// Snap turn (include/evr/snap_turn.hpp, 2026-11-01): on / off and the degrees a step, from the settings ([Body] SnapTurn,
+// SnapTurnAngle) and the start menu's VR settings; askSnapTurn hands one step's turn input (radians of the game's camera
+// update, include/evr/snap_turn.hpp snapTurnInput) to the camera hook (camera_control_observer.hpp snapRequest).
+inline std::atomic<bool> snapTurnOn{false};inline std::atomic<int> snapTurnDegrees{30};
+inline void (*askSnapTurn)(float input)=nullptr;
 inline bool fishFight(uint64_t now){const auto at=fishingStateMs.load();const int s=fishingState.load();return at&&now>=at&&now-at<=300&&s>=22&&s<=30;}
 inline bool fishingFloatOut(uint64_t now){const auto at=fishingFloatMs.load();return at&&now>=at&&now-at<=150;}
 // The holsters (include/evr/holster.hpp, hooks/holster_actions.hpp): a grip pressed at its own shoulder or at the left
@@ -1103,6 +1110,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                 // The stick mapper checks age/identity itself and resets on stale or unavailable input.
                 const auto mapped=verticalMapper.update(now,received,ownerSerial,fresh?evr::motion::liveStickMode(screenKind):evr::motion::VerticalStickMode::Unavailable,hands,value);
                 auto pad=liveMapper.update(fresh?screenKind:evr::motion::LiveScreen::Unavailable,mapped,hands,wieldGrip&&!value.active);
+                bool rightStickTaken=false;   // the right stick's x is something else's this frame (a piece's tilt, a fish's pull): no snap turn
                 // The Index trackpad pressed (2026-10-21, user: "the Index has buttons Quest does not - the right pad opens the
                 // inventory, the left the menu with the bug report button, as the temple gesture with a stick press"): the
                 // pad's Start (right) and Back (left) while it is pressed firmly (force 0.55 on, 0.35 off), on the play screen
@@ -1603,7 +1611,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                             const float a=std::abs(lean),x=std::copysign(std::clamp((a-.10f)/(.45f-.10f),0.f,1.f),lean);
                             if(steerLeft){if(std::abs(x)>std::abs(pad.leftX/32767.f))pad.leftX=int16_t(std::lround(x*32767));}
                             else{if(std::abs(x)>std::abs(pad.rightX/32767.f)){pad.rightX=int16_t(std::lround(x*32767));pad.rightY=0;}
-                               if(holdTurn)holdTurn(now+150);}
+                               if(holdTurn)holdTurn(now+150);rightStickTaken=true;}
                             if((std::abs(lean-lastLean)>.1f||tiltLogs<4)&&tiltLogs<600){++tiltLogs;lastLean=lean;
                                logFile->event("live_fishing_rod_tilt","\"frame\":"+std::to_string(hands.frame)+",\"state\":"+std::to_string(fishingState.load())+",\"lean\":"+std::to_string(lean)+",\"stick\":\""+(steerLeft?"left":"right")+"\",\"stick_x\":"+std::to_string((steerLeft?pad.leftX:pad.rightX)/32767.f)+
                                   ",\"direction\":"+std::to_string(fishingDirection.load())+",\"input_state\":"+std::to_string(fishingInputState.load()));}
@@ -1732,7 +1740,7 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                         const auto stick=hands.hands[1].stick;uint16_t direction=0;
                         if(!detail&&hands.hands[1].stickActive&&std::isfinite(stick.x)&&std::isfinite(stick.y)&&std::max(std::abs(stick.x),std::abs(stick.y))>=.6f)
                             direction=std::abs(stick.x)>std::abs(stick.y)?uint16_t(stick.x>0?0x0008:0x0004):uint16_t(stick.y>0?0x0001:0x0002);
-                        pad.buttons&=uint16_t(~mapped.mappedButtons);pad.buttons|=direction;pad.rightTrigger=255;state=1u|(unsigned(direction)<<4)|(detail?2u:0u);
+                        pad.buttons&=uint16_t(~mapped.mappedButtons);pad.buttons|=direction;pad.rightTrigger=255;state=1u|(unsigned(direction)<<4)|(detail?2u:0u);rightStickTaken=true;
                         if(detail){const auto& r=hands.hands[1];
                             if(r.stickActive&&std::isfinite(r.stick.x)&&std::isfinite(r.stick.y)){pad.rightX=int16_t(std::clamp(r.stick.x,-1.f,1.f)*32767.f);pad.rightY=int16_t(std::clamp(r.stick.y,-1.f,1.f)*32767.f);}}
                         else pad.rightX=pad.rightY=0;
@@ -2174,6 +2182,22 @@ inline void onScope(uintptr_t frontend,bool normalHud,uint8_t screen=1,uint8_t a
                  else{if(spell>=4&&spells<=200)logFile->event("turn_ignored_end","\"camera\":"+std::to_string(unsigned(c.camera))+",\"began_camera\":"+std::to_string(unsigned(spellCamera))+
                          ",\"ms\":"+std::to_string(now-since)+",\"frames\":"+std::to_string(spell)+",\"player_flags\":"+std::to_string(menuPointer::playerFlags.load())+",\"began_flags\":"+std::to_string(spellFlags)+",\"still_turning\":"+(turning?"true":"false")+",\"frame\":"+std::to_string(hands.frame));
                      spell=0;}}
+                // Snap turn (include/evr/snap_turn.hpp; 2026-11-01, user: "snap turn - changeable in the game too, the angle with a
+                // slider, 30 a step by default"). While it is on, the right stick's left / right that turns the view (play, and building
+                // mode when the stick is not the piece's d-pad) does not reach the game; a push to the side asks the camera hook for one
+                // step of the set angle. Left alone: a locked target's cameras (the stick picks another target there), the temple
+                // gesture's d-pad, the quick wheel's button, and the stick the rod or a held piece uses.
+                {static evr::motion::SnapTurn snap;static unsigned lines=0;
+                 const CameraTurn c=cameraTurn?cameraTurn():CameraTurn{};
+                 const bool locked=c.valid&&now>=c.ms&&now-c.ms<=500&&evr::game::targetLockCamera(c.camera);
+                 const bool turnScreen=screenKind==evr::motion::LiveScreen::Gameplay||(screenKind==evr::motion::LiveScreen::WorldUi&&screen==buildingScreen);
+                 const bool applies=snapTurnOn.load()&&askSnapTurn&&fresh&&mapped.valid&&turnScreen&&!value.active&&!(pad.buttons&evr::motion::LivePadMapper::RB)&&!rightStickTaken&&!locked;
+                 const auto& r=hands.hands[1];const float x=pad.rightX/32767.f,y=r.stickActive&&std::isfinite(r.stick.y)?r.stick.y:0.f;
+                 const int step=snap.update(x,y,applies);
+                 if(applies)pad.rightX=0;
+                 if(step){const int degrees=evr::motion::clampSnapAngle(snapTurnDegrees.load());askSnapTurn(evr::motion::snapTurnInput(step,degrees));
+                    if(lines++<400)logFile->event("snap_turn","\"frame\":"+std::to_string(hands.frame)+",\"direction\":"+std::to_string(step)+",\"degrees\":"+std::to_string(degrees)+
+                        ",\"stick\":["+std::to_string(x)+","+std::to_string(y)+"],\"camera\":"+std::to_string(unsigned(c.camera))+",\"screen\":"+std::to_string(screen)+",\"milliseconds\":"+std::to_string(now));}}
                 publishLive(pad);
                 liveWieldBusy.store(!fresh||screenKind!=evr::motion::LiveScreen::Gameplay||value.active||bool(pad.buttons&evr::motion::LivePadMapper::RB));
                 static uint64_t lastScope=0;if(!fresh&&lastScope&&now>lastScope)liveStaleMs+=std::min<uint64_t>(now-lastScope,1000);lastScope=now;

@@ -39,8 +39,10 @@ HWND g_rbMode[4],g_rbLockOn,g_rbLockOff,g_tbTilt,g_stTilt,g_coSize,g_coSharp,g_c
 // The alternate eyes' own picture and pacing (2026-10-23, include/evr/afw_pacing.hpp).
 HWND g_coAfwPacing,g_coAfwSize,g_coAfwDlss;
 HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff,g_rbMenuRefreshOn,g_rbMenuRefreshOff,g_btRecommend,g_stRecommend;
+// The snap turn and its degrees a step (2026-11-01, include/evr/snap_turn.hpp; also in the game's start menu).
+HWND g_rbSnapOn,g_rbSnapOff,g_tbSnap,g_stSnap;
 evr::recommend::Machine g_machine;   // the graphics card, read once at the start
-enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS,ID_MODE_MOTION,ID_LOCK_ON,ID_LOCK_OFF,ID_TILT,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP,ID_FIT_VIEW,ID_START,ID_MENU_REFRESH_ON,ID_MENU_REFRESH_OFF};
+enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS,ID_MODE_MOTION,ID_LOCK_ON,ID_LOCK_OFF,ID_TILT,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP,ID_FIT_VIEW,ID_START,ID_MENU_REFRESH_ON,ID_MENU_REFRESH_OFF,ID_SNAP_ON,ID_SNAP_OFF,ID_SNAP_ANGLE};
 constexpr UINT WM_APP_ZIP_DONE=WM_APP+1;     // wParam: exit code, lParam: new std::wstring (the zip's path)
 constexpr UINT WM_APP_LATEST=WM_APP+2;       // lParam: new std::wstring (the newest release's version, or "" when it could not be checked)
 constexpr UINT WM_APP_UPDATE_LINE=WM_APP+3;  // lParam: new std::wstring (a line the updater wrote)
@@ -149,12 +151,14 @@ void show(){
     SendMessageW(g_coAfwSize,CB_SETCURSEL,0,0);if(v.afwRenderScale>0)pick(g_coAfwSize,kAfwSizes,std::size(kAfwSizes),text(v.afwRenderScale),0);
     
     SendMessageW(g_tbSwing,TBM_SETPOS,TRUE,v.swingSpeed/swingSpeedStep);SetWindowTextW(g_stSwing,(std::to_wstring(v.swingSpeed)+L" %").c_str());
+    check(g_rbSnapOn,v.snapTurn);check(g_rbSnapOff,!v.snapTurn);
+    SendMessageW(g_tbSnap,TBM_SETPOS,TRUE,v.snapTurnAngle/evr::motion::snapAngleStep);SetWindowTextW(g_stSnap,(std::to_wstring(v.snapTurnAngle)+L"°").c_str());
     check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);check(g_rbHudOn,v.uiAutoHide);check(g_rbHudOff,!v.uiAutoHide);check(g_rbMenuRefreshOn,v.menuRefresh);check(g_rbMenuRefreshOff,!v.menuRefresh);
     for(HWND h:{g_coAfwPacing,g_coAfwSize})EnableWindow(h,!g_running&&v.vr&&v.alternateEyes);
     SendMessageW(g_coFit,CB_SETCURSEL,size_t(v.fitView),0);
     for(HWND h:{g_coSize,g_coSharp,g_coFit,g_coEyes,g_rbHudOn,g_rbHudOff,g_rbMenuRefreshOn,g_rbMenuRefreshOff})EnableWindow(h,!g_running&&v.vr);
     // The motion controllers' rows are off in the gamepad modes; the pad rows only there (FPS and TPS alike).
-    for(HWND h:{g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff})EnableWindow(h,!g_running&&v.vr&&!pad);
+    for(HWND h:{g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbSnapOn,g_rbSnapOff,g_tbSnap})EnableWindow(h,!g_running&&v.vr&&!pad);
     for(HWND h:{g_rbLockOn,g_rbLockOff})EnableWindow(h,!g_running&&pad);   // FPS too: RT switches to TPS in the game
     EnableWindow(g_tbTilt,!g_running&&pad);
     g_loading=false;
@@ -388,7 +392,7 @@ void gatherReport(const std::wstring& folder,const std::string& title,size_t new
     std::string ini;if(!readFile(iniPath(),ini))ini=g_ini;   // as it is on disk (the window-less runs have not read it)
     const auto v=read(ini);
     info+="Mod version: "+(trim(version).empty()?std::string("unknown"):trim(version))+"\r\n";
-    info+="Settings: VR="+std::to_string(int(v.vr))+" Sync="+std::to_string(int(v.online))+" RenderScale="+text(v.renderScale)+" Sharpness="+text(v.sharpness)+" AlternateEyes="+std::to_string(int(v.alternateEyes))+" EyeWarp="+std::to_string(v.eyeWarp)+" AfwPacing="+std::to_string(v.afwPacing)+" AfwRenderScale="+text(v.afwRenderScale)+" AfwDlss="+v.afwDlss+" SwingSpeed="+std::to_string(v.swingSpeed)+" ArmSwim="+std::to_string(int(v.armSwim))+"\r\n";
+    info+="Settings: VR="+std::to_string(int(v.vr))+" Sync="+std::to_string(int(v.online))+" RenderScale="+text(v.renderScale)+" Sharpness="+text(v.sharpness)+" AlternateEyes="+std::to_string(int(v.alternateEyes))+" EyeWarp="+std::to_string(v.eyeWarp)+" AfwPacing="+std::to_string(v.afwPacing)+" AfwRenderScale="+text(v.afwRenderScale)+" AfwDlss="+v.afwDlss+" SwingSpeed="+std::to_string(v.swingSpeed)+" ArmSwim="+std::to_string(int(v.armSwim))+" SnapTurn="+std::to_string(int(v.snapTurn))+" SnapTurnAngle="+std::to_string(v.snapTurnAngle)+"\r\n";
     // (a game that crashed can stay in the process list a while: a program holding its handle - Steam, a launcher)
     info+="Game running: "+std::string(g_gameStopped?"no (it stopped before the 30 seconds ended)":gameRunning()?"yes":"no")+"\r\nLast start: "+trim(last)+"\r\n";
     const wchar_t* windows=L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
@@ -759,6 +763,15 @@ void build(){
     g_rbSwimOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_SWIM_ON));
     g_rbSwimOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_SWIM_OFF));
     next(kRowHeight-16);
+    row(L"Snap turn (VR)",L"On: the right stick turns you in steps. Off: smooth turning. Also in the game's VR settings.\nオン：右スティックで一定の角度ずつ回る（ゲーム内の VR 設定でも変更可）");
+    g_rbSnapOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_SNAP_ON));
+    g_rbSnapOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_SNAP_OFF));
+    next(kRowHeight-16);
+    row(L"Snap turn angle (VR)",L"Degrees a step (10 .. 90).\nスナップターン 1 回の角度");
+    g_tbSnap=control(part(TRACKBAR_CLASSW,L"",TBS_HORZ|TBS_AUTOTICKS|WS_TABSTOP|WS_GROUP,kRight,g_y+4,250,30,ID_SNAP_ANGLE));
+    SendMessageW(g_tbSnap,TBM_SETRANGE,TRUE,MAKELPARAM(evr::motion::snapAngleLow/evr::motion::snapAngleStep,evr::motion::snapAngleHigh/evr::motion::snapAngleStep));SendMessageW(g_tbSnap,TBM_SETTICFREQ,15/evr::motion::snapAngleStep,0);
+    SendMessageW(g_tbSnap,TBM_SETLINESIZE,0,1);SendMessageW(g_tbSnap,TBM_SETPAGESIZE,0,15/evr::motion::snapAngleStep);
+    g_stSnap=part(L"STATIC",L"30°",SS_LEFT,kRight+258,g_y+10,80,20);next(kRowHeight-16);
     row(L"Hit stop (VR)",L"When a melee stroke hits, your hand and weapon pause a moment.\n近接攻撃が当たった瞬間に手と武器が一瞬止まる");
     g_rbHitStopOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_HITSTOP_ON));
     g_rbHitStopOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_HITSTOP_OFF));
@@ -811,6 +824,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
                 const size_t at=size_t(std::find(std::begin(kModeIds),std::end(kModeIds),id)-std::begin(kModeIds));
                 if(at<std::size(kModes)){if(*kModes[at].value){store("Mode","Style",kModes[at].value);store("Mode","VR","1");}else store("Mode","VR","0");}break;}
             case ID_SWIM_ON:store("Body","ArmSwim","1");break;case ID_SWIM_OFF:store("Body","ArmSwim","0");break;
+            case ID_SNAP_ON:store("Body","SnapTurn","1");break;case ID_SNAP_OFF:store("Body","SnapTurn","0");break;
             case ID_HITSTOP_ON:store("Melee","HitStop","1");break;case ID_HITSTOP_OFF:store("Melee","HitStop","0");break;
             case ID_HUD_ON:store("Picture","UiAutoHide","1");break;case ID_HUD_OFF:store("Picture","UiAutoHide","0");break;
             case ID_MENU_REFRESH_ON:store("Picture","MenuRefresh","1");break;case ID_MENU_REFRESH_OFF:store("Picture","MenuRefresh","0");break;
@@ -832,6 +846,11 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
         const int percent=clampSwingSpeed(int(SendMessageW(g_tbSwing,TBM_GETPOS,0,0))*swingSpeedStep);
         SetWindowTextW(g_stSwing,(std::to_wstring(percent)+L" %").c_str());
         if(LOWORD(wParam)!=TB_THUMBTRACK)store("Melee","SwingSpeed",std::to_string(percent));   // written when the thumb is let go
+        return 0;}
+        if(reinterpret_cast<HWND>(lParam)==g_tbSnap){
+        const int degrees=evr::motion::clampSnapAngle(int(SendMessageW(g_tbSnap,TBM_GETPOS,0,0))*evr::motion::snapAngleStep);
+        SetWindowTextW(g_stSnap,(std::to_wstring(degrees)+L"°").c_str());
+        if(LOWORD(wParam)!=TB_THUMBTRACK)store("Body","SnapTurnAngle",std::to_string(degrees));
         return 0;}
         if(reinterpret_cast<HWND>(lParam)==g_tbTilt){
         const int degrees=std::clamp(int(SendMessageW(g_tbTilt,TBM_GETPOS,0,0))*kTiltStep,padTiltLow,padTiltHigh);

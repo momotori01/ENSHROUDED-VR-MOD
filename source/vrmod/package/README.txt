@@ -43,6 +43,10 @@ VR ON / OFF
   other eye shows the picture it had. It gives more frames a second; things that move
   can look a little doubled. It is a test - switch back to "Both eyes every frame" if it
   does not suit you.
+- "Snap turn (VR)": off by default. On: each push of the right stick to the side turns
+  you at once by a set angle, instead of turning smoothly. "Snap turn angle (VR)" sets
+  the angle (10 to 90 degrees, 30 by default). Both can also be changed in the game:
+  the "VR settings" button in the start menu.
 - While VR is on, the mod sets the game's anti-aliasing to DLSS (DLAA stays DLAA; a card
   without DLSS, such as AMD, uses FSR 3) and turns HDR (VR stops with it) and vertical sync
   off. The DLSS / FSR 3 quality stays your choice. They come back the next time the game is
@@ -133,6 +137,9 @@ VR の入・切
 - 「Frame mode (VR)」の「One eye a frame」は、左右の目を 1 コマずつ交互に描き、描かない
   方の目は前の絵を見せます。1 秒あたりのコマ数が増えます。動く物は少し二重に見える事が
   あります。試験中の機能です。合わなければ「Both eyes every frame」に戻してください。
+- 「Snap turn (VR)」：既定は切。入にすると、右スティックを横に倒すたびに決まった角度だけ
+  一瞬で回ります（なめらかに回る代わり）。角度は「Snap turn angle (VR)」で 10〜90°
+  （既定 30°）。どちらもゲームのスタートメニューの「VR設定」でも変えられます。
 - VR が「入」の間、MOD はゲームのアンチエイリアスを DLSS にし、FSR 3 も同じ倍率にします
   （DLSS の無い AMD などのカードは FSR 3 で描きます）。元の設定は、次に VR「切」で
   ゲームを起動した時に戻ります。

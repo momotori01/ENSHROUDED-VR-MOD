@@ -6,6 +6,7 @@
 // default, switched on in the exe" / "the other VR players' movements are seen with VR on or off".
 #include <algorithm>
 #include <cctype>
+#include <evr/snap_turn.hpp>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -97,6 +98,9 @@ inline std::vector<std::pair<std::string,std::string>> entries(const std::string
 // [Melee] SwingSpeed, 50..150 in steps of 5; 2026-10-20, user: "the threshold a normal attack needs - changeable with a
 // slider, in the game and in the exe"). armSwim: swimming by the arms' strokes, as VHVR's gestured locomotion
 // ([Body] ArmSwim; 2026-10-20, user: "add swimming by hand - VHVR had it; switchable in the settings"). On unless set.
+// snapTurn / snapTurnAngle: the right stick turns the view in steps of this many degrees instead of smoothly
+// (include/evr/snap_turn.hpp; [Body] SnapTurn, SnapTurnAngle 10 .. 90 in steps of 5; 2026-11-01, user: "snap turn,
+// changeable in the game too, the angle with a slider, 30 a step by default"). Off unless set (VHVR's default), 30 degrees.
 // hitStop: the hit stop of a melee stroke (include/evr/hit_stop.hpp; [Melee] HitStop; 2026-10-20, user: "make the hit stop
 // switchable in the game's settings"). On unless set.
 // menuRefresh: while a menu is open, the game's own view is not drawn at all (hooks: view_resource_probe.cpp menu refresh;
@@ -134,6 +138,7 @@ inline const std::vector<std::string>& styleNames(){static const std::vector<std
 constexpr int padTiltLow=0,padTiltHigh=90;
 struct Values {bool vr=false,online=true;double renderScale=.8;std::string dlss;double sharpness=.2;int keepLogs=8;bool alternateEyes=false;std::string giQuality;int eyeWarp=0;
     bool realCrouch=true;int crouchDrop=30;int swingSpeed=100;bool armSwim=true;bool hitStop=true;bool uiAutoHide=true;bool menuRefresh=false;
+    bool snapTurn=false;int snapTurnAngle=motion::snapAngleDefault;
     double afwRenderScale=0;std::string afwDlss;int afwPacing=0;
     Style style=Style::Motion;bool padPitchLock=true;int padTilt=0;FitView fitView=FitView::Auto;};
 inline bool padStyle(const Values& v){return v.style!=Style::Motion;}
@@ -152,7 +157,8 @@ inline Values read(const std::string& ini){
     out.renderScale=number("Picture","RenderScale",d.renderScale,.25,2.);out.sharpness=number("Picture","Sharpness",d.sharpness,0.,1.);
     out.keepLogs=int(number("Log","Keep",d.keepLogs,0.,100.));
     out.realCrouch=flag("Body","RealCrouch",d.realCrouch);out.crouchDrop=int(number("Body","CrouchDrop",d.crouchDrop,10.,50.));
-    out.armSwim=flag("Body","ArmSwim",d.armSwim);out.uiAutoHide=flag("Picture","UiAutoHide",d.uiAutoHide);out.menuRefresh=flag("Picture","MenuRefresh",d.menuRefresh);out.hitStop=flag("Melee","HitStop",d.hitStop);out.swingSpeed=clampSwingSpeed(int(number("Melee","SwingSpeed",d.swingSpeed,swingSpeedLow,swingSpeedHigh)));
+    out.armSwim=flag("Body","ArmSwim",d.armSwim);out.snapTurn=flag("Body","SnapTurn",d.snapTurn);
+    out.snapTurnAngle=motion::clampSnapAngle(int(std::lround(number("Body","SnapTurnAngle",d.snapTurnAngle,motion::snapAngleLow,motion::snapAngleHigh))));out.uiAutoHide=flag("Picture","UiAutoHide",d.uiAutoHide);out.menuRefresh=flag("Picture","MenuRefresh",d.menuRefresh);out.hitStop=flag("Melee","HitStop",d.hitStop);out.swingSpeed=clampSwingSpeed(int(number("Melee","SwingSpeed",d.swingSpeed,swingSpeedLow,swingSpeedHigh)));
     // [Picture] Dlss is no longer read (2026-10-23, user: "the setting exe's DLSS is the same as the game's - remove it"):
     // dlss stays empty, a VR start keeps the game's own DLSS / FSR 3 mode; only AFW's own mode (AfwDlss) is still set.
     // [Picture] GiQuality is no longer read either (2026-10-25): the game's own GI stays (giQuality empty).

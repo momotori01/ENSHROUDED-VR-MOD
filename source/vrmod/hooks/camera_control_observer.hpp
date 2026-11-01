@@ -28,8 +28,16 @@ struct Sample {
     std::array<float,2> raw{},weighted{};unsigned orbitCalls=0;
     bool valid=false;double gameplayTurn=0;
 };
-struct Pending {Sample value;bool failed=false;float added=0;};
+struct Pending {Sample value;bool failed=false;float added=0,snapped=0;};
 inline std::atomic<float> realignRequest{0},disturbRequest{0};inline std::atomic<bool> realignEnabled{false};
+// A snap turn's step (include/evr/snap_turn.hpp, 2026-11-01; asked by controller_ui_fixture.hpp): added to the next camera
+// update's weighted yaw like the realignment, but counted as the player's own turn (gameplayTurn), so the VR view turns with
+// the game's camera in one update. Taken only on a camera of first-person play the player turns (not a locked target's, not
+// the game's event cameras, not while the orbit input is held for the rod); a step that comes on another is dropped.
+inline std::atomic<float> snapRequest{0};inline std::atomic<unsigned> snapsApplied{0},snapsDropped{0};
+inline bool snapCamera(uint8_t id){
+    return game::cameraPresentation(id)==game::CameraPresentation::FirstPerson&&!game::targetLockCamera(id)&&id>3&&!(id>=30&&id<=33)&&id<45;
+}
 inline std::atomic<unsigned> realignApplied{0};
 inline thread_local Pending* current=nullptr;
 inline std::mutex mutex;inline Sample latest;inline double gameplayTurn=0;inline uint32_t turnEntity=0;
@@ -52,7 +60,12 @@ inline void onSum(const uintptr_t* regs,uint8_t* fx) noexcept {
         // realignRequest: the correction. disturbRequest: a diagnostic turn "by the game" (EVR_HEADING_REALIGN_TEST).
         float add=disturbRequest.exchange(0);
         if(realignEnabled.load()){const float c=realignRequest.exchange(0);if(c!=0&&game::headingRealignCamera(p.value.camera)){add+=c;++realignApplied;}}
-        if(add!=0&&std::isfinite(add)&&std::abs(add)<=1.f){yaw+=add;std::memcpy(fx+0xa0+14*16,&yaw,4);p.added=add;}
+        if(add!=0&&std::isfinite(add)&&std::abs(add)<=1.f){yaw+=add;p.added=add;}else add=0;
+        float snap=snapRequest.exchange(0);
+        if(snap!=0){const auto held=turnHeldUntil.load();
+            if(std::isfinite(snap)&&std::abs(snap)<=1.6f&&snapCamera(p.value.camera)&&!(held&&p.value.milliseconds<=held)){yaw+=snap;p.snapped=snap;++snapsApplied;}
+            else{snap=0;++snapsDropped;}}
+        if(add!=0||snap!=0)std::memcpy(fx+0xa0+14*16,&yaw,4);
     }catch(...){current->failed=true;++failures;}
 }
 inline bool dumped=false;
@@ -79,14 +92,17 @@ __declspec(noinline) void __fastcall update(void* controller,const void* paramet
                 if(turnEntity!=p.value.entity){turnEntity=p.value.entity;gameplayTurn=0;}
                 const auto held=turnHeldUntil.load();
                 if(p.value.valid&&game::cameraPresentation(p.value.camera)==game::CameraPresentation::FirstPerson&&!(held&&p.value.milliseconds<=held))
-                    gameplayTurn+=p.value.weighted[0];
+                    gameplayTurn+=p.value.weighted[0]+p.snapped;
                 p.value.gameplayTurn=gameplayTurn;latest=p.value;}
+            if(p.snapped!=0){static unsigned lines=0;if(lines++<400)logFile->event("snap_turn_applied","\"number\":"+std::to_string(p.value.number)+",\"camera_id\":"+std::to_string(unsigned(p.value.camera))+
+                ",\"radians\":"+std::to_string(p.snapped)+",\"weighted\":"+std::to_string(p.value.weighted[0])+",\"counted\":"+(p.value.valid&&game::cameraPresentation(p.value.camera)==game::CameraPresentation::FirstPerson?"true":"false")+
+                ",\"gameplay_turn\":"+std::to_string(p.value.gameplayTurn)+",\"dropped_before\":"+std::to_string(snapsDropped.load()));}
             if(p.value.number<=8||p.value.number%120==0||!p.value.valid){
                 const auto& s=p.value;std::ostringstream out;out<<std::setprecision(10)
                     <<"\"number\":"<<s.number<<",\"entity\":"<<s.entity<<",\"camera_id\":"<<unsigned(s.camera)
                     <<",\"native_input_mode\":"<<unsigned(s.inputMode)<<",\"input_context\":"<<unsigned(s.context)
                     <<",\"raw_rotation\":["<<s.raw[0]<<','<<s.raw[1]<<"],\"weighted_rotation\":["<<s.weighted[0]<<','<<s.weighted[1]
-                    <<"],\"added\":"<<p.added<<",\"orbit_calls\":"<<s.orbitCalls<<",\"valid\":"<<(s.valid?"true":"false")<<",\"read_only\":true";
+                    <<"],\"added\":"<<p.added<<",\"snapped\":"<<p.snapped<<",\"orbit_calls\":"<<s.orbitCalls<<",\"valid\":"<<(s.valid?"true":"false")<<",\"read_only\":true";
                 logFile->event("camera_control_sample",out.str());
             }
         }catch(...){++failures;std::lock_guard<std::mutex> lock(mutex);latest={};}

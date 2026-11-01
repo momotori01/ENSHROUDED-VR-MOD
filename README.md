@@ -78,6 +78,7 @@ The program next to enshrouded.exe holds the settings that cannot be changed in 
 | Picture size (VR) | Low 0.7 (faster) / Normal 0.8 / High 1.0 (sharper, slower) |
 | Sharpening (VR) | Off / Soft 0.2 / Strong 0.5 |
 | View fit (VR) | How each eye's picture is fitted to the headset's view. **Auto** (the default): fitted only when the mod finds ALVR (with ALVR the view is cross-eyed without it). **Normal**: as always. **Fit (if cross-eyed)**: always fitted - choose it if the view is cross-eyed. |
+| Snap turn (VR) | Off by default. On: the right stick turns you in steps instead of smoothly. **Snap turn angle (VR)**: 10-90° a step, 30° by default. Both also in the game's VR settings. |
 | Menu flicker fix (VR) | Off by default. Turn it on if the character in the inventory flickers black: while a menu is open, the game's own view is not drawn (the character's black frames come from it). |
 | Frame mode (VR) | Both eyes every frame (normal), or one eye a frame (a test for more FPS) |
 | Problem report | **Make zip**: the mod's logs, its settings and the game's log in one zip next to the program, to send with a description. It also finishes a VR bug report that a crash cut short. |
@@ -85,7 +86,7 @@ The program next to enshrouded.exe holds the settings that cannot be changed in 
 
 It also shows what the mod did at the last start of the game.
 A VR start changes three of the game's graphics settings, the ones that are always right for VR: anti-aliasing to DLSS (DLAA stays DLAA; cards without DLSS use FSR 3), HDR off (VR stops with HDR on) and vertical sync off (the headset sets the frame timing). The DLSS / FSR 3 quality (Quality, Performance and so on) stays your choice in the game. They come back the next time the game is started without VR. The mod changes nothing else. **Recommended graphics (VR)** in this program sets all of the game's graphics settings to the ones recommended for VR on this PC: DLSS Quality (FSR 3 Quality on cards that are not NVIDIA's), indirect lighting and the rest. After that, change anything you like in the game; the mod keeps it.
-Real crouching for sneaking is switched on or off, and its depth set, in the game itself: the **VR settings** button next to the bug report button in the start menu.
+Real crouching for sneaking is switched on or off, and its depth set, in the game itself: the **VR settings** button next to the bug report button in the start menu. Snap turn and its angle are there as well.
 
 ## controller VR
 Choose **controller VR 【FPS】** or **controller VR 【TPS】** in "Enshrouded VR setting.exe". The headset shows the game; you play with an Xbox controller and the game's own controls.
@@ -201,7 +202,7 @@ With a building piece in your hand (a chest, for example), outside building mode
 ## Other controls
 ### Movement
 - Left stick: move (forward is where you look)
-- Right stick left/right: turn
+- Right stick left/right: turn. With **snap turn** on (VR settings), each push turns you at once by the set angle (30° by default); let the stick come back for the next step. While locked on, the stick still picks the target.
 - Right stick up: sprint / sneak
 - Right stick down: dodge
 - Right A: jump. In the air: the double jump and the glider, as in the game

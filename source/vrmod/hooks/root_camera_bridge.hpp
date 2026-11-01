@@ -291,6 +291,13 @@ inline game::StableAnchor anchor(const Sample& s){
         if(stableHeading.reference(s.entity,reference)){std::lock_guard<std::mutex> lock(headingMutex);headingReference=reference;headingReferenceEntity=s.entity;}
     }
     lastYaw=cameraModes&&stableHeadingUsed?stableHeading.value(s.entity,s.unshaken.orientation,s.controls.gameplayTurn):heading(normalized(s.unshaken.orientation),lastYaw);
+    // A snap turn's frames (2026-11-01, user: "snap turn is against motion sickness - the turn must be too fast to see"): the
+    // view's heading of the frames around each step (from the one before to six after), to show that it turns in one frame.
+    {static unsigned seen=0,left=0,lines=0;static float before=0;const unsigned now=cameraControl::snapsApplied.load();
+     if(now!=seen){seen=now;left=7;}
+     if(left&&lines<300){--left;++lines;std::ostringstream out;out<<std::setprecision(6)<<"\"sample\":"<<s.number<<",\"after\":"<<(6-left)<<",\"yaw_deg\":"<<lastYaw*57.29578f
+        <<",\"step_deg\":"<<std::remainder(lastYaw-before,6.2831853f)*57.29578f<<",\"milliseconds\":"<<s.milliseconds;logFile->event("snap_turn_view",out.str());}
+     before=lastYaw;}
     // Lowered while sneaking (controllerUiFixture::sneakView, 2026-10-22).
     if(viewDrop)height-=viewDrop();
     game::StableAnchor a;a.root=s.stable.position;a.orientation=euler(lastYaw,0,0);a.cameraOffsetGameUnits={0,height,0};

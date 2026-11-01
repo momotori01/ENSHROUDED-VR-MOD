@@ -4162,6 +4162,11 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
                 // The stroke's speed and swimming by the arms (2026-10-20; [Melee] SwingSpeed, [Body] ArmSwim), changeable there too.
                 {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_SWING_SPEED",v,sizeof v);if(m&&m<sizeof v){const int d=std::atoi(v);if(d>=evr::settings::swingSpeedLow&&d<=evr::settings::swingSpeedHigh)controllerUiFixture::swingPercent=evr::settings::clampSwingSpeed(d);}}
                 controllerUiFixture::armSwimOn=on("EVR_ARM_SWIM");controllerUiFixture::hitStopOn=on("EVR_HIT_STOP");   // [Melee] HitStop (17:40)
+                // Snap turn (2026-11-01; [Body] SnapTurn, SnapTurnAngle; include/evr/snap_turn.hpp): off unless EVR_SNAP_TURN=1.
+                {char v[8]{};auto m=GetEnvironmentVariableA("EVR_SNAP_TURN",v,sizeof v);controllerUiFixture::snapTurnOn=m==1&&v[0]=='1';
+                 m=GetEnvironmentVariableA("EVR_SNAP_TURN_ANGLE",v,sizeof v);if(m&&m<sizeof v)controllerUiFixture::snapTurnDegrees=evr::motion::clampSnapAngle(std::atoi(v));
+                 controllerUiFixture::askSnapTurn=[](float input){cameraControl::snapRequest.store(input);};
+                 logFile->event("snap_turn_setting","\"on\":"+std::string(controllerUiFixture::snapTurnOn.load()?"true":"false")+",\"degrees\":"+std::to_string(controllerUiFixture::snapTurnDegrees.load()));}
                 // keen::actor::StateFlag InSneakMode (21); no sneak by crouching while Dead 7, Sitting 9, Sleeping 11, Climbing 34,
                 // ClimbingTransition 35, Attached 36, HangGliding 37, AttachedToHook 38, FloatingOnWater 43, UnderWater 44.
                 // Sneak is keen::ecs::PlayerInputType 55 in 1.0: its toggleConfig bit says whether a press switches it.
