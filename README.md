@@ -19,6 +19,37 @@ Fight by swinging your sword, cast spells by swinging your wand, draw and loose 
 - An update notice in the game when a new version is out
 - And much more.
 
+## Buttons you need
+Most things are done by moving your hands, but these need a button. The game's button hints show the VR buttons as well.
+
+| To | Do |
+|---|---|
+| **Guard** | **Hold the left grip** - with a shield, or with a two-handed weapon held in both hands. Raising the shield alone does not guard. |
+| Parry | Press the left grip just as the blow comes, or flick your left hand while you guard |
+| Heavy attack | Hold the right trigger while you swing |
+| Special ability | Hold the right grip while you swing (wand, staff: right grip + right trigger; bow: draw the string with the right grip) |
+| Punch | With an empty hand, hold its grip (a fist) and swing |
+| Shoot the bow | Right trigger at the string, pull back, let go |
+| Wand | Swing it, or pull the right trigger |
+| Staff | Hold the right trigger to charge, let go to cast |
+| Throw | Hold the right trigger, swing, let go |
+| Fishing | Right trigger (cast by letting go during a swing, reel in by holding it) |
+| Tools you do not swing (watering can, gold sieve, ...) | Right trigger; left B for the second action (refill the watering can) |
+| Place a piece from your hand (a chest, ...) | Right trigger; hold the right grip to turn and move it |
+| Food and potions in your hand | Bring them to your mouth, or pull the right trigger |
+| Interact (pick up, open, talk, revive) | Left trigger, pulled all the way, or a short press of right B |
+| Jump, double jump, glider | Right A |
+| Sprint / sneak | Right stick up (or crouch for real to sneak) |
+| Dodge | Right stick down |
+| Lock-on | Press the right stick |
+| Quick slots | Hold right B, turn your wrist like a dial, let go |
+| Change weapons | Hand at your shoulder or hip, then that hand's grip |
+| Building mode, summoning, the screwdriver's mode | Left trigger with the building hammer, the summoning staff or the screwdriver |
+| Menus | Point and pull the right trigger; right A confirms, left A goes back, the grips switch tabs |
+| Start menu, inventory | A hand at your temple until it buzzes, then press the left stick (start menu) or the right stick (inventory). Index: press the left or the right trackpad firmly |
+
+Details are below.
+
 ## Download
 Download **EnshroudedVR-x.y.z.zip** under **Assets** on the [Releases](https://github.com/momotori01/ENSHROUDED-VR-MOD/releases) page (not the source code archives).
 
@@ -75,11 +106,13 @@ The changes are kept for the next start.
 ### Melee
 - **Attack:** swing your weapon. The hit lands where your blade really hits - you have to land it yourself. The hit area is slightly larger than the blade, and quick wrist flicks count along the path of the blade's tip.
 - **Heavy attack:** swing while holding the right trigger.
+- **Bare hands:** hold that hand's grip (make a fist) and swing. An open hand does not hit.
 - **In the air:** swing down for a plunging attack, swing up for a rising slash.
 - **Skill attacks:** they move you as far as in vanilla; you still land the hit with your own weapon.
 - Cooldowns are taken from the vanilla animations, so the mod does not make you overpowered. While an attack cools down, the controller vibrates and the next attack waits.
 
 ### Guard and parry
+- **Guarding needs the left grip.** Raising the shield or the weapon alone does not guard.
 - **Shield:** hold the left grip to guard. The guard faces the way the shield's face points.
 - **Two-handed weapons:** hold the handle with the left grip (both hands on the weapon). While you hold it, you guard.
   Swing with your right hand to attack - the attack comes first.
@@ -105,7 +138,7 @@ When the special ability gauge is full:
 - **Bow:** take the string with the right grip instead of the trigger, draw and let go: a strong shot.
 
 ### Lock-on
-- The game's own lock-on works as usual. The enemy's health bar and the lock-on arrow are shown above the enemy instead of on the HUD - for the locked enemy, the lock-on candidate and enemies that are aware of you. Moving stays headset-based while locked on.
+- Press the right stick to lock on (the game's own lock-on). The enemy's health bar and the lock-on arrow are shown above the enemy instead of on the HUD - for the locked enemy, the lock-on candidate and enemies that are aware of you. Moving stays headset-based while locked on.
 
 ### Bow
 - Bring your right hand to the string, hold the right trigger and pull back. Let go of the trigger to shoot.
@@ -120,12 +153,15 @@ When the special ability gauge is full:
 ### Weapons and tools
 - **Holsters:** left shoulder + left grip = bow, right shoulder + right grip = your current weapon, left hip + left grip = shield. A short vibration tells you it switched.
 - **Bow from the shoulder:** if your equipped bow is not on the action bar, the mod puts it in your left hand. The game only takes it out while you draw the string, so you walk at full speed, and drawing in the air still uses the bow's air skills. Put it away at the left shoulder again to get your weapon back.
-- **Quick slots:** hold right B, point your hand at the slot you want and let go.
-- **Tools** (pickaxe, axe, ...): swing them like weapons. You aim with your right hand's direction.
+- **Quick slots:** hold right B, turn your right wrist like a dial to the slot you want (a light click at each slot) and let go. While you hold right B, pressing the left stick switches the action bar's page. A short press of right B is the interaction.
+- **Tools you swing** (axes, pickaxes, rakes): swing them like weapons. They work where the head strikes.
+- **Other tools** (watering can, gold sieve, ...): pull the right trigger to use them. Left B is their second action (refill the watering can).
+- **Screwdriver and summoning staff:** the left trigger enters their mode, as with the building hammer.
 
 ### Building
 - **Enter / leave building mode:** left trigger with the building hammer in your hand.
 - **Build:** right trigger.
+- **Remove:** left grip (the game's second building action).
 - **Choose what to build:** hold left B (or right B), choose with the right stick, let go to take it.
 - **Hold the right grip** - it is the gamepad's RT - for the combined inputs:
 
@@ -139,8 +175,15 @@ When the special ability gauge is full:
 | Right A | Material catalog |
 | Left A | Snapping on / off |
 | Left grip | Take the material you are looking at |
+| Left stick click | Fine position mode on / off |
+| Right stick click | Fine rotation mode on / off |
 
-- While the right grip is held, the right stick does not turn you. Tilting and scaling a piece (the gamepad's RT + right stick) are not available in VR.
+- While the right grip is held, the right stick does not turn you. Tilting and scaling a piece (the gamepad's RT + right stick) are not available in building mode.
+
+### Placing a piece from your hand
+With a building piece in your hand (a chest, for example), outside building mode:
+- **Place:** right trigger.
+- **Hold the right grip** for the same combined inputs as in building mode: the right stick turns it by 90 degrees and moves it nearer / farther, the left stick turns it a little and raises / lowers it, the stick clicks switch the fine modes. In the fine rotation mode the right stick with the grip tilts the piece, as the game's hints say.
 
 ### Food, potions and other items
 - Choosing a consumable on the quick slots puts it in your right hand (a short vibration) instead of using it at once. Bring it to your mouth or pull the right trigger to use it.
@@ -161,11 +204,15 @@ When the special ability gauge is full:
 - Right stick left/right: turn
 - Right stick up: sprint / sneak
 - Right stick down: dodge
-- Right A: jump
+- Right A: jump. In the air: the double jump and the glider, as in the game
+- Right stick click: lock-on
 - Right B: short press to interact (pick up, open, examine)
 - Left trigger: interact, for as long as you hold it (pick up, open, revive) - pull it all the way; a resting finger does nothing
 - **Revive a fallen player:** go to them and hold the left trigger (or hold right B within 3 m of them).
 - **Sneak:** crouch in real life. Switch it on or off and set how deep you must crouch in the in-game "VR settings".
+
+### Swimming
+- Swim with your arms: strokes move you, a stroke that pushes you up rises and one that pushes you down dives. The left stick works too. Arm swimming is switched on or off in the in-game "VR settings".
 
 ### HUD
 - The HUD fades out after 5 seconds without changes and comes back when your health, stamina and the like change. The held item's name and button hints at the bottom fade with it.
@@ -174,10 +221,14 @@ When the special ability gauge is full:
 
 ### Menus
 - The title screen and the menus appear on a panel in front of you. Point at it with the controller and pull the trigger to click.
+- **Buttons in menus:** right A confirms, left A goes back, right B and left B are the game's Y and X (the hints show what they do), the left and right grips switch tabs.
+- **Left trigger in menus:** a short pull is the game's Y (quick move), holding it the long Y (take all); left trigger + left B sorts.
 - With the pointer on a menu, right A is the game's A on what is selected (pull the trigger to select something first): craft, unlock a skill, fast travel from a picked map location, and so on. In the backpack, right A works on the slot you point at.
 - Hold a hand against your temple until the controller buzzes briefly, then press: the right stick becomes the D-pad, pressing the right stick opens the inventory, pressing the left stick opens the start menu. A stick already pressed before the buzz does not count.
+- **Index controllers:** pressing the right trackpad firmly opens the inventory, the left one the start menu.
+- **Emotes:** open the emote wheel with the D-pad (the hand at the temple, then the right stick) and choose with the left stick.
 - **Building:** with the building hammer, hold left B to choose what to build (choose with the right stick, let go to confirm).
-- **Left trigger with tools:** with the building hammer the left trigger enters building mode; with the summoning staff it enters summoning.
+- **Left trigger with tools:** with the building hammer the left trigger enters building mode; with the summoning staff it enters summoning, with the screwdriver its own mode.
 - **Camera:** every game camera stays first person in VR (talking to NPCs, altars and the like).
 
 ### More
