@@ -30,7 +30,7 @@ inline void restoreWritten() noexcept {
 }
 // The local actor is usually the first entity of the iteration: it is reached by the advance before the loop (2873d6),
 // every later one by the advance at the loop's end (2894f6). Both use the same stack query.
-constexpr uintptr_t firstCallerRva=0x2dc2d7;
+constexpr uintptr_t firstCallerRva=0x2e14b7;
 inline std::atomic<unsigned> outstanding{0},applied{0},skippedCamera{0},skippedMode{0},failures{0},lost{0};
 inline thread_local uintptr_t savedSlot=0,slotAddress=0;inline thread_local std::array<uint8_t,248> modeCopy{};inline thread_local bool active=false;
 inline void finish(void* query) noexcept {
@@ -56,7 +56,7 @@ inline void begin(uintptr_t sp,void* context,void* query,uint32_t bytes) noexcep
   if(slots[0]!=reinterpret_cast<uintptr_t>(context)||!slots[7])return;
   const auto state=read<uintptr_t>(slots[0]);const auto index=read<uint32_t>(slots[0]+8);
   if(!state||!index||index>0x1000000)return;
-  const auto entities=read<uintptr_t>(state+0x828);if(!entities)return;
+  const auto entities=read<uintptr_t>(state+0x830);if(!entities)return;
   const auto entity=read<uint32_t>(entities+uintptr_t(index-1)*16);
   rootCamera::Sample local;{std::lock_guard<std::mutex> lock(rootCamera::mutex);local=rootCamera::latest;}
   if(!local.number||GetTickCount64()-local.milliseconds>1000||entity!=local.entity)return;
@@ -103,7 +103,7 @@ inline bool motionObserverRequested=false;inline uint64_t motionNumber=0;
 // root camera resolved (the player's render component's). Set by view_resource_probe.cpp.
 inline void (*clientWorldTicks)(uintptr_t world,uint32_t entity)=nullptr;inline std::atomic<uint64_t> clientTicks{0};
 inline std::mutex motionMutex;inline game::BodyMotionSample motionLatest;
-constexpr uintptr_t rva=0x9b6e60,callerRva=0x2de765;
+constexpr uintptr_t rva=0x9c26c0,callerRva=0x2e3945;
 // 1.0: the final actor query is 0x170 bytes at the caller's rsp+0x80 (0xb0 at +0xb0). PlayerInput (slot 4) and Actor (9) as
 // before, ActorInput 15 (11), PlayerState 33 (17), gravity 2 (query census, Mock game-20261016-074759: the ECS type names).
 constexpr uint32_t actorQueryBytes=0x170;constexpr uintptr_t actorQueryAt=0x80;
@@ -124,14 +124,14 @@ inline std::mutex mutex;inline std::map<uintptr_t,unsigned> counts;inline std::a
 inline void record(uintptr_t caller,uintptr_t callerRsp,void* context,void* query,uint32_t bytes,bool localOnly=true) noexcept {
     try{
         const auto q=reinterpret_cast<uintptr_t>(query),ctx=reinterpret_cast<uintptr_t>(context);
-        {const auto st=read<uintptr_t>(ctx);const auto ix=read<uint32_t>(ctx+8);const auto table=st?read<uintptr_t>(st+0x828):0;
+        {const auto st=read<uintptr_t>(ctx);const auto ix=read<uint32_t>(ctx+8);const auto table=st?read<uintptr_t>(st+0x830):0;
          const uint32_t id=table&&ix?read<uint32_t>(table+uintptr_t(ix-1)*16):0;rootCamera::Sample local;
          if(localOnly&&(!rootCamera::trySnapshot(local)||!local.entity||id!=local.entity))return;}   // the local player's iteration only
         if(!read<uintptr_t>(read<uintptr_t>(ctx)+0x30)&&!knownWorld.load())return;   // wait for a world to name the types with
         unsigned n=0;{std::lock_guard<std::mutex> lock(mutex);n=counts[caller]++;}if(n>=3)return;
         std::ostringstream out;out<<"\"caller\":"<<hex(caller-baseAddress)<<",\"sample\":"<<n<<",\"bytes\":"<<bytes<<",\"query_minus_rsp\":"<<hex(q-callerRsp);
         const auto state=read<uintptr_t>(ctx);const auto index=read<uint32_t>(ctx+8);uint32_t entity=0;uintptr_t world=0;
-        try{const auto entities=read<uintptr_t>(state+0x828);if(entities&&index)entity=read<uint32_t>(entities+uintptr_t(index-1)*16);}catch(...){}
+        try{const auto entities=read<uintptr_t>(state+0x830);if(entities&&index)entity=read<uint32_t>(entities+uintptr_t(index-1)*16);}catch(...){}
         try{world=read<uintptr_t>(state+0x30);}catch(...){}
         if(world)knownWorld=world;else world=knownWorld.load();   // a task without the world capability: the one seen elsewhere
         out<<",\"entity\":"<<entity<<",\"task_world\":"<<hex(world);
@@ -230,11 +230,11 @@ __declspec(noinline) bool __fastcall advance(void* context,void* query,uint32_t 
     const CallbackScope callback;
     if(queryCensus::wanted){const auto c=caller-baseAddress;
         if(c==callerRva||c==bodyHeading::firstCallerRva||c==inputRanged::callerRva||c==attachmentObserver::callers[0])queryCensus::record(caller,callerRsp,context,query,bytes);
-        else if(c==impactHierarchyObserver::callerRva||c==sequenceColliderObserver::callerRva||c==0x3f0236||c==0x2d9b8b||c==0x368b27||c==attachmentObserver::callers[1]||c==attachmentObserver::callers[2]||c==attachmentObserver::callers[3])
+        else if(c==impactHierarchyObserver::callerRva||c==sequenceColliderObserver::callerRva||c==0x3f7056||c==0x2ddd8b||c==0x36e417||c==attachmentObserver::callers[1]||c==attachmentObserver::callers[2]||c==attachmentObserver::callers[3])
             queryCensus::record(caller,callerRsp,context,query,bytes,false);}
     if(caller==baseAddress+callerRva)bodyHeading::finish(query);
     {const ObserverLastError preserve;
-     if(accepting.load()&&sequenceColliderObserver::requested&&serverSlotsVerified&&(caller==baseAddress+0x2d0d67||caller==baseAddress+0x2d0dfb))sequenceColliderObserver::serverSlot(callerRsp,context,query,bytes);
+     if(accepting.load()&&sequenceColliderObserver::requested&&serverSlotsVerified&&(caller==baseAddress+0x2d5e87||caller==baseAddress+0x2d5f1b))sequenceColliderObserver::serverSlot(callerRsp,context,query,bytes);
      if(accepting.load()&&impactHierarchyObserver::requested&&caller==baseAddress+impactHierarchyObserver::callerRva){impactHierarchyObserver::capture(callerRsp,context,query,bytes);
         if(queryCensus::wanted&&impactHierarchyObserver::actorImpact){impactHierarchyObserver::actorImpact=false;queryCensus::record(caller+1,callerRsp,context,query,bytes,false);}}
      if(accepting.load()&&sequenceColliderObserver::requested&&caller==baseAddress+sequenceColliderObserver::callerRva){sequenceColliderObserver::capture(callerRsp,context,query,bytes);}
@@ -253,7 +253,7 @@ __declspec(noinline) bool __fastcall advance(void* context,void* query,uint32_t 
                 throw std::runtime_error("final actor query identity changed");
             const auto state=read<uintptr_t>(slots[0]);const auto index=read<uint32_t>(slots[0]+8);
             if(!state||!index||index>0x1000000)throw std::runtime_error("final actor query bounds");
-            const auto entities=read<uintptr_t>(state+0x828),ticks=read<uintptr_t>(state+0x818);
+            const auto entities=read<uintptr_t>(state+0x830),ticks=read<uintptr_t>(state+0x820);
             if(!entities)throw std::runtime_error("final actor entity table absent");
             const auto entity=read<uint32_t>(entities+uintptr_t(index-1)*16);
             rootCamera::Sample local;{std::lock_guard<std::mutex> lock(rootCamera::mutex);local=rootCamera::latest;}
@@ -353,16 +353,16 @@ __declspec(noinline) bool __fastcall advance(void* context,void* query,uint32_t 
     if(queryCensus::all&&result){const ObserverLastError preserve;queryCensus::record(caller,callerRsp,context,query,bytes,false);}
     if(result&&accepting.load()&&sequenceColliderObserver::requested&&sequenceColliderObserver::colliderSweep::site(caller)){const ObserverLastError preserve;sequenceColliderObserver::colliderSweep::opened(callerRsp,context,query,bytes);}
     {const ObserverLastError preserve;if(result&&accepting.load()&&(caller==baseAddress+callerRva||caller==baseAddress+bodyHeading::firstCallerRva))bodyHeading::begin(callerRsp,context,query,bytes);}
-    {const ObserverLastError preserve;if(result&&accepting.load()&&sequenceColliderObserver::requested&&(caller==baseAddress+0x3f0236||caller==baseAddress+sequenceColliderObserver::callerRva))sequenceColliderObserver::ready(callerRsp,context,query,bytes);}
+    {const ObserverLastError preserve;if(result&&accepting.load()&&sequenceColliderObserver::requested&&(caller==baseAddress+0x3f7056||caller==baseAddress+sequenceColliderObserver::callerRva))sequenceColliderObserver::ready(callerRsp,context,query,bytes);}
     return result;
 }
 inline void install(){
     if(nativeImpactComponents::requested)rootCamera::worldResolver=&nativeImpactComponents::resolveWorld;
     inputPipeline::verify(rva,pattern,callerRva);
     if(bodyHeading::requested)inputPipeline::verify(rva,pattern,bodyHeading::firstCallerRva);
-    if(impactHierarchyObserver::requested){inputPipeline::verify(rva,pattern,impactHierarchyObserver::callerRva);logFile->event("impact_hierarchy_enabled","\"caller_rva\":\"0x3ef3c6\",\"query_bytes\":1216,\"read_only\":true");}
+    if(impactHierarchyObserver::requested){inputPipeline::verify(rva,pattern,impactHierarchyObserver::callerRva);logFile->event("impact_hierarchy_enabled","\"caller_rva\":\"0x3f61d6\",\"query_bytes\":1216,\"read_only\":true");}
     if(sequenceColliderObserver::requested){inputPipeline::verify(rva,pattern,sequenceColliderObserver::colliderSweep::firstReturn);inputPipeline::verify(rva,pattern,sequenceColliderObserver::colliderSweep::nextReturn);
-        inputPipeline::verify(rva,pattern,sequenceColliderObserver::callerRva);inputPipeline::verify(rva,pattern,0x3f0236);try{inputPipeline::verify(rva,pattern,0x2d0d67);inputPipeline::verify(rva,pattern,0x2d0dfb);serverSlotsVerified=true;}catch(const std::exception& e){serverSlotsVerified=false;logFile->event("optional_hook_skipped","\"hook\":\"sequence_collider_server_slots\",\"reason\":"+jsonString(e.what()));}logFile->event("sequence_collider_enabled","\"caller_rva\":\"0x3f065d\",\"query_bytes\":80,\"read_only\":true");}
+        inputPipeline::verify(rva,pattern,sequenceColliderObserver::callerRva);inputPipeline::verify(rva,pattern,0x3f7056);try{inputPipeline::verify(rva,pattern,0x2d5e87);inputPipeline::verify(rva,pattern,0x2d5f1b);serverSlotsVerified=true;}catch(const std::exception& e){serverSlotsVerified=false;logFile->event("optional_hook_skipped","\"hook\":\"sequence_collider_server_slots\",\"reason\":"+jsonString(e.what()));}logFile->event("sequence_collider_enabled","\"caller_rva\":\"0x3f747d\",\"query_bytes\":80,\"read_only\":true");}
     if(attachmentObserver::requested){for(auto caller:attachmentObserver::callers)inputPipeline::verify(rva,pattern,caller);logFile->event("attachment_observer_enabled","\"read_only\":true,\"max_records\":256");}
     inputPipeline::verify(rva,pattern,inputRanged::callerRva);
     if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+rva),reinterpret_cast<void*>(&advance),reinterpret_cast<void**>(&original))!=MH_OK)

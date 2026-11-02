@@ -115,10 +115,10 @@ bool __fastcall reserve(void* array,uint64_t count,bool mayFail) {
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());
     auto* scope=current;
     const auto address=reinterpret_cast<uintptr_t>(array);
-    const bool knownCaller=caller==baseAddress+0x47909||caller==baseAddress+0x4792f||
-        caller==baseAddress+0x47961||caller==baseAddress+0x47984;
+    const bool knownCaller=caller==baseAddress+0x47c08||caller==baseAddress+0x47c20||
+        caller==baseAddress+0x47c45||caller==baseAddress+0x47c5a;
     if(scope&&knownCaller&&scope->discoverBody&&!scope->body){
-        const uintptr_t offset=(caller==baseAddress+0x47909||caller==baseAddress+0x4792f)?0xc8:0xf8;
+        const uintptr_t offset=(caller==baseAddress+0x47c08||caller==baseAddress+0x47c20)?0xc8:0xf8;
         if(address>offset)scope->body=address-offset;
     }
     if(!scope||!knownCaller||(address!=scope->body+0xc8&&address!=scope->body+0xf8))
@@ -142,7 +142,7 @@ void* __fastcall traceFactory(void* manager,const void* context){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());
     // Original Scene initialization is forwarded without observation. Only
     // c02a0 inside our private resolution scope can activate this trace.
-    if(!privateResolution||caller!=baseAddress+0xf26a2)return originalTracedFactory(manager,context);
+    if(!privateResolution||caller!=baseAddress+0xf4362)return originalTracedFactory(manager,context);
     Scope scope;scope.eye=nativeFactoryOrdinal++;scope.discoverBody=true;
     void* result=nullptr;
     {ScopeLease lease(scope);result=originalTracedFactory(manager,context);}
@@ -166,7 +166,7 @@ void* __fastcall allocate(void* opaque,uint64_t size,uint64_t alignment,uint8_t*
     auto& facade=*static_cast<AllocatorFacade*>(opaque);
     auto& body=(*facade.bodies)[facade.eye];
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());
-    if(caller==baseAddress+0x477fd&&!body.consumed&&size==0x210&&alignment==8&&tag&&*tag==8&&flags==0){
+    if(caller==baseAddress+0x47afd&&!body.consumed&&size==0x210&&alignment==8&&tag&&*tag==8&&flags==0){
         body.consumed=true;*tag=body.returnedTag;SetLastError(body.returnedError);
         return reinterpret_cast<void*>(body.address);
     }
@@ -193,30 +193,30 @@ void __fastcall free(void* opaque,void* allocation,uint8_t* tag) {
 }
 void validate(){
     const std::pair<uintptr_t,const char*> sites[]={
-        {0x477c0,"48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57"},
-        {0x49400,"40 53 55 56 57 41 55 48 83 EC 20"},
-        {0x4eb50,"40 56 57 41 57 48 83 EC 30 4C 8B 79 10"},
-        {0x87c150,"48 83 EC 38 41 0F B6 01 4C 8B 09"},
-        {0xa87c0,"40 53 48 83 EC 40 8B 84 24 80 00 00 00 48 8B D9 C6 44 24 38 01 89 44 24 30 8B 44 24"},
-        {0xa98b0,"48 83 EC 28 85 D2"},
-        {0x11ccaf0,"48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 54 41 55 41 56 41 57 48 83 EC 20 48 8B DA 48 8B F9 E8 ? ? ? ? 45 33 E4 48 8D 05 CF"},
-        {0x11cd5f0,"48 89 5C 24 10 57 48 83 EC 40 48 89 11 48"},
-        {0x11d4480,"4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10 55 53 57 41 56 48"},
-        {0x11cd8d0,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20"},
-        {0x11d3060,"48 8B C4 55 53 57 41 57 48 8D 68 A1"},
-        {0x1092e0,"48 89 5C 24 10 55 56 57 48 83 EC 50 48 8B 79"}};
+        {0x47ac0,"48 89 5C 24 10 55 56 57 41 54 41 55 41 56 41 57"},
+        {0x49700,"40 53 55 56 57 41 55 48 83 EC 20"},
+        {0x4eec0,"40 56 57 41 57 48 83 EC 30 4C 8B 79 10"},
+        {0x886a00,"48 83 EC 38 41 0F B6 01 4C 8B 09"},
+        {0xa9400,"40 53 48 83 EC 40 8B 84 24 80 00 00 00 48 8B D9 C6 44 24 38 01 89 44 24 30 8B 44 24"},
+        {0xaa550,"48 83 EC 28 85 D2"},
+        {0x11e93f0,"48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 54 41 55 41 56 41 57 48 83 EC 20 48 8B DA 48 8B F9 E8 ? ? ? ? 45 33 E4 48 8D 05 0F"},
+        {0x11e9f10,"48 89 5C 24 10 57 48 83 EC 40 48 89 11 48"},
+        {0x11f0eb0,"4C 89 4C 24 20 4C 89 44 24 18 48 89 54 24 10 55 53 57 41 56 48"},
+        {0x11ea1f0,"48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20"},
+        {0x11efa50,"48 8B C4 55 53 57 41 57 48 8D 68 A1"},
+        {0x10b210,"48 89 5C 24 10 55 56 57 48 83 EC 50 48 8B 79"}};
     for(const auto& site:sites){const auto pattern=parsePattern(site.second);
         if(scan(reinterpret_cast<const uint8_t*>(baseAddress+site.first),pattern.size(),pattern)!=std::vector<size_t>{0})
             throw std::runtime_error("detail diagnostic signature changed at "+hex(site.first));}
-    for(const auto caller:{0x47909,0x4792f,0x47961,0x47984}){
+    for(const auto caller:{0x47c08,0x47c20,0x47c45,0x47c5a}){
         const auto call=baseAddress+caller-5;
-        if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+0x4eb50)
+        if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+0x4eec0)
             throw std::runtime_error("detail reserve caller changed");
     }
 }
 void install(){
     validate();
-    auto target=reinterpret_cast<void*>(baseAddress+0x4eb50);
+    auto target=reinterpret_cast<void*>(baseAddress+0x4eec0);
     const auto created=MH_CreateHook(target,reinterpret_cast<void*>(&reserve),reinterpret_cast<void**>(&originalReserve));
     if(created!=MH_OK)throw std::runtime_error("detail reserve hook create failed");
     const auto enabled=MH_EnableHook(target);
@@ -225,17 +225,17 @@ void install(){
 }
 void disable() noexcept {
     if(factoryTraceEnabled){
-        const auto status=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0x477c0));
+        const auto status=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0x47ac0));
         factoryTraceEnabled=status!=MH_OK;
         try{logFile->event("detail_factory_trace_hook_removed","\"status\":"+std::to_string(status));}catch(...){}
     }
     if(allocatorTraceEnabled){
-        const auto status=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0x8b1da0));
+        const auto status=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0x8bc5c0));
         allocatorTraceEnabled=status!=MH_OK;
         try{logFile->event("detail_allocator_trace_hook_removed","\"status\":"+std::to_string(status));}catch(...){}
     }
     if(!reserveEnabled)return;
-    const auto status=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0x4eb50));
+    const auto status=MH_DisableHook(reinterpret_cast<void*>(baseAddress+0x4eec0));
     reserveEnabled=status!=MH_OK;
     try{logFile->event("detail_reserve_hook_removed","\"status\":"+std::to_string(status)+",\"trampoline_retained\":true");}catch(...){}
 }
@@ -247,7 +247,7 @@ void run(uintptr_t view){
     if(read<uintptr_t>(scene+layout::sceneView)!=view||read<uintptr_t>(wrapper+0x70)!=scene||read<uintptr_t>(wrapper+0x78)!=view)
         throw std::runtime_error("detail diagnostic original view ownership mismatch");
     using Wait=bool(__fastcall*)(void*,int64_t);
-    if(!reinterpret_cast<Wait>(baseAddress+0x1092e0)(reinterpret_cast<void*>(scene),0))
+    if(!reinterpret_cast<Wait>(baseAddress+0x10b210)(reinterpret_cast<void*>(scene),0))
         throw std::runtime_error("scene busy; no detail allocation attempted");
     const auto manager=read<uintptr_t>(renderer+0x14398),resolution=read<uintptr_t>(wrapper+0xc0);
     const auto originalDetail=read<uintptr_t>(resolution);
@@ -299,10 +299,10 @@ void run(uintptr_t view){
     bool builderInitialized=false;uint32_t group=0;unsigned failures=0;
     auto cleanup=[&](){
         for(size_t i=2;i-->0;)if(objects[i]){
-            reinterpret_cast<Dispose>(baseAddress+0x49400)(privateManager.data(),reinterpret_cast<void*>(objects[i]));objects[i]=0;
+            reinterpret_cast<Dispose>(baseAddress+0x49700)(privateManager.data(),reinterpret_cast<void*>(objects[i]));objects[i]=0;
         }
-        if(builderInitialized){reinterpret_cast<void(__fastcall*)(void*)>(baseAddress+0x11cd8d0)(builder.bytes.data());builderInitialized=false;}
-        if(group)reinterpret_cast<void(__fastcall*)(void*,uint32_t*)>(baseAddress+0x11d3060)(
+        if(builderInitialized){reinterpret_cast<void(__fastcall*)(void*)>(baseAddress+0x11ea1f0)(builder.bytes.data());builderInitialized=false;}
+        if(group)reinterpret_cast<void(__fastcall*)(void*,uint32_t*)>(baseAddress+0x11efa50)(
             reinterpret_cast<void*>(read<uintptr_t>(renderer+0x50)),&group);
         for(auto& body:bodies)if(body.address&&!body.freed){
             uint8_t tag=0;facade.free(reinterpret_cast<void*>(allocator),reinterpret_cast<void*>(body.address),&tag);body.freed=true;
@@ -334,15 +334,15 @@ void run(uintptr_t view){
                 ",\"diagnostic_zeroing\":false");
         }
         using BuilderInit=void*(__fastcall*)(void*,void*,uint8_t);
-        reinterpret_cast<BuilderInit>(baseAddress+0x11ccaf0)(builder.bytes.data(),reinterpret_cast<void*>(read<uintptr_t>(renderer+0x14a70)),read<uint8_t>(wrapper+8));
+        reinterpret_cast<BuilderInit>(baseAddress+0x11e93f0)(builder.bytes.data(),reinterpret_cast<void*>(read<uintptr_t>(renderer+0x14a70)),read<uint8_t>(wrapper+8));
         builderInitialized=true;
         using PoolInit=void*(__fastcall*)(void*,void*,uint32_t,uintptr_t,uint8_t);
-        reinterpret_cast<PoolInit>(baseAddress+0x11cd5f0)(gpuAllocator.data(),builder.bytes.data(),pool,0,1);
+        reinterpret_cast<PoolInit>(baseAddress+0x11e9f10)(gpuAllocator.data(),builder.bytes.data(),pool,0,1);
         std::array<void*,1> context{gpuAllocator.data()};
         for(size_t i=0;i<2;++i){
             facade.eye=i;Scope scope;scope.body=bodies[i].address;scope.eye=i;
             uintptr_t returned=0;
-            {ScopeLease lease(scope);returned=reinterpret_cast<uintptr_t>(reinterpret_cast<Factory>(baseAddress+0x477c0)(privateManager.data(),context.data()));}
+            {ScopeLease lease(scope);returned=reinterpret_cast<uintptr_t>(reinterpret_cast<Factory>(baseAddress+0x47ac0)(privateManager.data(),context.data()));}
             if(returned&&returned!=bodies[i].address)throw std::runtime_error("detail factory returned foreign object; foreign destructor refused");
             objects[i]=returned;
             logFile->event("detail_factory_return","\"eye\":"+std::to_string(i)+",\"object\":"+hex(objects[i])+
@@ -355,7 +355,7 @@ void run(uintptr_t view){
         }
         std::array<uint8_t,32> status{};status[0]=0xff;
         using Commit=void*(__fastcall*)(void*,void*,uint32_t*,void*);
-        reinterpret_cast<Commit>(baseAddress+0x11d4480)(builder.bytes.data(),status.data(),&group,reinterpret_cast<void*>(read<uintptr_t>(renderer+0x50)));
+        reinterpret_cast<Commit>(baseAddress+0x11f0eb0)(builder.bytes.data(),status.data(),&group,reinterpret_cast<void*>(read<uintptr_t>(renderer+0x50)));
         logFile->event("detail_factory_group_commit","\"status\":"+std::to_string(status[0])+",\"group\":"+std::to_string(group));
         if(status[0])throw std::runtime_error("detail diagnostic GPU commit failed");
         if(!std::all_of(builder.guard.begin(),builder.guard.end(),[](uint8_t b){return b==0xa5;}))
@@ -382,16 +382,16 @@ void validateDetailFactoryProbe(){detailFactoryDiagnostic::validate();}
 void installDetailFactoryReserveHook(){detailFactoryDiagnostic::install();}
 void installNativeDetailFactoryTrace(){
     detailFactoryDiagnostic::install();
-    const auto call=baseAddress+0xf269d;
-    if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+0x477c0)
+    const auto call=baseAddress+0xf435d;
+    if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+0x47ac0)
         throw std::runtime_error("native detail factory caller changed");
-    auto target=reinterpret_cast<void*>(baseAddress+0x477c0);
+    auto target=reinterpret_cast<void*>(baseAddress+0x47ac0);
     if(MH_CreateHook(target,reinterpret_cast<void*>(&detailFactoryDiagnostic::traceFactory),
         reinterpret_cast<void**>(&detailFactoryDiagnostic::originalTracedFactory))!=MH_OK||MH_EnableHook(target)!=MH_OK)
         throw std::runtime_error("native detail factory trace hook failed");
     detailFactoryDiagnostic::factoryTraceEnabled=true;
     const auto pattern=parsePattern("48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 20 4C 89 44 24 18 57 41 56 41 57 48 83 EC 60 48 8D");
-    auto allocatorTarget=reinterpret_cast<void*>(baseAddress+0x8b1da0);
+    auto allocatorTarget=reinterpret_cast<void*>(baseAddress+0x8bc5c0);
     if(scan(reinterpret_cast<const uint8_t*>(allocatorTarget),pattern.size(),pattern)!=std::vector<size_t>{0})
         throw std::runtime_error("native allocator trace signature changed");
     if(MH_CreateHook(allocatorTarget,reinterpret_cast<void*>(&detailFactoryDiagnostic::traceAllocateResult),

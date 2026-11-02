@@ -25,7 +25,7 @@ inline BowNativeIdentity bowIdentity(uintptr_t input,uintptr_t weapon){
 
 
 inline bool liveEquipmentWatch=false; // opt-in read-only actionbar evidence for held effects
-constexpr uintptr_t callerRva=0x2e9274;
+constexpr uintptr_t callerRva=0x2ee454;
 inline std::atomic<unsigned> calls{0},samples{0},failures{0},selectionEvents{0};
 // keen::ecs::SlotSelection (reflection size 256): equipment 0..215 (EquipmentSlotData,
 // layout not in reflection), actionbarEntityIds +216 (2 EntityId), actionItem +224
@@ -248,7 +248,7 @@ inline void capture(uintptr_t sp,void* context,void* query,uint32_t bytes){
             throw std::runtime_error("ranged query slots missing");
         const auto state=read<uintptr_t>(slots[0]);const auto index=read<uint32_t>(slots[0]+8);
         if(!state||!index||index>0x1000000)throw std::runtime_error("ranged query bounds");
-        const auto table=read<uintptr_t>(state+0x828);if(!table)throw std::runtime_error("ranged entity table absent");
+        const auto table=read<uintptr_t>(state+0x830);if(!table)throw std::runtime_error("ranged entity table absent");
         const auto entity=read<uint32_t>(table+uintptr_t(index-1)*16);
         rootCamera::Sample local;{std::lock_guard<std::mutex> lock(rootCamera::mutex);local=rootCamera::latest;}
         if(!local.number||GetTickCount64()-local.milliseconds>1000||entity!=local.entity)return;

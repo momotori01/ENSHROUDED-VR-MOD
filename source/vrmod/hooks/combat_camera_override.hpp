@@ -12,7 +12,7 @@
 // nothing: the system tries again on its next tick and gets 0 again, the game's lock-on cameras keep their own settings.
 // EVR_COMBAT_CAMERA_OVERRIDE=1 in the game's environment: the game's override as before.
 namespace combatCameraOverride {
-constexpr uintptr_t applyRva=0xe5efb0,callerRva=0x2b108b;
+constexpr uintptr_t applyRva=0xe75e30,callerRva=0x2b5d4b;
 constexpr const char* applyPattern="4C 8B DC 53 56 57 48 81 EC 30 07 00 00 41 8B D8 49 8B F9 44 8B 42 04 48 8B F1 45 85 C0 0F 84";
 using Apply=bool(__fastcall*)(void*,const void*,uint32_t,void*);
 inline Apply original=nullptr;inline bool enabled=false;

@@ -13,7 +13,7 @@ inline Build originalBuild=nullptr;inline Get originalGet=nullptr;
 inline bool requested=false,buildEnabled=false,getEnabled=false;
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},scopes{0},copies{0},failures{0};
-constexpr uintptr_t buildRva=0x3a2610,getRva=0x9a7570;
+constexpr uintptr_t buildRva=0x3a8890,getRva=0x9b2e00;
 constexpr const char* buildPattern="4C 89 4C 24 20 44 89 44 24 18 48 89 54 24 10 48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D8 F1 FF FF 48 81 EC 28 0F 00 00 8B 9D 90 0E 00";
 constexpr const char* getPattern="48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 48 8D BA C0";
 struct Scope {
@@ -34,8 +34,8 @@ __declspec(noinline) uintptr_t __fastcall build(void* output,void* buffer,uint32
             rootCamera::Sample local;
             {std::lock_guard<std::mutex> lock(rootCamera::mutex);local=rootCamera::latest;}
             // 1.0: the connection and the entity of the sender context moved from +0x5c0/+0x5c4 to +0x648/+0x64c
-            if(ctx&&local.number&&GetTickCount64()-local.milliseconds<1000&&read<uint32_t>(ctx+0x648)==connection&&
-               read<uint32_t>(ctx+0x64c)==local.entity){scope.context=ctx;scope.tick=tick;scope.entity=local.entity;scope.freecam=freecam!=0;use=true;}
+            if(ctx&&local.number&&GetTickCount64()-local.milliseconds<1000&&read<uint32_t>(ctx+0x658)==connection&&
+               read<uint32_t>(ctx+0x65c)==local.entity){scope.context=ctx;scope.tick=tick;scope.entity=local.entity;scope.freecam=freecam!=0;use=true;}
         }catch(const std::exception& e){failure(e.what());}
      }}
     if(!use)return originalBuild(output,buffer,tick,context,connection,freecam);
@@ -68,7 +68,7 @@ __declspec(noinline) void* __fastcall get(void* output,void* ecs,uint32_t compon
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());const CallbackScope callback;
     auto result=originalGet(output,ecs,component,entity);
     const ObserverLastError preserve;
-    if(!accepting.load()||!current||caller!=baseAddress+0x3a2688)return result;
+    if(!accepting.load()||!current||caller!=baseAddress+0x3a8908)return result;
     try{
         auto& s=*current;const auto out=reinterpret_cast<uintptr_t>(output);
         const auto span=read<std::array<uintptr_t,2>>(out);
@@ -91,7 +91,7 @@ __declspec(noinline) void* __fastcall get(void* output,void* ecs,uint32_t compon
     return result;
 }
 inline void verify(){
-    inputPipeline::verify(getRva,getPattern,0x3a2688);
+    inputPipeline::verify(getRva,getPattern,0x3a8908);
     const auto bytes=parsePattern(buildPattern);
     if(scan(reinterpret_cast<const uint8_t*>(baseAddress+buildRva),bytes.size(),bytes)!=std::vector<size_t>{0})
         throw std::runtime_error("input builder signature changed");

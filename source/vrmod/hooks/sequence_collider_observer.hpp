@@ -126,7 +126,7 @@ inline std::mutex quotaMutex;inline std::map<std::pair<uint32_t,bool>,unsigned> 
 inline bool requested=false;
 inline std::atomic<unsigned> samples{0},foreignSamples{0},localSamples{0},calls{0},failures{0};
 inline thread_local unsigned currentReadySample=0;
-constexpr uintptr_t callerRva=0x3f065d;
+constexpr uintptr_t callerRva=0x3f747d;
 inline actionSequenceObserver::Status qualifiedActor(uintptr_t state,const actionSequenceObserver::Status& fallback){
  const auto world=read<uintptr_t>(state+0x30);if(!world||!fallback.entity)return {};
  return actionSequenceObserver::forWorld(world,fallback.entity);
@@ -142,7 +142,7 @@ inline void capture(uintptr_t sp,void* context,void* query,uint32_t bytes){
   if(slots[0]!=reinterpret_cast<uintptr_t>(context)||!slots[1]||!slots[4]||!slots[5]||!slots[7]||!slots[8])throw std::runtime_error("sequence collider slots missing");
   const auto index=read<uint32_t>(slots[0]+8),parent=slots[2]?read<uint32_t>(slots[2]):0;
   if(!index||index>0x1000000)throw std::runtime_error("sequence collider entity index invalid");
-  const auto state=read<uintptr_t>(slots[0]);const auto entity=read<uint32_t>(read<uintptr_t>(state+0x828)+uintptr_t(index-1)*16);
+  const auto state=read<uintptr_t>(slots[0]);const auto entity=read<uint32_t>(read<uintptr_t>(state+0x830)+uintptr_t(index-1)*16);
   actionSequenceObserver::Status actor;{std::lock_guard<std::mutex> lock(actionSequenceObserver::mutex);actor=actionSequenceObserver::latest;}
   actor=qualifiedActor(state,actor);
   sequenceAssetObserver::capture(slots[7],actor);
@@ -185,7 +185,7 @@ inline void ready(uintptr_t sp,void* context,void* query,uint32_t bytes,bool jun
   actionSequenceObserver::Status actor;{std::lock_guard<std::mutex> lock(actionSequenceObserver::mutex);actor=actionSequenceObserver::latest;}
   const auto event=read<std::array<uint8_t,24>>(slots[4]);uint32_t sequence=0;std::memcpy(&sequence,event.data(),4);
   const auto state=read<uintptr_t>(slots[0]);const auto index=read<uint32_t>(slots[0]+8);if(!index||index>0x1000000)throw std::runtime_error("collider ready entity bounds");
-  const auto entity=read<uint32_t>(read<uintptr_t>(state+0x828)+uintptr_t(index-1)*16);const auto id=read<uint64_t>(slots[5]+8);
+  const auto entity=read<uint32_t>(read<uintptr_t>(state+0x830)+uintptr_t(index-1)*16);const auto id=read<uint64_t>(slots[5]+8);
   blockedActionLifetime::collider(read<uintptr_t>(state+0x30),entity,event);
   actor=qualifiedActor(state,actor);
   nativeImpactComponents::learnCurrent(state,entity,slots[1]);
@@ -220,7 +220,7 @@ inline void ready(uintptr_t sp,void* context,void* query,uint32_t bytes,bool jun
 // at zeros), handed to ready() / the finishes as before, and the two transform slots the borrowing put in the copy are
 // written into the game's query - for this one iteration; the next advance puts the originals back.
 namespace colliderSweep {
-constexpr uintptr_t firstReturn=0x32c411,nextReturn=0x32c5fe;constexpr uint32_t queryBytes=0x38;constexpr uintptr_t queryAt=0x80;
+constexpr uintptr_t firstReturn=0x3319a1,nextReturn=0x331b8e;constexpr uint32_t queryBytes=0x38;constexpr uintptr_t queryAt=0x80;
 inline const std::array<uint8_t,16> noCollider{};
 inline thread_local std::array<uintptr_t,10> shape{};inline thread_local uintptr_t* game=nullptr;inline thread_local bool open=false;
 inline std::atomic<unsigned> iterations{0},misplaced{0},worldless{0};
@@ -251,13 +251,13 @@ inline void opened(uintptr_t sp,void* nativeContext,void* query,uint32_t bytes) 
   if(bytes!=queryBytes||reinterpret_cast<uintptr_t>(query)!=sp+queryAt){if(misplaced.fetch_add(1)<3)logFile->event("collider_sweep_query_differs","\"bytes\":"+std::to_string(bytes)+",\"query_minus_rsp\":"+hex(reinterpret_cast<uintptr_t>(query)-sp));return;}
   auto* q=reinterpret_cast<uintptr_t*>(query);
   if(q[0]!=reinterpret_cast<uintptr_t>(nativeContext)||!q[2]||!q[4])return;
-  const auto real=read<uintptr_t>(q[0]);const auto index=read<uint32_t>(q[0]+8);const auto entities=read<uintptr_t>(real+0x828);
+  const auto real=read<uintptr_t>(q[0]);const auto index=read<uint32_t>(q[0]+8);const auto entities=read<uintptr_t>(real+0x830);
   if(!real||!index||index>0x1000000||!entities)return;
   const auto entity=read<uint32_t>(entities+uintptr_t(index-1)*16);
   uintptr_t world=read<uintptr_t>(real+0x30);if(!world)world=worldOf(entity,q[2]);
   if(!world){if(worldless.fetch_add(1)<3)logFile->event("collider_sweep_world_unknown","\"entity\":"+std::to_string(entity));return;}
   state.fill(0);std::memcpy(state.data()+0x30,&world,8);
-  {const auto ticks=read<uintptr_t>(real+0x818);std::memcpy(state.data()+0x818,&ticks,8);std::memcpy(state.data()+0x828,&entities,8);}
+  {const auto ticks=read<uintptr_t>(real+0x820);std::memcpy(state.data()+0x820,&ticks,8);std::memcpy(state.data()+0x830,&entities,8);}
   context={reinterpret_cast<uintptr_t>(state.data()),uintptr_t(index)};
   shape={reinterpret_cast<uintptr_t>(context.data()),q[2],0,q[3],q[4],reinterpret_cast<uintptr_t>(noCollider.data()),0,0,0,0};game=q;open=true;
   const auto n=iterations.fetch_add(1);
@@ -273,7 +273,7 @@ inline void serverSlot(uintptr_t sp,void* context,void* query,uint32_t bytes){
   const auto slots=read<std::array<uintptr_t,6>>(reinterpret_cast<uintptr_t>(query));if(slots[0]!=reinterpret_cast<uintptr_t>(context)||!slots[1])throw std::runtime_error("server slot query absent");
   const auto local=rootCamera::snapshot();if(!local.entity||read<uint32_t>(slots[1]+44)!=local.entity)return;
   const auto state=read<uintptr_t>(slots[0]);const auto index=read<uint32_t>(slots[0]+8);if(!index||index>0x1000000)throw std::runtime_error("server slot entity bounds");
-  const auto entity=read<uint32_t>(read<uintptr_t>(state+0x828)+uintptr_t(index-1)*16);nativeImpactComponents::learnServerSlot(state,entity,slots[1]);
+  const auto entity=read<uint32_t>(read<uintptr_t>(state+0x830)+uintptr_t(index-1)*16);nativeImpactComponents::learnServerSlot(state,entity,slots[1]);
  }catch(const std::exception& e){if(failures.fetch_add(1)<3)logFile->event("sequence_collider_failure","\"reason\":"+jsonString(e.what()));}
 }
 inline void removed(bool restored,unsigned callbacks){if(requested)logFile->event("collider_ready_recording_summary","\"processed\":"+std::to_string(readySamples.load())+",\"recorded\":"+std::to_string(readyRecorded.load())+",\"witness\":"+std::to_string(readyWitnesses.load())+",\"omitted\":"+std::to_string(readyOmitted.load())+",\"limit\":"+std::to_string(readyRecordingBudget.limit()));if(requested)logFile->event("sequence_collider_removed","\"restored\":"+std::string(restored?"true":"false")+",\"callbacks\":"+std::to_string(callbacks)+",\"samples\":"+std::to_string(samples.load())+",\"calls\":"+std::to_string(calls.load())+",\"failures\":"+std::to_string(failures.load()));}

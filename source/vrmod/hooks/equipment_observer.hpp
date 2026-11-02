@@ -16,7 +16,7 @@ inline std::atomic<unsigned> callbacks{0},samples{0},failures{0};
 using Update=void(__fastcall*)(void*);
 inline Update original=nullptr;
 inline void* target=nullptr;
-inline constexpr const char* patternText="40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 18 FB FF FF";   // 1.0 (June: F8 FA FF FF)
+inline constexpr const char* patternText="40 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 58 FA FF FF";   // build 26320373 (26082781 and 1.0: 18 FB FF FF; June: F8 FA FF FF)
 inline const std::array<const char*,24> names{{"head","hair","eyebrow","beard","neck","collar","chest","waist","crotch","upper_arms","lower_arms","hands","upper_legs","lower_legs","feet","head_armour","upper_armour","arm_armour","lower_armour","foot_armour","ring0","ring1","shield","main_hand"}};
 // The same update runs for every character the game dresses this way, not for the local player alone: other players'
 // characters online, and whoever else has such parts. For showing other players' VR bodies their part models and the
@@ -60,7 +60,7 @@ inline void capture(void* context){
     const auto values=read<std::array<uintptr_t,20>>(reinterpret_cast<uintptr_t>(context));
     const auto task=values[0],state=read<uintptr_t>(task);const auto query=read<uint32_t>(task+8);
     if(!state||!query)throw std::runtime_error("equipment observation lacks task entity");
-    const auto entity=read<uint32_t>(read<uintptr_t>(state+0x828)+uintptr_t(query-1)*16);
+    const auto entity=read<uint32_t>(read<uintptr_t>(state+0x830)+uintptr_t(query-1)*16);
     rootCamera::Sample camera;try{camera=rootCamera::snapshot();}catch(...){if(otherWorldsPass)return;throw;}   // the mod without VR: the local player is not known yet
     if(entity!=camera.entity){other(entity,camera.entity,values);return;}
     // Native c0160/c46f0 unwrap the public RenderScene at +70. This is
@@ -131,7 +131,7 @@ __declspec(noinline) void __fastcall update(void* context){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());callbacks.fetch_add(1);
     original(context);
     {const ObserverLastError lastError;
-     if(accepting.load()&&caller==baseAddress+0x38314b){
+     if(accepting.load()&&caller==baseAddress+0x3892fb){
         try{capture(context);}catch(const std::exception& error){{std::lock_guard<std::mutex> lock(snapshotMutex);latest.milliseconds=0;}if(failures.fetch_add(1)<3)try{
             logFile->event("equipment_observer_read_failure","\"reason\":"+jsonString(error.what()));}catch(...){} }
      }}
@@ -139,13 +139,13 @@ __declspec(noinline) void __fastcall update(void* context){
 }
 inline void install(){
     const char* text=patternText;
-    const auto bytes=parsePattern(text);target=reinterpret_cast<void*>(baseAddress+0x383830);
-    const auto call=baseAddress+0x383146;
+    const auto bytes=parsePattern(text);target=reinterpret_cast<void*>(baseAddress+0x3899e0);
+    const auto call=baseAddress+0x3892f6;
     if(scan(static_cast<const uint8_t*>(target),bytes.size(),bytes)!=std::vector<size_t>{0}||read<uint8_t>(call)!=0xe8||
        uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=reinterpret_cast<uintptr_t>(target))throw std::runtime_error("equipment observer signature mismatch");
     if(MH_CreateHook(target,reinterpret_cast<void*>(&update),reinterpret_cast<void**>(&original))!=MH_OK)throw std::runtime_error("equipment observer hook creation failed");
     accepting=true;if(MH_EnableHook(target)!=MH_OK){accepting=false;throw std::runtime_error("equipment observer enable failed");}enabled=true;
-    logFile->event("equipment_observer_enabled","\"rva\":\"0x383830\",\"caller_rva\":\"0x38314b\",\"max_samples\":20,\"continuous\":"+std::string(continuous?"true":"false")+",\"read_only\":true,\"pattern\":"+jsonString(text));
+    logFile->event("equipment_observer_enabled","\"rva\":\"0x3899e0\",\"caller_rva\":\"0x3892fb\",\"max_samples\":20,\"continuous\":"+std::string(continuous?"true":"false")+",\"read_only\":true,\"pattern\":"+jsonString(text));
 }
 inline void disable(){
     accepting=false;if(!enabled)return;

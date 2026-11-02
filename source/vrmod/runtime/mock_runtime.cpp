@@ -15,6 +15,8 @@
 #include <set>
 #include <sstream>
 #include <thread>
+#include <cstdlib>
+#include <vector>
 using namespace evr;
 namespace
 {
@@ -816,6 +818,34 @@ XR_FN(m_xrWaitFrame)(XrSession s, const XrFrameWaitInfo *, XrFrameState *p)
         return XR_ERROR_CALL_ORDER_INVALID;
     waited = true;
     frame++;
+    // The SteamVR dashboard, for a test (2026-11-02, user: "opening the SteamVR dashboard with the system button, it freezes on
+    // the dashboard"): EVR_MOCK_UNFOCUS=<from>-<to>[/<from>-<to>...] - the session is VISIBLE (not focused: no input) from
+    // frame <from> and FOCUSED again at <to>, as a runtime does while its dashboard is up.
+    {
+        static const std::vector<std::pair<uint64_t, uint64_t>> unfocus = [] {
+            std::vector<std::pair<uint64_t, uint64_t>> out;
+            const char *v = std::getenv("EVR_MOCK_UNFOCUS");
+            for (const char *p = v; p && *p;)
+            {
+                char *end = nullptr;
+                const auto a = std::strtoull(p, &end, 10);
+                if (!end || *end != '-')
+                    break;
+                const auto b = std::strtoull(end + 1, &end, 10);
+                if (a && b > a)
+                    out.push_back({a, b});
+                p = end && *end == '/' ? end + 1 : nullptr;
+            }
+            return out;
+        }();
+        for (const auto &u : unfocus)
+        {
+            if (frame == u.first && state == XR_SESSION_STATE_FOCUSED)
+                event(XR_SESSION_STATE_VISIBLE);
+            if (frame == u.second && state == XR_SESSION_STATE_VISIBLE)
+                event(XR_SESSION_STATE_FOCUSED);
+        }
+    }
     {
         static const uint64_t recenterFrame = [] { const char *v = std::getenv("EVR_MOCK_RECENTER_FRAME"); return v ? std::strtoull(v, nullptr, 10) : 0ull; }();
         if (recenterFrame && frame == recenterFrame)

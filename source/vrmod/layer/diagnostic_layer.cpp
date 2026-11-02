@@ -126,7 +126,7 @@ bool preflightCandidate(const VkInstanceCreateInfo &info, bool &fixture)
     // the render function's first bytes (1.0: 0x129e20; tools/match_functions.py maps it at the next update)
     const uint8_t signature[]{0x4c,0x89,0x4c,0x24,0x20,0x4c,0x89,0x44,0x24,0x18,0x48,0x89,0x54,0x24,0x10,0x48,0x89,0x4c,0x24,0x08};
     if (nt->FileHeader.TimeDateStamp != evr::gameBuild::timeDateStamp || nt->OptionalHeader.SizeOfImage != evr::gameBuild::sizeOfImage ||
-        std::memcmp(base + 0x129fc0, signature, sizeof(signature)))
+        std::memcmp(base + 0x12c2e0, signature, sizeof(signature)))
     { note("preflight_disabled", "\"reason\":\"unsupported_loaded_game_build\""); return false; }
     const auto names = diagnostic::extensionNames(info.enabledExtensionCount, info.ppEnabledExtensionNames);
     return std::find(names.begin(), names.end(), "VK_KHR_win32_surface") != names.end() &&
@@ -388,7 +388,7 @@ static void enlargeTerrainArena()
     const std::wstring name = exe.substr(exe.find_last_of(L"\\/") + 1);
     if (_wcsicmp(name.c_str(), L"enshrouded.exe"))
         return;
-    auto *at = reinterpret_cast<uint8_t *>(GetModuleHandleW(nullptr)) + 0x4f845;
+    auto *at = reinterpret_cast<uint8_t *>(GetModuleHandleW(nullptr)) + 0x4fbc5;
     const uint8_t expected[8]{0x48, 0xc7, 0x45, 0xe7, 0x00, 0x00, 0x7d, 0x00};
     const uint32_t bytes = 0x1770000;
     if (std::memcmp(at, expected, 8))
@@ -403,7 +403,7 @@ static void enlargeTerrainArena()
     DWORD ignored = 0;
     VirtualProtect(at + 4, 4, old, &ignored);
     FlushInstructionCache(GetCurrentProcess(), at, 8);
-    note("terrain_arena_enlarged", "\"site\":\"0x4f845\",\"native_bytes\":8192000,\"bytes\":24576000,\"by\":\"layer\"");
+    note("terrain_arena_enlarged", "\"site\":\"0x4fbc5\",\"native_bytes\":8192000,\"bytes\":24576000,\"by\":\"layer\"");
 }
 VKAPI_ATTR VkResult VKAPI_CALL evrCreateDevice(VkPhysicalDevice physical, const VkDeviceCreateInfo *info,
                                                const VkAllocationCallbacks *allocator, VkDevice *result)

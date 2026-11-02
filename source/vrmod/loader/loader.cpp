@@ -205,14 +205,45 @@ BOOL CALLBACK findWindow(HWND window,LPARAM out){
     if(pid!=GetCurrentProcessId()||!IsWindowVisible(window)||GetWindow(window,GW_OWNER))return TRUE;
     *reinterpret_cast<HWND*>(out)=window;return FALSE;
 }
+// The window in front and the process it belongs to (for the log, when the game's window cannot be brought forward).
+std::string frontOwner(){
+    const HWND front=GetForegroundWindow();if(!front)return "none";
+    DWORD pid=0;GetWindowThreadProcessId(front,&pid);std::string name="pid "+std::to_string(pid);
+    if(const HANDLE p=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid)){
+        wchar_t path[MAX_PATH]{};DWORD n=MAX_PATH;if(QueryFullProcessImageNameW(p,0,path,&n)){const std::wstring w(path,n);name=narrow(w.substr(w.find_last_of(L"\\/")+1));}
+        CloseHandle(p);}
+    char cls[64]{};GetClassNameA(front,cls,sizeof cls);return name+" ("+cls+")";
+}
+bool bringForward(HWND window){
+    if(GetForegroundWindow()==window)return true;
+    if(!SetForegroundWindow(window)){
+        // Windows lets only the foreground process hand the focus on; a released ALT tap satisfies the rule.
+        keybd_event(VK_MENU,0,0,0);keybd_event(VK_MENU,0,KEYEVENTF_KEYUP,0);
+        if(!SetForegroundWindow(window)){
+            // and the input of the window in front joined to ours for the moment (2026-11-02: the ALT tap alone failed once)
+            const DWORD theirs=GetWindowThreadProcessId(GetForegroundWindow(),nullptr),ours=GetCurrentThreadId();
+            const bool joined=theirs&&theirs!=ours&&AttachThreadInput(ours,theirs,TRUE);
+            BringWindowToTop(window);SetForegroundWindow(window);
+            if(joined)AttachThreadInput(ours,theirs,FALSE);}}
+    Sleep(300);return GetForegroundWindow()==window;
+}
+// 2026-11-02 (user: "opening the SteamVR dashboard with the system button, it freezes on the dashboard"; the headset run
+// 20261102-220422): the only start this window was not brought forward (the one attempt at 12 s failed), and the only one
+// where the game all but stopped (7.6 frames a second, 4.3 s without a frame) while the dashboard was up; the start before it
+// (213937, window in front) and the October ones kept their rate with the dashboard. (That the window behind is why is a
+// guess.) So with a headset the attempt is repeated, every 3 s for half a minute; the Mock (the user works on this PC
+// meanwhile) keeps its one attempt.
 DWORD WINAPI focusLater(void*){
     Sleep(12000);HWND window=nullptr;EnumWindows(findWindow,reinterpret_cast<LPARAM>(&window));
     if(!window){say("focus: the game's window was not found");return 0;}
     if(GetForegroundWindow()==window){say("focus: the game's window is in front");return 0;}
-    if(!SetForegroundWindow(window)){
-        // Windows lets only the foreground process hand the focus on; a released ALT tap satisfies the rule.
-        keybd_event(VK_MENU,0,0,0);keybd_event(VK_MENU,0,KEYEVENTF_KEYUP,0);SetForegroundWindow(window);}
-    Sleep(300);say(std::string("focus: the game's window was brought to the front: ")+(GetForegroundWindow()==window?"yes":"no (click the game's window once)"));
+    const std::string before=frontOwner();
+    char runtime[1024]{};const DWORD n=GetEnvironmentVariableA("XR_RUNTIME_JSON",runtime,sizeof runtime);
+    const bool mock=n&&n<sizeof runtime&&std::string(runtime).find("evr_mock_runtime")!=std::string::npos;
+    bool front=bringForward(window);unsigned tries=1;
+    for(;!front&&!mock&&tries<10&&IsWindow(window);++tries){Sleep(3000);front=bringForward(window);}
+    say("focus: the game's window was brought to the front: "+std::string(front?"yes":"no (click the game's window once)")+
+        " after "+std::to_string(tries)+(tries==1?" try":" tries")+"; in front before: "+before+(front?"":"; in front now: "+frontOwner()));
     return 0;
 }
 // Folders of earlier starts beyond the newest [Log] Keep go (0 keeps all); only what this loader made is touched:

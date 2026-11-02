@@ -16,7 +16,7 @@
 // it is drawn differently from the game's - use the game's; it may follow the reticle as before"; the HUD's auto-hide also stopped:
 // the game then showed a third bar with the vitals, and each change of stamina showed the HUD again): EVR_FLOATING_STAMINA_OFF=1.
 namespace floatingStamina {
-constexpr uintptr_t settingsOffset=0x34068,staminaFloating=0x26;
+constexpr uintptr_t settingsOffset=0x34088,staminaFloating=0x26;
 inline const bool requested=[]{char v[4]{};const auto n=GetEnvironmentVariableA("EVR_FLOATING_STAMINA_OFF",v,sizeof v);return n==1&&v[0]=='1';}();
 inline int original=-1;            // the player's own value while it is held off
 inline uintptr_t heldIn=0;         // the frontend it is held off in

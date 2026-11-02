@@ -8,9 +8,9 @@ inline std::array<std::atomic<unsigned>,3> baselineSamples{},actionSamples{};
 using Callback=void*(__fastcall*)(void*,void*,void*);
 struct Hook {const char* name;uintptr_t rva;const char* pattern;Callback original=nullptr;bool enabled=false;};
 inline std::array<Hook,3> hooks{{
- {"startQuery",0x3e5c50,"4C 89 44 24 18 53 55 57 41 54 41 55 41 57 48 83 EC"},
- {"GetSlotTransform",0x35c8ec,"40 53 56 41 54 41 55 41 56 48 81 EC A0 00 00 00"},
- {"fetchQueryResult",0x3da960,"4C 89 44 24 18 53 55 57 41 54 41 55 41 57 48 81 EC 88 00 00 00 4C"}
+ {"startQuery",0x3eca90,"4C 89 44 24 18 53 55 57 41 54 41 55 41 57 48 83 EC"},
+ {"GetSlotTransform",0x36213c,"40 53 56 41 54 41 55 41 56 48 81 EC A0 00 00 00"},
+ {"fetchQueryResult",0x3e15a0,"4C 89 44 24 18 53 55 57 41 54 41 55 41 57 48 81 EC 88 00 00 00 4C"}
 }};
 inline constexpr std::array<std::array<unsigned,8>,3> sizes{{{{4,2,1,56,4,0,0,0}},{{56,12,1,4,0,0,0,0}},{{4,12,12,1,1,1,4,4}}}};
 inline constexpr unsigned counts[]{5,4,8};
@@ -29,7 +29,7 @@ inline Snapshot snapshot(unsigned kind,void* arguments,void* vm){
  // Exact read-only equivalent of native 8d3490, called by startQuery.
  const auto task=read<uintptr_t>(s.scope);const auto index=read<uint32_t>(task+8);
  if(index>0x1000000)throw std::runtime_error("contact task entity index outside diagnostic bound");
- if(index){const auto state=read<uintptr_t>(task);s.scopeEntity=read<uint32_t>(read<uintptr_t>(state+0x828)+uintptr_t(index-1)*16);}
+ if(index){const auto state=read<uintptr_t>(task);s.scopeEntity=read<uint32_t>(read<uintptr_t>(state+0x830)+uintptr_t(index-1)*16);}
  for(unsigned i=0;i<counts[kind];++i){auto& a=s.values[i];a.id=read<uint32_t>(s.args+i*4);if(!a.id)continue;
   // Native code uses the low 16-bit slot and its 16-bit byte offset.
   a.descriptor=read<std::array<uint8_t,24>>(s.table+uintptr_t(a.id&0xffff)*24);

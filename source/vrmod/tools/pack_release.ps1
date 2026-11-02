@@ -40,7 +40,7 @@ $manifest.layer.library_path='.\evr_diagnostic.dll';$manifest.layer.description=
 [IO.File]::WriteAllText("$evr/bin/evr_layer.json",($manifest | ConvertTo-Json -Depth 6),(New-Object Text.UTF8Encoding $false))
 # The two replacement shaders of the VR sessions, with the hashes the layer checks.
 $shaders=@()
-foreach($s in @(@{name='shadow_receiver';folder='output/shadow-receiver-live-20261016-1-0';file='shadow_receiver.spv'},@{name='gi_probe';folder='output/gi-probe-fallback-20261010';file='gi_probe.spv'})){
+foreach($s in @(@{name='shadow_receiver';folder='output/shadow-receiver-live-20261102-26320373';file='shadow_receiver.spv'},@{name='gi_probe';folder='output/gi-probe-fallback-20261010';file='gi_probe.spv'})){
     $m=Get-Content -LiteralPath (Join-Path $mod "$($s.folder)/manifest.json") -Raw | ConvertFrom-Json
     $source=Join-Path $mod "$($s.folder)/$($s.file)"
     $hash=(Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash.ToLower()
@@ -69,7 +69,7 @@ Copy-Item -LiteralPath "$mod/package/README.txt" -Destination $evr
 Copy-Item -LiteralPath "$mod/package/Update-EnshroudedVR.ps1" -Destination $evr   # the update button's (settings/vr_setting_app.cpp)
 Copy-Item -LiteralPath (Join-Path $game 'references/OpenXR-SDK/LICENSE') -Destination "$evr/licenses/OpenXR-SDK-LICENSE.txt"
 Copy-Item -LiteralPath (Join-Path $game 'references/minhook/LICENSE.txt') -Destination "$evr/licenses/MinHook-LICENSE.txt"
-$build=(Get-Content -LiteralPath "$mod/config/profiles/build26082781.json" -Raw | ConvertFrom-Json)
+$build=(Get-Content -LiteralPath "$mod/config/profiles/build26320373.json" -Raw | ConvertFrom-Json)
 [IO.File]::WriteAllText("$evr/version.txt","$Version (packed $stamp; for the game build of enshrouded.exe $($build.exe_sha256.Substring(0,12)))`r`n",(New-Object Text.UTF8Encoding $false))
 # Nothing of this PC in the package's text files.
 $here=@($game,$env:USERPROFILE,$env:USERNAME) | Where-Object { $_ }

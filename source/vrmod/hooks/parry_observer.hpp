@@ -31,16 +31,18 @@ namespace parryObserver {
 // 1.0 (2026-10-16): ClientOnlyPlayerInputType gained VoiceOverPlayback 57 - Parry is 73 (72; the bit in the consumer's second
 // word 9, not 8 - 8 is UiSocial now), and PlayerInputType Block is 30 (28; 28 is QuickUse6_Release now). With June's bits
 // the swing parry pressed and took the wrong inputs on 1.0.
-constexpr uint64_t parryBit=1ull<<9,blockBit=1ull<<30;
+// Build 26320373 (2026-11-02): ClientOnlyPlayerInputType gained VoiceChatMute 59 - Parry is 74 (bit 10 of the second word);
+// PlayerInputType is the same (Block 30). Read with reflection_enum_by_name.py.
+constexpr uint64_t parryBit=1ull<<10,blockBit=1ull<<30;
 using Choose=uint64_t(__fastcall*)(void*,void*);
 using Task=void(__fastcall*)(void*);
 using Start=bool(__fastcall*)(void*,void*,void*,void*);
 inline Choose original=nullptr;inline Task originalClient=nullptr;inline Start originalServer=nullptr;
 inline bool enabled=false,clientHooked=false,serverHooked=false,swingParry=true;
-constexpr uintptr_t rva=0x2ad100,callerRva=0x2b0d43;
+constexpr uintptr_t rva=0x2b1c50,callerRva=0x2b5a03;
 constexpr const char* pattern="48 89 4C 24 08 55 53 56 57 48 8D AC 24 C8 FD FF FF 48 81 EC 38 03 00 00";
-constexpr uintptr_t clientRva=0x2b0c80;constexpr const char* clientPattern="48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 41 B8";
-constexpr uintptr_t serverRva=0x2c78e0,serverCallerRva=0x2dbd3b;
+constexpr uintptr_t clientRva=0x2b5940;constexpr const char* clientPattern="48 89 7C 24 18 55 48 8D 6C 24 A9 48 81 EC F0 00 00 00 41 B8";
+constexpr uintptr_t serverRva=0x2cc910,serverCallerRva=0x2e0f1e;
 constexpr const char* serverPattern="4C 89 4C 24 20 48 89 4C 24 08 55 41 54 41 55 41 57 48 8D AC 24 F8 FE FF";
 constexpr uint64_t clientWindowMs=150,serverWindowMs=300;
 // Where the rows keep what is written (2026-10-17, read in the build 25988036 and the same in 1.0.0.1): until then June's
@@ -74,7 +76,7 @@ inline std::atomic<uintptr_t> clientConsumer{0};
 // host's own); a guest's parry is decided by the host's game. EVR_PARRY_RELAX=0: the game's rules only.
 inline bool relax=true;inline bool relaxHooked=false;
 constexpr uint64_t relaxAfterSwingMs=200,opportunityFreshMs=80,relaxedTargetMs=500;
-constexpr uintptr_t flagTestRva=0x21aaa0,candidateRva=0x3b52b0,entityRva=0x9a6cf0;
+constexpr uintptr_t flagTestRva=0x21e410,candidateRva=0x3bb930,entityRva=0x9b2580;
 constexpr const char* flagTestPattern="4C 8B C1 0F B6 CA BA 01 00 00 00 48 D3 E2 41 F6 80 B1 01 00 00 01";
 constexpr const char* candidatePattern="48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 70 48 8B F2 49 8B F9 B2 04";
 constexpr const char* entityPattern="40 53 48 83 EC 20 48 8B 01 89 54 24 38 48 8D 54 24 38 48 8B 58 30";
@@ -113,7 +115,7 @@ using SecondCheck=void*(__fastcall*)(void*,void*,void*,void*,uint64_t);
 using FindTarget=void*(__fastcall*)(void*,void*,float);
 inline AbilityStart originalAbilityStart=nullptr;inline SecondCheck originalSecondCheck=nullptr;inline FindTarget originalFindTarget=nullptr;
 inline bool conditionsHooked=false;
-constexpr uintptr_t abilityStartRva=0x37f190,abilityStartCaller=0x2c7aff,secondCheckRva=0x3b1860,secondCheckCaller=0x2c7b71,findTargetRva=0x3b6230,findTargetCaller=0x2c7bc0;
+constexpr uintptr_t abilityStartRva=0x384d50,abilityStartCaller=0x2ccb2f,secondCheckRva=0x3b7ed0,secondCheckCaller=0x2ccba1,findTargetRva=0x3bc8b0,findTargetCaller=0x2ccbf0;
 constexpr const char* abilityStartPattern="48 89 5C 24 08 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24 F9 48 81 EC 00 01 00 00";
 constexpr const char* secondCheckPattern="48 89 6C 24 08 48 89 74 24 10 48 89 7C 24 18 41 56 48 83 EC 30 83 7A 0C 00 49";
 constexpr const char* findTargetPattern="48 8B C4 48 89 58 20 48 89 50 10 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 F8 FD FF FF";
@@ -344,7 +346,7 @@ inline void install() noexcept {
         if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+rva)throw std::runtime_error("parry target choice caller changed");
         hook(rva,pattern,reinterpret_cast<void*>(&choose),reinterpret_cast<void**>(&original),"parry target choice");
         enabled=true;
-        logFile->event("parry_observer_enabled","\"rva\":"+hex(rva)+",\"caller\":"+hex(callerRva)+",\"input\":\"ClientOnlyPlayerInputType Parry 73\"");
+        logFile->event("parry_observer_enabled","\"rva\":"+hex(rva)+",\"caller\":"+hex(callerRva)+",\"input\":\"ClientOnlyPlayerInputType Parry 74\"");
         try{
             for(auto [site,target]:{std::pair<uintptr_t,uintptr_t>{abilityStartCaller,abilityStartRva},{secondCheckCaller,secondCheckRva},{findTargetCaller,findTargetRva}}){
                 const auto c=baseAddress+site-5;if(read<uint8_t>(c)!=0xe8||uintptr_t(int64_t(c+5)+read<int32_t>(c+1))!=baseAddress+target)throw std::runtime_error("parry condition caller changed");}
@@ -356,7 +358,7 @@ inline void install() noexcept {
         {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_SWING_PARRY",v,sizeof v);swingParry=!(m==1&&v[0]=='0');}
         {char v[8]{};const auto m=GetEnvironmentVariableA("EVR_PARRY_RELAX",v,sizeof v);relax=!(m==1&&v[0]=='0');}
         if(swingParry&&relax&&conditionsHooked)try{
-            const auto call=baseAddress+0x2ad4c8;   // the choice's call of the per-enemy check
+            const auto call=baseAddress+0x2b2018;   // the choice's call of the per-enemy check
             if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+candidateRva)throw std::runtime_error("parry candidate caller changed");
             if(scan(reinterpret_cast<const uint8_t*>(baseAddress+entityRva),parsePattern(entityPattern).size(),parsePattern(entityPattern))!=std::vector<size_t>{0})throw std::runtime_error("entity lookup signature changed");
             entityOf=reinterpret_cast<Entity>(baseAddress+entityRva);

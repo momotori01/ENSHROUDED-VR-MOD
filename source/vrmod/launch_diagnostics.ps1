@@ -19,7 +19,7 @@ $shadowReceiver=$null
 if($ShadowReceiverPlane){
     if(!$LiveStereo){throw 'ShadowReceiverPlane requires live stereo diagnostics.'}
     $shadowReceiver=Get-Content -LiteralPath (Join-Path $ShadowReceiverPlane 'manifest.json') -Raw | ConvertFrom-Json
-    if($shadowReceiver.source_sha256 -ne 'bb450d00434dca964a841dcc9995582282ce69bf49260e6d5e153ba87483177b' -or $shadowReceiver.history_reset -or $shadowReceiver.control){throw 'Unreviewed or offline-only shadow receiver manifest.'}
+    if($shadowReceiver.source_sha256 -ne 'b57c41ce794e40677ae687f44db16a84ffa1fa45a72e865832aa3eab3c3312f2' -or $shadowReceiver.history_reset -or $shadowReceiver.control){throw 'Unreviewed or offline-only shadow receiver manifest.'}
     if((Get-FileHash -LiteralPath $shadowReceiver.shader -Algorithm SHA256).Hash.ToLower() -ne $shadowReceiver.shader_sha256){throw 'Shadow receiver shader hash mismatch.'}
 }
 $giProbe=$null

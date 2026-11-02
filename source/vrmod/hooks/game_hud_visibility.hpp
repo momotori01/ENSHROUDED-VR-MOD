@@ -9,7 +9,7 @@
 // on any other screen (the settings menu among them, where the game would save it) and when the world is left the player's own
 // values go back. Off by default (see requested): the layer's fade by regions.
 namespace gameHudVisibility {
-constexpr uintptr_t settingsOffset=0x34068;constexpr std::array<uintptr_t,4> fields{0x29,0x2a,0x2b,0x2c};
+constexpr uintptr_t settingsOffset=0x34088;constexpr std::array<uintptr_t,4> fields{0x29,0x2a,0x2b,0x2c};
 constexpr const char* names[4]{"player_vitals","action_bar","compass","quest_tracker"};
 // Off by default (2026-10-26 device run, user: "a UI where some parts fade and some do not - worse"): the game's Contextual mode
 // fades its parts on its own rules, unlike the layer's one fade of the whole HUD. EVR_GAME_HUD_CONTEXTUAL=1 turns it on to try.

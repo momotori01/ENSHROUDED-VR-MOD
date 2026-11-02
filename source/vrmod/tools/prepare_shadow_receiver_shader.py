@@ -4,6 +4,7 @@ No download, process access, game asset modification or persistent setting.
 """
 import argparse
 import hashlib
+import re
 import json
 from pathlib import Path
 import subprocess
@@ -22,7 +23,15 @@ PROFILES = {
                      normal=('precise float _55 = dot(normalize(_412),', 'evrReceiverNormal=evrNormal(_74,normalize(_412));\n        precise float _55 = dot(normalize(_412),'),
                      gather=[('_157', '_141', '_460'), ('_190', '_174', '_102'), ('_124', '_108', '_460')],
                      pcf=[('_169', '_141', '_460'), ('_202', '_174', '_102'), ('_136', '_108', '_460')]),
+    # Build 26320373 (2026-11-02, captured as shader_7dda7d7e7da98d45.spv, 22816 bytes): the game's own filter is now nine
+    # weighted bilinear compare taps a cascade (27 in all, the cascade a float) and no gather; the constants are the same
+    # (the struct named _33). Every compare tap becomes evrPcf - the same bilinear compare with the receiver plane.
+    'b57c41ce794e40677ae687f44db16a84ffa1fa45a72e865832aa3eab3c3312f2': dict(
+                     helpers='vrmod/shaders/shadow_receiver_helpers_1_0.glsl', uniform='_33',
+                     normal=('precise float _53 = dot(normalize(_480),', 'evrReceiverNormal=evrNormal(_74,normalize(_480));\n        precise float _53 = dot(normalize(_480),'),
+                     gather=[], pcf=[], pcf_all=27),
 }
+PCF_TAP = re.compile(r'textureGrad\(sampler2DArrayShadow\(_13, _14\), vec4\(vec3\((_\d+), (_\d+)\), (_\d+)\.z\), vec2\(0\.0\), vec2\(0\.0\)\)')
 ROOT = Path(__file__).resolve().parents[2]
 SPIRV = ROOT / 'references/renderdoc/1.46/RenderDoc_1.46_64/plugins/spirv'
 
@@ -48,8 +57,8 @@ def main():
     # Preserve native offsets with std140; no scalarBlockLayout feature needed.
     source = replace_once(source, '    vec3 _m8;', '    float evrLightX;\n    float evrLightY;\n    float evrLightZ;')
     source = source.replace('_4._m8', 'vec3(evrUniform.parameters.evrLightX,evrUniform.parameters.evrLightY,evrUniform.parameters.evrLightZ)')
-    source = replace_once(source, 'layout(set = 0) uniform _34 _4;',
-                          'layout(set = 0, binding = 0, std140) uniform EvrShadowConstants { _34 parameters; } evrUniform;')
+    source = replace_once(source, f"layout(set = 0) uniform {profile.get('uniform', '_34')} _4;",
+                          'layout(set = 0, binding = 0, std140) uniform EvrShadowConstants { ' + profile.get('uniform', '_34') + ' parameters; } evrUniform;')
     source = source.replace('_4.', 'evrUniform.parameters.')
     if args.reset_history:
         source = replace_once(source, 'if (evrUniform.parameters._m9 != 0u)', 'if (true)')
@@ -62,6 +71,10 @@ def main():
             source = replace_once(source, f'textureGatherOffset(sampler2DArray(_13, _15), vec3({tap}, float({cascade})), ivec2(0))', f'evrGather({tap},{center},{cascade})')
         for tap, center, cascade in profile['pcf']:
             source = replace_once(source, f'textureGrad(sampler2DArrayShadow(_13, _14), vec4(vec3({tap}, float({cascade})), {center}.z), vec2(0.0), vec2(0.0))', f'evrPcf({tap},{center},{cascade})')
+        if profile.get('pcf_all'):
+            source, taps = PCF_TAP.subn(lambda m: f'evrPcf({m.group(1)},{m.group(3)},uint({m.group(2)}))', source)
+            if taps != profile['pcf_all']:
+                raise ValueError(f'Unexpected compare tap count {taps}')
     comp = args.output / 'shadow_receiver.comp'
     spv = args.output / 'shadow_receiver.spv'
     comp.write_text(source, encoding='utf-8')

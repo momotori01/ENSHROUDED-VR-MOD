@@ -227,12 +227,12 @@ inline DualWield dualWieldLocked(uint32_t local,uint64_t now){
 }
 inline DualWield dualWield(uint32_t local,uint64_t now){std::lock_guard<std::mutex> lock(mutex);return dualWieldLocked(local,now);}
 inline bool modelSlotsKnown=false;
-constexpr std::array<uintptr_t,4> callers{0x3828f0,0x383016,0x304624,0x31387d};   // 1.0 (June 0x30b58e, 0x30be82, 0x2a8ee4, 0x2ac095): the second advance of 381ea0 / 382a40 / 303b60, and the advance after 31bb30 (2b2730) in 313231
+constexpr std::array<uintptr_t,4> callers{0x388a50,0x3891c6,0x3099d4,0x318c9d};   // 1.0 (June 0x30b58e, 0x30be82, 0x2a8ee4, 0x2ac095): the second advance of 381ea0 / 382a40 / 303b60, and the advance after 31bb30 (2b2730) in 313231
 inline uint32_t entityFor(void* context){
     const auto task=reinterpret_cast<uintptr_t>(context),state=read<uintptr_t>(task);
     const auto index=read<uint32_t>(task+8);
     if(!state||!index||index>0x1000000)throw std::runtime_error("attachment query identity bounds");
-    const auto table=read<uintptr_t>(state+0x828);
+    const auto table=read<uintptr_t>(state+0x830);
     if(!table)throw std::runtime_error("attachment entity table absent");
     return read<uint32_t>(table+uintptr_t(index-1)*16);
 }

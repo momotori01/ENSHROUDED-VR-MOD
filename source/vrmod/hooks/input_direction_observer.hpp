@@ -24,8 +24,8 @@ inline std::atomic<unsigned> callbacks{0},samples{0},failures{0},calls{0};
 inline std::atomic<unsigned> copyCalls{0},copySamples{0};
 inline unsigned movementInterval=16,senderInterval=8;
 struct CallbackScope{CallbackScope(){callbacks.fetch_add(1);}~CallbackScope(){callbacks.fetch_sub(1);}};
-constexpr uintptr_t rva=0x42880;
-constexpr uintptr_t copyRva=0xb0c6d0,copyCaller=0x3a2720;
+constexpr uintptr_t rva=0x42b20;
+constexpr uintptr_t copyRva=0xb1bda0,copyCaller=0x3a89a0;
 constexpr const char* copyPattern="8B 02 89 01 8B 42 04 89 41 04 8B 42 08 89 41 08";
 constexpr const char* pattern="48 8B C4 48 83 EC 68 F3 0F 10 61 0C F3 0F 10 05";
 __declspec(noinline) void __fastcall convert(const void* quaternion,void* matrix){
@@ -34,7 +34,7 @@ __declspec(noinline) void __fastcall convert(const void* quaternion,void* matrix
     const CallbackScope callback;
     original(quaternion,matrix);
     {const ObserverLastError preserve;
-     if(accepting.load()&&(caller==baseAddress+0x2dd01f||caller==baseAddress+0x2dd0ae)){
+     if(accepting.load()&&(caller==baseAddress+0x2e21ff||caller==baseAddress+0x2e228e)){
         const bool logThis=calls.fetch_add(1)%movementInterval==0&&samples.load()<256;
         if(!logThis&&!inputHeadIdle::requested)return;
         try{
@@ -46,7 +46,7 @@ __declspec(noinline) void __fastcall convert(const void* quaternion,void* matrix
                 throw std::runtime_error("movement query arguments mismatch");
             const auto state=read<uintptr_t>(slots[0]);const auto query=read<uint32_t>(slots[0]+8);
             if(!state||!query)throw std::runtime_error("movement query context missing");
-            const auto entities=read<uintptr_t>(state+0x828);
+            const auto entities=read<uintptr_t>(state+0x830);
             if(!entities||query>0x1000000)throw std::runtime_error("movement entity table bounds");
             const auto entity=read<uint32_t>(entities+uintptr_t(query-1)*16);
             rootCamera::Sample local;
@@ -60,7 +60,7 @@ __declspec(noinline) void __fastcall convert(const void* quaternion,void* matrix
             const auto flags=read<uint32_t>(playerState+0x34);
             inputHeadIdle::observeState(entity,flags,slots[9],slots[2]);
             if(!logThis)return;
-            const auto tickTable=read<uintptr_t>(state+0x818);
+            const auto tickTable=read<uintptr_t>(state+0x820);
             const auto tick=tickTable?read<uint32_t>(tickTable+uintptr_t(query-1)*4):0;
             const auto inputMode=read<uint8_t>(input+game::playerInputMode),mask=read<uint8_t>(input+game::playerInputMask);
             const auto mat=read<std::array<float,12>>(reinterpret_cast<uintptr_t>(matrix));
@@ -95,7 +95,7 @@ __declspec(noinline) void* __fastcall copyInput(void* output,const void* input){
         // the copy call's rsp +0xf88, its r8d (the tick) at +0xf80 (June +0xe38 / +0xe30).
         const auto context=read<uintptr_t>(callerRsp+0xf88);
         if(!context)throw std::runtime_error("input sender context missing");
-        const auto owner=context+0x648;const auto entity=read<uint32_t>(owner+4);   // 1.0: +0x5c0 -> +0x648 (entity at +4 still)
+        const auto owner=context+0x658;const auto entity=read<uint32_t>(owner+4);   // 1.0: +0x5c0 -> +0x648 (entity at +4 still)
         const auto tick=read<uint32_t>(callerRsp+0xf80);
         rootCamera::Sample local;
         {std::lock_guard<std::mutex> lock(rootCamera::mutex);local=rootCamera::latest;}
@@ -117,7 +117,7 @@ __declspec(noinline) void* __fastcall copyInput(void* output,const void* input){
             <<",\"entity\":"<<entity<<",\"local_entity\":"<<local.entity<<",\"tick\":"<<tick<<",\"context\":"<<hex(context)
             <<",\"input_mode\":"<<unsigned(read<uint8_t>(in+game::clientInputMode))<<",\"client_state_mask\":"<<unsigned(mask)
             <<",\"building_camera\":"<<(read<uint8_t>(in+game::clientBuildingCamera)?"true":"false")
-            <<",\"ready_for_gameplay\":"<<(read<uint8_t>(context+0x2c51)?"true":"false")
+            <<",\"ready_for_gameplay\":"<<(read<uint8_t>(context+0x2c61)?"true":"false")
             <<",\"camera_q32\":["<<position.x<<','<<position.y<<','<<position.z<<"]"
             <<",\"camera_orientation\":["<<q.x<<','<<q.y<<','<<q.z<<','<<q.w<<"]"
             <<",\"movement_stick\":["<<stick[0]<<','<<stick[1]<<"],\"native_copy_matches\":"<<(copied?"true":"false")
@@ -142,7 +142,7 @@ inline void install(){
     const auto bytes=parsePattern(pattern);
     if(scan(reinterpret_cast<const uint8_t*>(baseAddress+rva),bytes.size(),bytes)!=std::vector<size_t>{0})
         throw std::runtime_error("movement quaternion signature changed");
-    for(uintptr_t after:{uintptr_t(0x2dd01f),uintptr_t(0x2dd0ae)}){
+    for(uintptr_t after:{uintptr_t(0x2e21ff),uintptr_t(0x2e228e)}){
         const auto call=baseAddress+after-5;
         if(read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+rva)
             throw std::runtime_error("movement quaternion caller changed");

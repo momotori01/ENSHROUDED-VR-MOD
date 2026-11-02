@@ -115,6 +115,9 @@ inline void run(){
 // with wantHidden, every frame it shows), and put back at 120 otherwise - the controller VR (pad style) keeps the game's list.
 // shownUntil: the game's own list on its picture until then even while asked off (the bow: its arrow list only after a change of
 // arrow, spell_panel.hpp - 2026-10-26, user: "the arrows show at every nock; only on a change input, as the spells").
+// FbUiBundle.hud: 0xd918 in build 26320373 (2026-11-02, reflection_struct_diff.py; 55192 = 0xd798 in build 26082781); the cursors
+// inside FbUiHUD stay at +48.
+constexpr uintptr_t hudInBundle=0xd918;
 inline std::atomic<uint64_t> hiddenAskedAt{0},shownUntil{0};inline uintptr_t heldCursors=0;inline float heldWas=120.f;inline bool heldWritten=false;inline unsigned quickLogs=0;
 inline float hiddenOffset(){static const float v=[]{char t[32]{};const auto n=GetEnvironmentVariableA("EVR_SPELL_LIST_OFFSET",t,sizeof t);
     const float f=n&&n<sizeof t?std::strtof(t,nullptr):4000.f;return std::isfinite(f)?f:4000.f;}();return v;}
@@ -129,7 +132,7 @@ inline void keep(uintptr_t frontend,uint64_t now){
     if(want==heldWritten)return;
     try{
         if(want){
-            const auto bundle=read<uintptr_t>(frontend+0x710);if(!bundle)return;const auto cursors=bundle+55192+48;
+            const auto bundle=read<uintptr_t>(frontend+0x710);if(!bundle)return;const auto cursors=bundle+hudInBundle+48;
             std::vector<char> c(205);if(!readBack(cursors,c.data(),c.size()))return;
             if(!cursorsLook(c)){if(quickLogs++<4)logFile->event("ui_cursor_config_quick","\"bundle\":"+hex(bundle)+",\"cursors_look\":false");return;}
             heldWas=floatAt(c,200);if(!std::isfinite(heldWas)||heldWas>1000.f)heldWas=120.f;

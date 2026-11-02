@@ -24,9 +24,14 @@ inline Set original=nullptr;
 inline std::atomic<bool> enabled{false};
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},calls{0},failures{0};
-constexpr uintptr_t rva=0x902280,callSite=0x84741a,callReturn=0x84741f;
-constexpr const char* pattern="48 8B C4 48 83 EC 68 4C 8B 99 30 03 00 00 88 91 A9 20 02 00";
-constexpr uintptr_t stateOffset=0x35280,controllerOffset=0x1b8,worldOffset=0x1d0,screenOffset=0x1ec8,localDeviceOffset=0xb0,senderContextOffset=0x47d4e0,entityOffset=0x64c,uiOffset=0x5b0,deviceOffset=0x5f8;
+constexpr uintptr_t rva=0x90d300,callSite=0x8512ca,callReturn=0x8512cf;
+constexpr const char* pattern="48 8B C4 48 83 EC 68 4C 8B 99 40 03 00 00 88 91 B9 20 02 00";
+// Build 26320373 (2026-11-02): the frontend grew - +0x18 for 0x31da8..0x335a0, +0x20 for 0x33963..0x345f8, +0x20..0x30 above
+// (functions 0xbd0ed0, 0xbce3c0, 0xbe3400, 0x850b30 against the build before): state 0x35280 -> 0x352a0, the tab 0x325a0 -> 0x325b8,
+// the bag slot 0x325d8 -> 0x325f0, the item menu 0x33a57 -> 0x33a6f (not in the code; the tab and the slot taken from the fields round them and confirmed in
+// the Mock - the slot 13 / 14 as on 10-24 -, the item menu found anew by popup_diff_fe.py over UI memory copies, open 0 / closed 7,
+// Mock 20261102-214628: the guess +0x20 read 68 always and the right A went on to Consume, user 2026-11-02 21:40).
+constexpr uintptr_t stateOffset=0x352a0,controllerOffset=0x1b8,worldOffset=0x1d0,screenOffset=0x1ec8,localDeviceOffset=0xb0,senderContextOffset=0x47d4e0,entityOffset=0x65c,uiOffset=0x5b0,deviceOffset=0x5f8;
 struct Snapshot {
     unsigned number=0;uint64_t milliseconds=0;uintptr_t data=0,world=0,senderContext=0;
     uint32_t entity=0;
@@ -100,22 +105,22 @@ inline void gate(void* sub,uint8_t value,void* frontend,uintptr_t returnAddress)
                 if(ui){s.uiMode=read<uint8_t>(ui+9);s.uiBytes=read<std::array<uint8_t,16>>(ui);}
                 // an item menu open in the backpack (hooks/menu_pointer.hpp aPad 3): frontend+0x33a57, 0 with the menu and 7 without (Mock
                 // 2026-10-24 -054815, -094956). ui+0x2d2c73 (1 with the menu in the Mock) never rose on the headset (log 20261024-091911).
-                if(menuPointer::aPad==3){const auto mark=read<uint8_t>(owner+0x33a57);menuPointer::itemMenuMark=mark;menuPointer::itemMenuOpen=mark==0;
+                if(menuPointer::aPad==3){const auto mark=read<uint8_t>(owner+0x33a6f);menuPointer::itemMenuMark=mark;menuPointer::itemMenuOpen=mark==0;
                     // what it reads on the chests and the backpack (2026-10-24: 0 on the start menu too, Mock -133659; a chest's not known)
                     static uint8_t lastMark=255,lastScreen=255;static unsigned markLines=0;const uint8_t screenNow=values[0];
                     if((screenNow==4||screenNow==21||screenNow==22)&&(mark!=lastMark||screenNow!=lastScreen)&&markLines<300){++markLines;
-                        logFile->event("item_menu_mark","\"screen\":"+std::to_string(unsigned(screenNow))+",\"mark\":"+std::to_string(unsigned(mark))+",\"tab\":"+std::to_string(unsigned(read<uint8_t>(owner+0x325a0))));}
+                        logFile->event("item_menu_mark","\"screen\":"+std::to_string(unsigned(screenNow))+",\"mark\":"+std::to_string(unsigned(mark))+",\"tab\":"+std::to_string(unsigned(read<uint8_t>(owner+0x325b8))));}
                     lastMark=mark;lastScreen=screenNow;}
                 // the menu's tab (frontend+0x325a0: 1 world map, 2 journal, 3 craft, 4 backpack; tab_diff over 7 copies, Mock -060907)
-                menuPointer::menuTab=menuPointer::aPad==3?read<uint8_t>(owner+0x325a0):uint8_t(255);
+                menuPointer::menuTab=menuPointer::aPad==3?read<uint8_t>(owner+0x325b8):uint8_t(255);
                 if(device)s.deviceBytes=read<std::array<uint8_t,16>>(device);
                 if(localDevice)s.localBytes=read<std::array<uint8_t,16>>(localDevice);
                 if(device)s.deviceMode=read<uint8_t>(device);
                 // diagnostic (2026-10-24): EVR_UI_SELECT_LOG=1 - the backpack's pad choice (frontend+0x325d8) at each change, with the
                 // menu pointer's posted moves and buttons (does a button's down move it?)
                 {static const bool selectLog=[]{char v[4]{};return GetEnvironmentVariableA("EVR_UI_SELECT_LOG",v,sizeof v)==1&&v[0]=='1';}();
-                 if(selectLog){static uint32_t lastSlot=0xffffffffu;static uint64_t lastClicks=0;static uint16_t lastPop=0xffff;const auto slot=read<uint32_t>(owner+0x325d8);const auto clicks=menuPointer::clicks.load();
-                  const uint16_t pop=uint16_t((ui?read<uint8_t>(ui+0x2d2c73):0xf)|(read<uint8_t>(owner+0x33a57)<<8));   // candidates: an item menu open (ui+0x2d2c73: 1 open / 0 closed in Mock, never 1 on the headset; frontend+0x33a57: 0 open / 7 closed, Mock 054815)
+                 if(selectLog){static uint32_t lastSlot=0xffffffffu;static uint64_t lastClicks=0;static uint16_t lastPop=0xffff;const auto slot=read<uint32_t>(owner+0x325f0);const auto clicks=menuPointer::clicks.load();
+                  const uint16_t pop=uint16_t((ui?read<uint8_t>(ui+0x2d2c73):0xf)|(read<uint8_t>(owner+0x33a6f)<<8));   // candidates: an item menu open (ui+0x2d2c73: 1 open / 0 closed in Mock, never 1 on the headset; frontend+0x33a57: 0 open / 7 closed, Mock 054815)
                   if(slot!=lastSlot||clicks!=lastClicks||pop!=lastPop){lastSlot=slot;lastClicks=clicks;lastPop=pop;try{logFile->event("ui_select","\"slot\":"+std::to_string(slot)+",\"popup_bytes\":"+std::to_string(pop)+",\"tab\":"+std::to_string(unsigned(menuPointer::menuTab.load()))+",\"device_mode\":"+std::to_string(s.deviceMode)+
                       ",\"moves\":"+std::to_string(menuPointer::moves.load())+",\"clicks\":"+std::to_string(clicks)+",\"sample\":"+std::to_string(s.number));}catch(...){}}}}
                 // The right A as the pad's A (hooks/menu_pointer.hpp aPad, test): the game in its pad mode for the button's up and the pad's A
@@ -177,7 +182,7 @@ inline void verify(){
        read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+rva)
         throw std::runtime_error("native frontend input predicate signature/caller changed");
     const auto contextLoad=parsePattern("4C 8B 8B E0 D4 47 00");
-    if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0x859c9e),contextLoad.size(),contextLoad)!=std::vector<size_t>{0})
+    if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0x863cce),contextLoad.size(),contextLoad)!=std::vector<size_t>{0})
         throw std::runtime_error("UI to input sender context load changed");
     if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+rva),reinterpret_cast<void*>(&evr_input_ui_stub),reinterpret_cast<void**>(&original))!=MH_OK||
        MH_EnableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("frontend input observer hook failed");
@@ -185,7 +190,7 @@ inline void verify(){
     uiScan::install();
     stringScan::install();
     uiCursorConfig::install();
-    logFile->event("input_ui_observer_enabled","\"rva\":"+hex(rva)+",\"caller\":\"0x84741f\",\"setter\":true,\"screen_offset\":"+std::to_string(screenOffset)+",\"auxiliary_offset\":"+std::to_string(screenOffset+2)+",\"read_only\":true");
+    logFile->event("input_ui_observer_enabled","\"rva\":"+hex(rva)+",\"caller\":\"0x8512cf\",\"setter\":true,\"screen_offset\":"+std::to_string(screenOffset)+",\"auxiliary_offset\":"+std::to_string(screenOffset+2)+",\"read_only\":true");
 }
 inline void observe(unsigned sample,uint32_t entity,uint32_t tick,uintptr_t senderContext){
     if(!enabled)return;

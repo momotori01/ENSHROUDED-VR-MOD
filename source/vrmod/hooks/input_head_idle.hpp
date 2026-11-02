@@ -130,7 +130,7 @@ inline void patch(const game::ClientInputBytes& source,game::ClientInputBytes& o
     State state;{std::lock_guard<std::mutex> lock(mutex);state=latest;}
     const auto value=inputPose::channel.read(entity,now,inputPose::observationMaxAgeMs);
     game::IdleHeadGate guard;guard.normalUiBound=inputUi::boundGameplay(ui,context,entity,now);   // aiming (aux 3) included: report 11 of 2026-10-18
-    guard.playerStateCurrent=state.entity==entity&&state.milliseconds&&now>=state.milliseconds&&now-state.milliseconds<=200&&read<uint8_t>(context+0x2c51);   // the byte the input message builder copies after the two of +0x5a0 (1.0 0x3a2395: [context+0x2c51]; June 0x3272f7: [context+0x5c0+0xd09]). 2026-10-16: read at +0x648+0xd09 after the 1.0 port, it was never set and the head never steered the walk (headset run 20261016-134128, every Mock since 1.0)
+    guard.playerStateCurrent=state.entity==entity&&state.milliseconds&&now>=state.milliseconds&&now-state.milliseconds<=200&&read<uint8_t>(context+0x2c61);   // the byte the input message builder copies after the two of +0x5a0 (1.0 0x3a2395: [context+0x2c51]; June 0x3272f7: [context+0x5c0+0xd09]). 2026-10-16: read at +0x648+0xd09 after the 1.0 port, it was never set and the head never steered the walk (headset run 20261016-134128, every Mock since 1.0)
     guard.playerFlags=state.flags;guard.freeCamera=freecam;
     thread_local game::InputPoseToken last;thread_local float yaw=0;
     if(!(last==value.token)){
