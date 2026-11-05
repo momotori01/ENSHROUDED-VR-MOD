@@ -48,7 +48,7 @@ inline bool pose(uintptr_t inScene,uint32_t copy,uintptr_t res,uint32_t& handleO
     const auto model=read<uintptr_t>(res+layout::resourceDescriptor);if(!model)return false;
     const auto joints=read<uint16_t>(model+layout::renderModelJointCount);if(!joints){done=true;return true;}   // not skinned
     if(!handleOut){const auto hierarchyGuid=read<std::array<uint32_t,4>>(model+layout::renderModelHierarchy);
-        handleOut=reinterpret_cast<motionHandVisual::PoseCreate>(baseAddress+0xfd5b0)(reinterpret_cast<void*>(inScene),hierarchyGuid.data());
+        handleOut=reinterpret_cast<motionHandVisual::PoseCreate>(baseAddress+0xfd680)(reinterpret_cast<void*>(inScene),hierarchyGuid.data());
         if(!handleOut)throw std::runtime_error("consumable pose creation failed");}
     const auto record=handPoseMetadata::pose(inScene,handleOut),owner=read<uintptr_t>(record);if(!owner)return false;
     const auto hierarchy=read<uintptr_t>(owner+layout::poseOwnerHierarchy);if(!hierarchy)return false;
@@ -56,22 +56,22 @@ inline bool pose(uintptr_t inScene,uint32_t copy,uintptr_t res,uint32_t& handleO
     if(!count||count>256||defaults<count||defaults>256)throw std::runtime_error("consumable pose hierarchy shape");
     auto rest=motionHandVisual::array<hand::Joint>(hierarchy+64,defaults);rest.resize(count);
     std::array<uintptr_t,2> span{reinterpret_cast<uintptr_t>(rest.data()),rest.size()};
-    reinterpret_cast<motionHandVisual::PoseUpdate>(baseAddress+0x113190)(reinterpret_cast<void*>(inScene),handleOut,span.data());
-    std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&copy),1};reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x112a90)(reinterpret_cast<void*>(inScene),ids.data(),handleOut);
+    reinterpret_cast<motionHandVisual::PoseUpdate>(baseAddress+0x113260)(reinterpret_cast<void*>(inScene),handleOut,span.data());
+    std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&copy),1};reinterpret_cast<motionHandVisual::Bind>(baseAddress+0x112b60)(reinterpret_cast<void*>(inScene),ids.data(),handleOut);
     if(read<uint32_t>(motionVisual::object(copy)+layout::modelPose)!=handleOut)throw std::runtime_error("consumable pose binding failed");
     done=true;if(poseLogs++<20)logFile->event("consumable_model_posed","\"handle\":"+std::to_string(copy)+",\"pose\":"+std::to_string(handleOut)+",\"joints\":"+std::to_string(count)+",\"model_joints\":"+std::to_string(joints));
     return true;
 }
 inline void unpose(uintptr_t inScene,uint32_t& handleIn,bool& done) noexcept {
     try{if(handleIn&&!read<uint64_t>(handPoseMetadata::pose(inScene,handleIn)+0x58))
-        reinterpret_cast<motionHandVisual::PoseRemove>(baseAddress+0x110230)(reinterpret_cast<void*>(inScene),handleIn);}catch(...){}
+        reinterpret_cast<motionHandVisual::PoseRemove>(baseAddress+0x110300)(reinterpret_cast<void*>(inScene),handleIn);}catch(...){}
     handleIn=0;done=false;
 }
 inline void retire(const char* event,const std::string& detail){
     const auto clone=motionVisual::object(handle);
     if(read<uintptr_t>(clone+layout::modelResource)!=resource)throw std::runtime_error("consumable retirement invariant differs");
     const auto id=handle,refs=read<uint32_t>(resource+16);std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1};
-    reinterpret_cast<motionVisual::Remove>(baseAddress+0x10ffd0)(reinterpret_cast<void*>(scene),ids.data());handle=0;ready=false;
+    reinterpret_cast<motionVisual::Remove>(baseAddress+0x1100a0)(reinterpret_cast<void*>(scene),ids.data());handle=0;ready=false;
     unpose(scene,poseHandle,posed);
     const bool invalid=read<uint8_t>(read<uintptr_t>(scene+0x1c8)+(id&0xffffff))!=uint8_t(id>>24);
     const bool released=refs==1||(refs>1&&read<uint32_t>(resource+16)==refs-1);
@@ -206,11 +206,11 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t currentSerial){
         const auto g=iconModel(held);
         if(g==std::array<uint32_t,4>{}){failedItem=held;logFile->event("consumable_model_none","\"item\":"+std::to_string(held));return;}
         motionVisual::validate();scene=motionVisual::scene;thread=GetCurrentThreadId();
-        handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfd1a0)(reinterpret_cast<void*>(scene),g.data(),transform.data());
+        handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfd270)(reinterpret_cast<void*>(scene),g.data(),transform.data());
         if(!handle){failedItem=held;logFile->event("consumable_model_failed","\"item\":"+std::to_string(held)+",\"icon_model\":"+guidText(g));return;}
         auto clone=motionVisual::object(handle);resource=read<uintptr_t>(clone+layout::modelResource);
         if(!resource||read<std::array<uint32_t,4>>(resource+0x18)!=g)throw std::runtime_error("consumable model resource differs");
-        reinterpret_cast<motionVisual::Mask>(baseAddress+0xf8da0)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
+        reinterpret_cast<motionVisual::Mask>(baseAddress+0xf8e70)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);
         item=held;guid=g;createdMs=GetTickCount64();updates=0;loaded=false;
         logFile->event("consumable_model_created","\"handle\":"+std::to_string(handle)+",\"item\":"+std::to_string(item)+",\"icon_model\":"+guidText(g)+
             ",\"hold\":\""+(how.hold==evr::motion::ConsumableHold::Palm?"palm":how.hold==evr::motion::ConsumableHold::Tail?"tail":"fist")+"\",\"size_m\":"+std::to_string(how.size)+",\"along_longest\":"+(how.along?"true":"false")+
@@ -225,12 +225,12 @@ inline void prepare(const game::StableAnchor& anchor,uint64_t currentSerial){
     if(read<uintptr_t>(clone+layout::modelResource)!=resource)throw std::runtime_error("consumable model resource changed");
     // The game finishes a model when its resource has come: its mask and SDF are put back to the copy's own each time.
     if(read<uint32_t>(clone+layout::modelMask)){
-        reinterpret_cast<motionVisual::Mask>(baseAddress+0xf8da0)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);clone=motionVisual::object(handle);
+        reinterpret_cast<motionVisual::Mask>(baseAddress+0xf8e70)(reinterpret_cast<void*>(scene),reinterpret_cast<void*>(clone),0);clone=motionVisual::object(handle);
         if(remasked++<4)logFile->event("consumable_model_remasked","\"handle\":"+std::to_string(handle)+",\"frame\":"+std::to_string(liveFrame.frame)+",\"resource_state\":"+std::to_string(read<uint8_t>(resource+0x14)));
     }
     if(const auto sdfId=read<uint32_t>(clone+layout::modelSdf)){
         const auto sdf=read<uintptr_t>(scene+layout::sceneSdf);const auto count=sdf?read<uint64_t>(sdf+0x78):0;if(!count)throw std::runtime_error("consumable SDF count");
-        using RemoveSdf=void(__fastcall*)(void*,uint32_t);reinterpret_cast<RemoveSdf>(baseAddress+0x15cde0)(reinterpret_cast<void*>(sdf),sdfId);
+        using RemoveSdf=void(__fastcall*)(void*,uint32_t);reinterpret_cast<RemoveSdf>(baseAddress+0x15ceb0)(reinterpret_cast<void*>(sdf),sdfId);
         *reinterpret_cast<uint32_t*>(motionVisual::object(handle)+layout::modelSdf)=0;
         if(read<uint64_t>(sdf+0x78)!=count-1)throw std::runtime_error("consumable SDF removal failed");
         if(sdfRemoved++<4)logFile->event("consumable_model_sdf_removed","\"handle\":"+std::to_string(handle)+",\"frame\":"+std::to_string(liveFrame.frame));
@@ -280,7 +280,7 @@ inline void configure(){
 }
 inline void clear(){
     for(auto& s:shown)if(s.handle&&motionVisual::currentObject(s.handle)){std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&s.handle),1};
-        reinterpret_cast<motionVisual::Remove>(baseAddress+0x10ffd0)(reinterpret_cast<void*>(motionVisual::scene),ids.data());}
+        reinterpret_cast<motionVisual::Remove>(baseAddress+0x1100a0)(reinterpret_cast<void*>(motionVisual::scene),ids.data());}
     shown.clear();
 }
 inline void tick(const game::StableAnchor& anchor,uint64_t currentSerial){
@@ -302,7 +302,7 @@ inline void tick(const game::StableAnchor& anchor,uint64_t currentSerial){
         if(first>=entries.size()){done=true;logFile->event("item_gallery_done","\"frame\":"+std::to_string(liveFrame.frame)+",\"batches\":"+std::to_string(batch));return;}
         motionVisual::validate();std::string list;
         for(unsigned i=first;i<std::min<size_t>(entries.size(),first+6);++i)for(int tip=0;tip<2;++tip){Shown s;s.entry=i;s.tipped=tip!=0;
-            const auto tr=place(s,.001f);s.handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfd1a0)(reinterpret_cast<void*>(motionVisual::scene),entries[i].guid.data(),tr.data());
+            const auto tr=place(s,.001f);s.handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfd270)(reinterpret_cast<void*>(motionVisual::scene),entries[i].guid.data(),tr.data());
             if(!s.handle)continue;s.resource=read<uintptr_t>(motionVisual::object(s.handle)+layout::modelResource);shown.push_back(s);
             if(!tip)list+=std::string(list.empty()?"":",")+"["+std::to_string(i-first)+","+std::to_string(entries[i].item)+"]";}
         logFile->event("item_gallery_batch","\"batch\":"+std::to_string(batch)+",\"frame\":"+std::to_string(liveFrame.frame)+",\"cells\":["+list+"],\"layout\":\"3 columns x 2 rows from the upper left; each cell standing (left) and tipped toward the eye (right)\"");

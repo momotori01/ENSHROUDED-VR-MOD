@@ -13,7 +13,7 @@ using Check=uintptr_t(__fastcall*)(void*,void*,uint64_t,uint64_t);
 using Decide=uint64_t(__fastcall*)(void*,void*);
 inline Reader readerOriginal=nullptr;inline Check checkOriginal=nullptr;inline Decide decideOriginal=nullptr,startOriginal=nullptr;
 inline bool enabled=false;
-constexpr uintptr_t readerRva=0x476230,checkRva=0x477f20,decideRva=0x4744b0,startRva=0x2bf670;
+constexpr uintptr_t readerRva=0x476310,checkRva=0x478000,decideRva=0x474590,startRva=0x2bf750;
 constexpr const char* readerPattern="48 89 5C 24 08 48 89 74 24 18 48 89 7C 24 20 55 41 54 41 55 41 56 41 57 48 8D 6C 24 C9 48 81 EC C0 00 00 00 48 8B 9A 10 02 00 00 48 8B F1 48 8B 8A C0 01 00 00 48 8B FA 4C 8B B2 08 02 00 00 48";
 constexpr const char* checkPattern="48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 30 41 0F B6 F1 48 8B D9 8B CE 48 8B FA 45 84 C9 0F 84";
 constexpr const char* decidePattern="48 89 5C 24 20 57 41 54 41 55 41 56 41 57 48 81 EC B0 00 00 00 4C 8B E2 4C 8B F1 E8 ? ? ? ?";

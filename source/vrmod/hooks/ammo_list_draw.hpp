@@ -17,13 +17,13 @@
 // the last ask. The other function's call (0xca2064) is left alone. Each call is counted by its return address (the site) and a line a
 // second logged. EVR_AMMO_DRAW_SKIP=<hex mask of the sites below>: those sites' rows never drawn (a diagnostic for Mock).
 namespace ammoListDraw {
-constexpr uintptr_t rowRva=0xb48e70,currentRva=0xcdb880;
+constexpr uintptr_t rowRva=0xb48f30,currentRva=0xcdb940;
 constexpr const char* rowPattern="48 8B C4 55 57 48 8D A8 88 FD FF FF 48 81 EC 68 03 00 00 80 B9 02 01 00 00 00";
 constexpr const char* currentPattern="48 8B C4 55 53 56 57 41 54 41 56 41 57 48 8D A8 48 FD FF FF 48 81 EC 80 03 00 00";
 // The calls (rva of the call instruction) and their sites' names; a return address of another place counts as site 7.
 struct Site {uintptr_t call;uintptr_t target;const char* name;};
-constexpr std::array<Site,6> sites{{{0xbe6144,rowRva,"row_list_loop"},{0xbe62bc,rowRva,"row_single"},{0xbe68c3,rowRva,"row_late"},
-    {0xbe5e7c,currentRva,"current_case"},{0xbe68d1,currentRva,"current_late"},{0xcb4d24,currentRva,"current_other_function"}}};
+constexpr std::array<Site,6> sites{{{0xbe6204,rowRva,"row_list_loop"},{0xbe637c,rowRva,"row_single"},{0xbe6983,rowRva,"row_late"},
+    {0xbe5f3c,currentRva,"current_case"},{0xbe6991,currentRva,"current_late"},{0xcb4de4,currentRva,"current_other_function"}}};
 constexpr size_t otherSite=7;
 using Draw=void(__fastcall*)(void*,float);
 inline Draw originalRow=nullptr,originalCurrent=nullptr;inline bool enabled=false;

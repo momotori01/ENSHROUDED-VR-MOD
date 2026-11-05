@@ -17,7 +17,7 @@ inline Update originalUpdate=nullptr;
 inline bool updateEnabled=false,sumEnabled=false;
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},calls{0},failures{0};
-constexpr uintptr_t updateRva=0xec4ea0,updateCaller=0x2b773a,sumRva=0xec0cdc,modeStoreRva=0xec5641,rotationCall=0xec52d9;
+constexpr uintptr_t updateRva=0xec4f60,updateCaller=0x2b781a,sumRva=0xec0d9c,modeStoreRva=0xec5701,rotationCall=0xec5399;
 constexpr uintptr_t stateOffset=0x30,cameraOffset=0x1460,parameterEntity=0x28,parameterCamera=0x20,parameterRaw=0xf0;
 constexpr const char* updatePattern="48 8B C4 48 89 58 08 48 89 70 10 48 89 78 18 55 41 56 41 57 48 8D A8 88 FE FF FF 48 81 EC 60 02 00 00 0F 29 70 D8";
 // movss xmm7,[rip+..] ; xor r13d,r13d ; test r12,r12 - the join after the remaining weight's layer
@@ -120,7 +120,7 @@ inline void verify(){
        read<uint8_t>(site)!=0xe8||uintptr_t(int64_t(site+5)+read<int32_t>(site+1))!=baseAddress+updateRva)
         throw std::runtime_error("camera update signature/caller changed");
     // the rotation part is called from the update with the controller +0x30, and its sums meet at sumRva
-    if(read<uint8_t>(rotation)!=0xe8||uintptr_t(int64_t(rotation+5)+read<int32_t>(rotation+1))!=baseAddress+0xec0ad0||
+    if(read<uint8_t>(rotation)!=0xe8||uintptr_t(int64_t(rotation+5)+read<int32_t>(rotation+1))!=baseAddress+0xec0b90||
        read<uint32_t>(rotation-9)!=0x304b8d48u||scan(reinterpret_cast<const uint8_t*>(baseAddress+sumRva),sum.size(),sum)!=std::vector<size_t>{0})
         throw std::runtime_error("camera rotation sum signature changed");
     if(scan(reinterpret_cast<const uint8_t*>(baseAddress+modeStoreRva),store.size(),store)!=std::vector<size_t>{0})

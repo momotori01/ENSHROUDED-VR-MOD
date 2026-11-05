@@ -26,14 +26,14 @@ inline void fail(const std::exception& e){if(failures.fetch_add(1)<3)logFile->ev
 #include "motion_health_observer.hpp"
 __declspec(noinline) uintptr_t __fastcall run(void* registry,uint32_t id,void* scope){
  Guard guard;const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress;Owner observed;Queue before;
- {const ObserverLastError preserve;if(accepting.load()&&caller==0x3f64e1&&runs.load()<128)try{observed=owner(scope);if(observed.query){before=queue(observed.query);}}catch(const std::exception& e){fail(e);observed={};}}
+ {const ObserverLastError preserve;if(accepting.load()&&caller==0x3f65c1&&runs.load()<128)try{observed=owner(scope);if(observed.query){before=queue(observed.query);}}catch(const std::exception& e){fail(e);observed={};}}
  const auto previous=current;if(observed.query)current=observed;
  struct Restore{Owner old;~Restore(){current=old;}}restore{previous};
  const auto result=originalRun(registry,id,scope);const ObserverLastError preserve;
  if(observed.query)try{
   const auto after=queue(observed.query);const auto again=owner(scope);const bool stable=again.world==observed.world&&again.entity==observed.entity&&again.root==observed.root&&again.item==observed.item&&again.event==observed.event&&again.impact==observed.impact;
   if(stable)health::remember(observed,id);
-  logFile->event("motion_owned_vm",labels(observed)+",\"sample\":"+std::to_string(++runs)+",\"instance_id\":"+std::to_string(id)+",\"queue_before\":"+jsonString(nativeImpactComponents::asHex(before.header))+",\"queue_after\":"+jsonString(nativeImpactComponents::asHex(after.header))+",\"count_before\":"+std::to_string(before.count)+",\"count_after\":"+std::to_string(after.count)+",\"owner_stable\":"+(stable?"true":"false")+",\"caller\":\"0x3f64e1\",\"read_only\":true");
+  logFile->event("motion_owned_vm",labels(observed)+",\"sample\":"+std::to_string(++runs)+",\"instance_id\":"+std::to_string(id)+",\"queue_before\":"+jsonString(nativeImpactComponents::asHex(before.header))+",\"queue_after\":"+jsonString(nativeImpactComponents::asHex(after.header))+",\"count_before\":"+std::to_string(before.count)+",\"count_after\":"+std::to_string(after.count)+",\"owner_stable\":"+(stable?"true":"false")+",\"caller\":\"0x3f65c1\",\"read_only\":true");
   if(!stable)throw std::runtime_error("owned Impact VM identity changed");
  }catch(const std::exception& e){fail(e);}return result;
 }
@@ -54,17 +54,17 @@ __declspec(noinline) void* __fastcall damage(void* output,void* arguments,void* 
 }
 struct Hook{uintptr_t rva;const char* pattern;void* callback;void** original;bool on=false;};
 inline std::array<Hook,6> hooks{{
- {0x1245ce0,"40 53 41 56 48 83 ec 48 4d 8b f0 4c 8b d1 e8 5d",reinterpret_cast<void*>(&run),reinterpret_cast<void**>(&originalRun)},
- {0x360080,"4c 89 44 24 18 53 57 41 54 41 56 41 57 48 81 ec",reinterpret_cast<void*>(&each),reinterpret_cast<void**>(&originalEach)},
- {0x3dbce0,"48 8b c4 4c 89 40 18 48 89 48 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8d a8 f8 f8 ff ff 48 81",reinterpret_cast<void*>(&damage),reinterpret_cast<void**>(&originalDamage)},
- {0x3efc30,"48 8b c4 4c 89 40 18 55 53 56 57 41 54 41 55",reinterpret_cast<void*>(&health::commit),reinterpret_cast<void**>(&health::originalCommit)},
- {0x3ef490,"48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57",reinterpret_cast<void*>(&health::delta),reinterpret_cast<void**>(&health::originalDelta)},
- {0x123b600,"89 54 24 10 53 48 83 ec 20 48 8b d9 48 8d 54 24 38 49 8d 48 68 e8 36",reinterpret_cast<void*>(&health::lookup),reinterpret_cast<void**>(&health::originalLookup)}
+ {0x1245000,"40 53 41 56 48 83 ec 48 4d 8b f0 4c 8b d1 e8 5d",reinterpret_cast<void*>(&run),reinterpret_cast<void**>(&originalRun)},
+ {0x360160,"4c 89 44 24 18 53 57 41 54 41 56 41 57 48 81 ec",reinterpret_cast<void*>(&each),reinterpret_cast<void**>(&originalEach)},
+ {0x3dbdc0,"48 8b c4 4c 89 40 18 48 89 48 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8d a8 f8 f8 ff ff 48 81",reinterpret_cast<void*>(&damage),reinterpret_cast<void**>(&originalDamage)},
+ {0x3efd10,"48 8b c4 4c 89 40 18 55 53 56 57 41 54 41 55",reinterpret_cast<void*>(&health::commit),reinterpret_cast<void**>(&health::originalCommit)},
+ {0x3ef570,"48 89 5c 24 10 48 89 6c 24 18 48 89 74 24 20 57",reinterpret_cast<void*>(&health::delta),reinterpret_cast<void**>(&health::originalDelta)},
+ {0x123a930,"89 54 24 10 53 48 83 ec 20 48 8b d9 48 8d 54 24 38 49 8d 48 68 e8 36",reinterpret_cast<void*>(&health::lookup),reinterpret_cast<void**>(&health::originalLookup)}
 }};
 inline void install(){{std::lock_guard<std::mutex> lock(health::mutex);health::witnesses.clear();}for(auto& h:hooks){const auto p=parsePattern(h.pattern);if(scan(reinterpret_cast<const uint8_t*>(baseAddress+h.rva),p.size(),p)!=std::vector<size_t>{0})throw std::runtime_error("Impact VM observer signature changed");
  if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+h.rva),h.callback,h.original)!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+h.rva))!=MH_OK)throw std::runtime_error("Impact VM observer hook failed");h.on=true;enabled=true;}
- logFile->event("motion_health_observer_enabled","\"commit_rva\":\"0x3efc30\",\"delta_rva\":\"0x3ef490\",\"lookup_rva\":\"0x123b600\",\"health_key\":2394442133,\"health_schema_required\":true,\"witness_capacity\":16,\"witness_max_age_ms\":500,\"read_only\":true");
- accepting=true;logFile->event("motion_hit_observer_enabled","\"vm_rva\":\"0x1245ce0\",\"caller\":\"0x3f64e1\",\"each_rva\":\"0x360080\",\"damage_rva\":\"0x3dbce0\",\"hit_bytes\":232,\"read_only\":true");}
+ logFile->event("motion_health_observer_enabled","\"commit_rva\":\"0x3efd10\",\"delta_rva\":\"0x3ef570\",\"lookup_rva\":\"0x123a930\",\"health_key\":2394442133,\"health_schema_required\":true,\"witness_capacity\":16,\"witness_max_age_ms\":500,\"read_only\":true");
+ accepting=true;logFile->event("motion_hit_observer_enabled","\"vm_rva\":\"0x1245000\",\"caller\":\"0x3f65c1\",\"each_rva\":\"0x360160\",\"damage_rva\":\"0x3dbdc0\",\"hit_bytes\":232,\"read_only\":true");}
 inline void disable(){accepting=false;if(!enabled)return;for(auto& h:hooks)if(h.on){if(MH_DisableHook(reinterpret_cast<void*>(baseAddress+h.rva))!=MH_OK)throw std::runtime_error("Impact VM observer disable failed");h.on=false;}
  const auto end=GetTickCount64()+500;while(callbacks.load()&&GetTickCount64()<end)std::this_thread::sleep_for(std::chrono::milliseconds(1));bool restored=true;for(const auto& h:hooks){const auto p=parsePattern(h.pattern);restored&=scan(reinterpret_cast<const uint8_t*>(baseAddress+h.rva),p.size(),p)==std::vector<size_t>{0};}
  logFile->event("motion_health_observer_removed","\"commits\":"+std::to_string(health::commits.load())+",\"deltas\":"+std::to_string(health::deltas.load())+",\"unqualified\":"+std::to_string(health::unqualified.load()));

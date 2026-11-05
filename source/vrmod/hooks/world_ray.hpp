@@ -21,7 +21,7 @@
 namespace worldRay {
 using Ray=void*(__fastcall*)(void*,const float*,const float*,const uint8_t*);
 inline Ray original=nullptr;inline bool enabled=false,census=false;
-constexpr uintptr_t rva=0xe88e20;
+constexpr uintptr_t rva=0xe88ee0;
 struct Worlds{uintptr_t voxels=0,colliders=0;uint32_t extra=0,thread=0;uint64_t ms=0;};
 inline Worlds worlds;   // only on the game's thread that casts (no lock: written and read there alone)
 inline std::atomic<uint64_t> worldChanges{0};

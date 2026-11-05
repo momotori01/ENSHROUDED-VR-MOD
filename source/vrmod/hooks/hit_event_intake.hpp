@@ -12,7 +12,7 @@
 namespace hitEventIntake {
 using Intake=uint8_t(__fastcall*)(void*,uint32_t,const void* const*);
 inline Intake original=nullptr;inline bool enabled=false;inline std::atomic<bool> failed{false};
-constexpr uintptr_t rva=0x962e80,callerRva=0x9db953,queueRead=0x962ed5,queueA=0x7b9e58,queueStride=72,elementSizeAt=0x14;
+constexpr uintptr_t rva=0x962f40,callerRva=0x9dba13,queueRead=0x962f95,queueA=0x7b9e58,queueStride=72,elementSizeAt=0x14;
 constexpr const char* pattern="48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 48 8B 39 48 8B D9 44 8B CA 49 8B";
 constexpr uint32_t hitEventBytes=248;
 inline std::atomic<uint64_t> calls{0},hitEvents{0};inline std::atomic<unsigned> logged{0};

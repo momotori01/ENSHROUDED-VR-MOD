@@ -15,9 +15,9 @@ namespace glyphChoice {
 using Pick=uintptr_t(__fastcall*)(uintptr_t,uintptr_t,uintptr_t,uintptr_t);
 inline Pick originalTexture=nullptr,originalText=nullptr;inline bool enabled=false;
 inline bool observe=false,swap=false;inline std::atomic<unsigned> swapped{0};
-constexpr uintptr_t comboRva=0xd06735,comboFirstRva=0xd01ac4,comboSecondRva=0xd01c62;   // return addresses (see above)
+constexpr uintptr_t comboRva=0xd067f5,comboFirstRva=0xd01b84,comboSecondRva=0xd01d22;   // return addresses (see above)
 constexpr uintptr_t xboxRightPress=0xc8c0,switchBack=0xce30;                              // FbUiBundle offsets of the UiTextures (build 26320373: inputAssets 0xc628 -> 0xc7a8, +0x180; build 26082781: 0xc740, 0xccb0)
-constexpr uintptr_t textureRva=0xd2f910,textRva=0xd145f0;
+constexpr uintptr_t textureRva=0xd2f9d0,textRva=0xd146b0;
 constexpr const char* texturePattern="66 89 4C 24 08 53 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 18";
 constexpr const char* textPattern="40 55 56 48 8D 6C 24 B1 48 81 EC A8 00 00 00 0F B7 C2 48 8B";
 inline std::mutex seenMutex;inline std::vector<uint64_t> seen;inline std::atomic<unsigned> logged{0},inside{0};

@@ -20,7 +20,7 @@ inline void remove(uint32_t entity,Copy& c,const char* why){
     const auto object=motionVisual::currentObject(c.handle);const auto id=c.handle;c.handle=0;
     if(!object||read<uintptr_t>(object+layout::modelResource)!=c.resource)throw std::runtime_error("remote consumable copy changed");
     const auto refs=read<uint32_t>(c.resource+16);std::array<uintptr_t,2> ids{reinterpret_cast<uintptr_t>(&id),1};
-    reinterpret_cast<motionVisual::Remove>(baseAddress+0x10ffd0)(reinterpret_cast<void*>(scene),ids.data());motionConsumableVisual::unpose(scene,c.pose,c.posed);
+    reinterpret_cast<motionVisual::Remove>(baseAddress+0x1100a0)(reinterpret_cast<void*>(scene),ids.data());motionConsumableVisual::unpose(scene,c.pose,c.posed);
     const bool invalid=read<uint8_t>(read<uintptr_t>(scene+0x1c8)+(id&0xffffff))!=uint8_t(id>>24);
     const bool released=refs==1||(refs>1&&read<uint32_t>(c.resource+16)==refs-1);
     if(logs++<200)logFile->event("remote_consumable_removed","\"entity\":"+std::to_string(entity)+",\"handle\":"+std::to_string(id)+",\"item\":"+std::to_string(c.item)+",\"reason\":\""+why+
@@ -53,7 +53,7 @@ inline void place(uint64_t player,uint32_t entity,const sync::Body& body,const W
         if(!c.handle){
             const auto g=motionConsumableVisual::iconModel(h.item);if(g==std::array<uint32_t,4>{}){copies.erase(entity);return;}
             motionVisual::validate();scene=motionVisual::scene;
-            c.handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfd1a0)(reinterpret_cast<void*>(scene),g.data(),transform.data());
+            c.handle=reinterpret_cast<motionVisual::Create>(baseAddress+0xfd270)(reinterpret_cast<void*>(scene),g.data(),transform.data());
             if(!c.handle){copies.erase(entity);throw std::runtime_error("remote consumable creation failed");}
             c.resource=read<uintptr_t>(motionVisual::object(c.handle)+layout::modelResource);c.item=h.item;c.createdMs=now;c.loaded=false;c.updates=0;
             if(!c.resource||read<std::array<uint32_t,4>>(c.resource+0x18)!=g)throw std::runtime_error("remote consumable resource differs");
@@ -67,7 +67,7 @@ inline void place(uint64_t player,uint32_t entity,const sync::Body& body,const W
         if(read<uintptr_t>(object+layout::modelResource)!=c.resource)throw std::runtime_error("remote consumable resource changed");
         if(const auto sdfId=read<uint32_t>(object+layout::modelSdf)){
             const auto sdf=read<uintptr_t>(scene+layout::sceneSdf);const auto count=sdf?read<uint64_t>(sdf+0x78):0;if(!count)throw std::runtime_error("remote consumable SDF count");
-            using RemoveSdf=void(__fastcall*)(void*,uint32_t);reinterpret_cast<RemoveSdf>(baseAddress+0x15cde0)(reinterpret_cast<void*>(sdf),sdfId);
+            using RemoveSdf=void(__fastcall*)(void*,uint32_t);reinterpret_cast<RemoveSdf>(baseAddress+0x15ceb0)(reinterpret_cast<void*>(sdf),sdfId);
             *reinterpret_cast<uint32_t*>(motionVisual::object(c.handle)+layout::modelSdf)=0;
             if(read<uint64_t>(sdf+0x78)!=count-1)throw std::runtime_error("remote consumable SDF removal failed");
         }

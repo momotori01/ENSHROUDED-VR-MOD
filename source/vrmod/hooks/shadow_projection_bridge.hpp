@@ -4,7 +4,7 @@
 // with the View's shadow object (+0x990, June +0x728) and the camera block it has just copied to View+0x9d0 (June
 // +0x760; the projection descriptor first, as before; the View's own projection is +0x908, June +0x6a0).
 namespace shadowProjection {
-constexpr uintptr_t rva=0x169fc0,callReturn=0x12fdd0,ownAt=0x990,parametersAt=0x9d0;
+constexpr uintptr_t rva=0x16a090,callReturn=0x12fea0,ownAt=0x990,parametersAt=0x9d0;
 constexpr const char* pattern="40 55 53 56 48 8D AC 24 10 EE FF FF B8 F0 12 00 00 E8";
 using Prepare=void(__fastcall*)(void*,const void*);
 inline Prepare original=nullptr;

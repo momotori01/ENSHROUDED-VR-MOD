@@ -5,7 +5,7 @@ inline Rotate original=nullptr;
 inline bool enabled=false;
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},samples{0},failures{0},applied{0};
-constexpr uintptr_t rva=0x21e680,sideCaller=0x26f08a,forwardCaller=0x26f0e7;
+constexpr uintptr_t rva=0x21e760,sideCaller=0x26f16a,forwardCaller=0x26f1c7;
 constexpr const char* pattern="4C 8B DC 48 83 EC 78 F2 41 0F 10 28 48 8B C1";
 struct Input {
     uint32_t entity=0,tick=0,inputPrefix=0,sequence=0;

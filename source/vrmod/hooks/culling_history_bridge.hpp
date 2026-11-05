@@ -38,10 +38,10 @@ inline int keepGenerated=-1;
 inline std::atomic<unsigned> keptGenerated{0},keepFallbacks{0};
 struct Hook {uintptr_t rva,caller;const char* pattern;bool enabled=false;};
 inline std::array<Hook,4> hooks{{
-    {0xab860,0xae11b,"48 89 5C 24 08 57 48 83 EC 40 48 8B DA 48 8B F9 48 83"},
-    {0xade30,0x1310e6,"4C 89 4C 24 20 48 89 54 24 10 48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 68 F5 FE FF B8 98 0B 01 00 E8 ? ? ? ? 48 2B"},
-    {0xabbf0,0x12c844,"40 55 53 57 41 55 41 56 41 57 48 8D 6C 24 A8 48 81 EC"},
-    {0xab9c0,0x12c858,"48 83 EC 38 48 83 C2 38 C7 44 24 20 00 00 00 00 41 B9 04 00 00 00 45 33 C0"}
+    {0xab930,0xae1eb,"48 89 5C 24 08 57 48 83 EC 40 48 8B DA 48 8B F9 48 83"},
+    {0xadf00,0x1311b6,"4C 89 4C 24 20 48 89 54 24 10 48 89 4C 24 08 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 68 F5 FE FF B8 98 0B 01 00 E8 ? ? ? ? 48 2B"},
+    {0xabcc0,0x12c914,"40 55 53 57 41 55 41 56 41 57 48 8D 6C 24 A8 48 81 EC"},
+    {0xaba90,0x12c928,"48 83 EC 38 48 83 C2 38 C7 44 24 20 00 00 00 00 41 B9 04 00 00 00 45 33 C0"}
 }};
 inline uintptr_t address(const std::array<uint8_t,16>& h){return read<uintptr_t>(reinterpret_cast<uintptr_t>(h.data()));}
 inline uint16_t index(const std::array<uint8_t,16>& h){return read<uint16_t>(reinterpret_cast<uintptr_t>(h.data())+8);}
@@ -58,7 +58,7 @@ inline void release(State& s){
     if(!s.graph)return;
     for(int eye=1;eye>=0;--eye)if(address(s.handles[eye])){
         const auto id=index(s.handles[eye]);object(s.graph,s.handles[eye]);
-        reinterpret_cast<Free>(baseAddress+0x102e390)(reinterpret_cast<void*>(s.graph),s.handles[eye].data());
+        reinterpret_cast<Free>(baseAddress+0x102e450)(reinterpret_cast<void*>(s.graph),s.handles[eye].data());
         if(address(s.handles[eye]))throw std::runtime_error("native culling buffer handle not cleared");
         logFile->event("culling_history_released","\"eye\":"+std::to_string(eye)+",\"index\":"+std::to_string(id)+
             ",\"substitutions\":"+std::to_string(s.substitutions[eye])+",\"reset_commands\":"+std::to_string(s.resets[eye]));
@@ -73,10 +73,10 @@ inline void release(State& s){
 }
 inline void create(State& s,uintptr_t scene){
     for(const auto& entry:std::array<std::pair<uintptr_t,const char*>,4>{{
-        {0x1029660,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 49 8B E8 48 8D"},
-        {0x102e390,"48 89 74 24 18 48 89 7C 24 20 41 57 48 83 EC 20"},
-        {0x102d280,"48 8B 02 44 0F B7 42 08 0F 10 02 4D 03 C0"},
-        {0x7d470,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 48 8B F2"}}}){
+        {0x1029720,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 49 8B E8 48 8D"},
+        {0x102e450,"48 89 74 24 18 48 89 7C 24 20 41 57 48 83 EC 20"},
+        {0x102d340,"48 8B 02 44 0F B7 42 08 0F 10 02 4D 03 C0"},
+        {0x7d540,"48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 40 48 8B F2"}}}){
         const auto p=parsePattern(entry.second);
         if(scan(reinterpret_cast<const uint8_t*>(baseAddress+entry.first),p.size(),p)!=std::vector<size_t>{0})
             throw std::runtime_error("native culling buffer API signature differs");
@@ -107,7 +107,7 @@ inline void create(State& s,uintptr_t scene){
     // f8dbd0 creates an UNBOUND buffer for a later allocation-group binding.
     std::array<uint8_t,32> descriptor{};std::memcpy(descriptor.data(),&bytes,8);std::memcpy(descriptor.data()+8,&flags,4);
     for(unsigned eye=0;eye<2;eye++){
-        reinterpret_cast<CreateBuffer>(baseAddress+0x1029660)(s.handles[eye].data(),reinterpret_cast<void*>(s.graph),descriptor.data());
+        reinterpret_cast<CreateBuffer>(baseAddress+0x1029720)(s.handles[eye].data(),reinterpret_cast<void*>(s.graph),descriptor.data());
         const auto owned=object(s.graph,s.handles[eye]);
         if(!owned||owned==object(s.graph,s.source)||(eye&&owned==object(s.graph,s.handles[0])))throw std::runtime_error("private culling buffers alias");
         const auto allocation=read<uint32_t>(owned+0x14);
@@ -126,7 +126,7 @@ inline void create(State& s,uintptr_t scene){
 inline void fill(State& s,unsigned eye,uintptr_t graph,uint32_t first,uint32_t count,uint32_t value=0xffffffffu){
     if(!graph||!count||uint64_t(first)+count>s.slots)throw std::runtime_error("culling history reset outside allocation");
     using Fill=void(__fastcall*)(void*,const void*,uint64_t,uint64_t,uint32_t);
-    reinterpret_cast<Fill>(baseAddress+0x7d470)(reinterpret_cast<void*>(graph),s.handles[eye].data(),uint64_t(first)*4,uint64_t(count)*4,value);
+    reinterpret_cast<Fill>(baseAddress+0x7d540)(reinterpret_cast<void*>(graph),s.handles[eye].data(),uint64_t(first)*4,uint64_t(count)*4,value);
     ++s.resets[eye];
 }
 // Diagnostic (2026-10-24, the pop-in of distant things): EVR_CULLING_HISTORY_ZERO_AT=<XR frame> fills both eyes' history with 0
@@ -147,7 +147,7 @@ void* __fastcall get(void* output,void* manager){
            read<uint64_t>(reinterpret_cast<uintptr_t>(output)+0x90)!=0||read<uint64_t>(reinterpret_cast<uintptr_t>(output)+0x98)!=uint64_t(s.slots)*4)
             throw std::runtime_error("native culling output is not expected visibility history");
         std::array<uint8_t,32> replacement{};
-        reinterpret_cast<Get>(baseAddress+0x102d280)(replacement.data(),s.handles[currentEye].data());
+        reinterpret_cast<Get>(baseAddress+0x102d340)(replacement.data(),s.handles[currentEye].data());
         if(!s.initialized[currentEye]){fill(s,unsigned(currentEye),prepareGraph,0,s.slots);s.initialized[currentEye]=true;}
         if(zeroAt()&&liveFrame.frame>=zeroAt()&&!zeroed[currentEye]){zeroed[currentEye]=true;fill(s,unsigned(currentEye),prepareGraph,0,s.slots,0u);
             logFile->event("culling_history_zeroed","\"eye\":"+std::to_string(currentEye)+",\"frame\":"+std::to_string(liveFrame.frame)+",\"diagnostic\":true");}

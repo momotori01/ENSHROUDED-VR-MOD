@@ -24,7 +24,7 @@ inline Set original=nullptr;
 inline std::atomic<bool> enabled{false};
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},calls{0},failures{0};
-constexpr uintptr_t rva=0x90d300,callSite=0x8512ca,callReturn=0x8512cf;
+constexpr uintptr_t rva=0x90d3c0,callSite=0x85138a,callReturn=0x85138f;
 constexpr const char* pattern="48 8B C4 48 83 EC 68 4C 8B 99 40 03 00 00 88 91 B9 20 02 00";
 // Build 26320373 (2026-11-02): the frontend grew - +0x18 for 0x31da8..0x335a0, +0x20 for 0x33963..0x345f8, +0x20..0x30 above
 // (functions 0xbd0ed0, 0xbce3c0, 0xbe3400, 0x850b30 against the build before): state 0x35280 -> 0x352a0, the tab 0x325a0 -> 0x325b8,
@@ -182,7 +182,7 @@ inline void verify(){
        read<uint8_t>(call)!=0xe8||uintptr_t(int64_t(call+5)+read<int32_t>(call+1))!=baseAddress+rva)
         throw std::runtime_error("native frontend input predicate signature/caller changed");
     const auto contextLoad=parsePattern("4C 8B 8B E0 D4 47 00");
-    if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0x863cce),contextLoad.size(),contextLoad)!=std::vector<size_t>{0})
+    if(scan(reinterpret_cast<const uint8_t*>(baseAddress+0x863d8e),contextLoad.size(),contextLoad)!=std::vector<size_t>{0})
         throw std::runtime_error("UI to input sender context load changed");
     if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+rva),reinterpret_cast<void*>(&evr_input_ui_stub),reinterpret_cast<void**>(&original))!=MH_OK||
        MH_EnableHook(reinterpret_cast<void*>(baseAddress+rva))!=MH_OK)throw std::runtime_error("frontend input observer hook failed");
@@ -190,7 +190,7 @@ inline void verify(){
     uiScan::install();
     stringScan::install();
     uiCursorConfig::install();
-    logFile->event("input_ui_observer_enabled","\"rva\":"+hex(rva)+",\"caller\":\"0x8512cf\",\"setter\":true,\"screen_offset\":"+std::to_string(screenOffset)+",\"auxiliary_offset\":"+std::to_string(screenOffset+2)+",\"read_only\":true");
+    logFile->event("input_ui_observer_enabled","\"rva\":"+hex(rva)+",\"caller\":\"0x85138f\",\"setter\":true,\"screen_offset\":"+std::to_string(screenOffset)+",\"auxiliary_offset\":"+std::to_string(screenOffset+2)+",\"read_only\":true");
 }
 inline void observe(unsigned sample,uint32_t entity,uint32_t tick,uintptr_t senderContext){
     if(!enabled)return;

@@ -8,7 +8,7 @@ inline bool requested=false,enabled=false;
 inline std::atomic<bool> accepting{false};
 inline std::atomic<unsigned> callbacks{0},calls{0},applied{0},failures{0},lines{0};
 // 242300 has one caller: client_cursor, after the task has taken the local player's components.
-constexpr uintptr_t rva=0x28c9c0,caller=0x29552d;
+constexpr uintptr_t rva=0x28caa0,caller=0x29560d;
 // 1.0 (Hotfix 1.0.0.1): 0x287cd0 (June 0x242300) with another prologue; one caller, 0x290758 (June 0x249c61).
 constexpr const char* pattern="4C 89 44 24 18 55 41 54 41 56 41 57 48 8D AC 24 C8 E4 FF FF B8 38 1C 00 00";
 constexpr uint64_t wantedMaxAgeMs=250;

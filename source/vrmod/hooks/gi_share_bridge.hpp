@@ -18,31 +18,31 @@ namespace giShare {
 // callers: none = skipped when called from dynamic GI (77c80); otherwise only these return addresses are skipped.
 struct Target{uintptr_t rva;const char* pattern;std::array<uintptr_t,2> callers{};int object=-1;bool enabled=false;}; // object: borrowedObjects index
 inline std::array<Target,21> targets{{
-    {0x9f480,"40 55 53 56 41 56 41 57 48 8D AC 24 70 F1",{0x1388c6}}, // dynamic_gi_prepare (skipped only from f7c50 102c2b)
-    {0x98160,"40 55 53 56 57 41 54 41 55 41 56 41 57 48"}, // shade hits (terrain/building/sky/sdf)
-    {0x8fd50,"48 89 5C 24 20 55 56 57 41 54 41 55 41 56"}, // blend world cache radiance
-    {0x9dd40,"4C 89 4C 24 20 55 53 56 57 41 54 41 55 41"}, // blend world cache SH irradiance
-    {0x8f930,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 10 FF"}, // blend radiance
-    {0x6264e,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 10 FF"}, // blend distance probes
-    {0x8e600,"48 8B C4 4C 89 48 20 4C 89 40 18 55 53 56 57 41 54 41 55 41 56 41 57 48 8D A8 E8 F8 FF FF"}, // blend neighbour radiance
-    {0x8e300,"48 89 5C 24 20 55 56 57 41 54 41 55 41 56"}, // blend irradiance
-    {0x9d690,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D0 FD"}, // update probe border
-    {0x9d9f0,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D0 FD"}, // update probe irradiance border
-    {0x95670,"48 8B C4 4C 89 40 18 48 89 50 10 55 53 56"}, // prefilter radiance
-    {0xa2a90,"48 8B C4 48 89 58 20 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 C8 FA FF FF 48 81 EC 00 06 00 00 0F 10 15 ? ? ? ? 4C 8B 3A 4C 8B F2 0F"}, // player-centred distance and material data
-    {0x58e6f,"48 8B C4 48 89 58 18 48 89 50 10 55 56 57"}, // ambient probe visibility
-    {0x8bbe0,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D0 FD"}, // fill requested ambient probes
-    {0x8b420,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D0 FD"}, // fill primary / world-cache ambient probes
-    {0x85e40,"4C 89 4C 24 20 4C 89 44 24 18 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D8 FA FF FF"}, // converge ambient probes
-    {0xcb970,"48 8B C4 4C 89 40 18 48 89 48 08 55 53 56",{0x138c73},0}, // render_many_lights_shadows (View+9a0), from f7c50 102ff5
-    {0x7e4d0,"48 89 74 24 18 57 48 81 EC 80 00 00 00 80 BA 88 00 00",{0x12cfd4,0x12d005},1}, // heightmap frame reset (View+9f8/+a00)
-    {0x7e8f0,"48 83 EC 18 F2 0F 10 02 0F 57 E4 F3 0F 10",{0x1346b5,0x1346e9},1}, // heightmap centre and frame counter from the camera
-    {0x510ca,"40 55 53 56 57 41 54 41 56 41 57 48 8D AC",{0x1358cd,0x1358cd},1}, // dynamic_heightmap_fill
+    {0x9f550,"40 55 53 56 41 56 41 57 48 8D AC 24 70 F1",{0x138996}}, // dynamic_gi_prepare (skipped only from f7c50 102c2b)
+    {0x98230,"40 55 53 56 57 41 54 41 55 41 56 41 57 48"}, // shade hits (terrain/building/sky/sdf)
+    {0x8fe20,"48 89 5C 24 20 55 56 57 41 54 41 55 41 56"}, // blend world cache radiance
+    {0x9de10,"4C 89 4C 24 20 55 53 56 57 41 54 41 55 41"}, // blend world cache SH irradiance
+    {0x8fa00,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 10 FF"}, // blend radiance
+    {0x6271e,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 10 FF"}, // blend distance probes
+    {0x8e6d0,"48 8B C4 4C 89 48 20 4C 89 40 18 55 53 56 57 41 54 41 55 41 56 41 57 48 8D A8 E8 F8 FF FF"}, // blend neighbour radiance
+    {0x8e3d0,"48 89 5C 24 20 55 56 57 41 54 41 55 41 56"}, // blend irradiance
+    {0x9d760,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D0 FD"}, // update probe border
+    {0x9dac0,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D0 FD"}, // update probe irradiance border
+    {0x95740,"48 8B C4 4C 89 40 18 48 89 50 10 55 53 56"}, // prefilter radiance
+    {0xa2b60,"48 8B C4 48 89 58 20 55 56 57 41 54 41 55 41 56 41 57 48 8D A8 C8 FA FF FF 48 81 EC 00 06 00 00 0F 10 15 ? ? ? ? 4C 8B 3A 4C 8B F2 0F"}, // player-centred distance and material data
+    {0x58f3f,"48 8B C4 48 89 58 18 48 89 50 10 55 56 57"}, // ambient probe visibility
+    {0x8bcb0,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D0 FD"}, // fill requested ambient probes
+    {0x8b4f0,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D0 FD"}, // fill primary / world-cache ambient probes
+    {0x85f10,"4C 89 4C 24 20 4C 89 44 24 18 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 D8 FA FF FF"}, // converge ambient probes
+    {0xcba40,"48 8B C4 4C 89 40 18 48 89 48 08 55 53 56",{0x138d43},0}, // render_many_lights_shadows (View+9a0), from f7c50 102ff5
+    {0x7e5a0,"48 89 74 24 18 57 48 81 EC 80 00 00 00 80 BA 88 00 00",{0x12d0a4,0x12d0d5},1}, // heightmap frame reset (View+9f8/+a00)
+    {0x7e9c0,"48 83 EC 18 F2 0F 10 02 0F 57 E4 F3 0F 10",{0x134785,0x1347b9},1}, // heightmap centre and frame counter from the camera
+    {0x510ca,"40 55 53 56 57 41 54 41 56 41 57 48 8D AC",{0x13599d,0x13599d},1}, // dynamic_heightmap_fill
     // 20: the screen-space GI of a View (rasterize / reproject / prefilter), from 77c80 at 797a7 / 79d9f (its result is
     // not used there). Skipped for the right eye in the borrow-screen form below only.
-    {0x95f50,"48 89 54 24 10 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 58 F4 FF FF",{0xa6f57,0xa7270}},
+    {0x96020,"48 89 54 24 10 55 53 56 57 41 54 41 55 41 56 41 57 48 8D AC 24 58 F4 FF FF",{0xa7027,0xa7340}},
 }};
-constexpr uintptr_t dynamicLo=0xa4ef0,dynamicHi=0xa7b0c;
+constexpr uintptr_t dynamicLo=0xa4fc0,dynamicHi=0xa7bdc;
 // Other per-View world-space objects the right eye borrows whole (their updates are skipped targets above):
 // View+9a0 many-lights shadow atlas (0xf8 bytes; its per-View light-list write 9a430 still runs for each eye),
 // View+9f8/+a00 dynamic heightmaps (0x98 bytes each; the readers 512e0/51370 still run for each eye).

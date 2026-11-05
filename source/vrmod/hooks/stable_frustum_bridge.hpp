@@ -2,8 +2,8 @@ namespace stableFrustumBridge {
 using Build=bool(__fastcall*)(void*,const void*,const void*);
 inline Build original=nullptr;
 inline bool enabled=false;
-constexpr uintptr_t rva=0xf68520;
-constexpr std::array<uintptr_t,2> callers{0x12d9cf,0x12d9e9};   // 1.0 (June 0xf9226, 0xf9240: not remapped by the matcher)
+constexpr uintptr_t rva=0xf685e0;
+constexpr std::array<uintptr_t,2> callers{0x12da9f,0x12dab9};   // 1.0 (June 0xf9226, 0xf9240: not remapped by the matcher)
 constexpr const char* pattern="48 89 5C 24 08 48 89 74 24 10 57 48 81 EC A0 00 00 00 0F 57 C0 0F 57 C9 48 8B DA 0F 29 44 24 20 48 8B";
 inline bool observeEyes=false,stabilizeEyes=false;
 struct Context{uint64_t serial=0,frame=0;unsigned calls=0,mask=0;bool failed=false;int eye=-1;bool apply=true;};
@@ -104,7 +104,7 @@ inline bool enabled=false;
 inline void* (*eyeVfxView)()=nullptr;
 // 1.0 (Hotfix 1.0.0.1): the stage is 0x19f7e0, called once from the View's render at 0x1301f5 with the View's VfxView
 // (+0x9a8); it reads the six planes and the float at +0x60 as June's 0x179a80 (called at 0xfd055 with View+0x738).
-constexpr uintptr_t rva=0x1a29c0,callerRva=0x13263a;
+constexpr uintptr_t rva=0x1a2a90,callerRva=0x13270a;
 constexpr const char* pattern="4C 8B DC 49 89 5B 08 49 89 6B 10 49 89 73 18 49 89 7B 20 41 56 48 81 EC C0 00 00 00";
 void __fastcall invoke(void* output,void* vfxView,const void* camera){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress;

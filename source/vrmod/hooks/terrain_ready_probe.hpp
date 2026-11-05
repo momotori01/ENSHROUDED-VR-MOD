@@ -4,8 +4,8 @@ namespace terrainReadyDiagnostic {
 using Poll=bool(__fastcall*)(void*,uint32_t);
 inline Poll original=nullptr;
 inline bool enabled=false;
-constexpr uintptr_t rva=0xd8c0e;
-constexpr std::array<uintptr_t,3> callers{0x1bb87a,0x1bb8a3,0x1bb8ca};
+constexpr uintptr_t rva=0xd8cde;
+constexpr std::array<uintptr_t,3> callers{0x1bb94a,0x1bb973,0x1bb99a};
 struct Observation {uint32_t handle=0;bool ready=false;int flags=-1;bool generationMatches=false;};
 struct Context {uint64_t calls=0,ready=0;uintptr_t manager=0;bool multipleManagers=false;std::array<Observation,12> sample{};};
 inline thread_local Context* current=nullptr;
@@ -52,7 +52,7 @@ inline void install(){
     if(MH_CreateHook(reinterpret_cast<void*>(target),reinterpret_cast<void*>(&poll),reinterpret_cast<void**>(&original))!=MH_OK||
         MH_EnableHook(reinterpret_cast<void*>(target))!=MH_OK)throw std::runtime_error("terrain readiness observer hook failed");
     enabled=true;
-    logFile->event("terrain_readiness_hook_enabled","\"rva\":\"0xd8c0e\",\"changes_native_results\":false");
+    logFile->event("terrain_readiness_hook_enabled","\"rva\":\"0xd8cde\",\"changes_native_results\":false");
 }
 inline void disable() noexcept {
     if(!enabled)return;

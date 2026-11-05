@@ -8,7 +8,7 @@ inline bool(*joinedFinalizer)()=nullptr; // Optional nonblocking, MOD-value-only
 inline bool enabled=false;inline std::atomic<unsigned> callbacks{0},failures{0},completion{0};
 inline std::atomic<unsigned> destroys{0},disconnects{0};
 inline thread_local bool insideDestroy=false;inline thread_local uintptr_t expectedManager=0;inline thread_local uint32_t expectedDevice=0;
-constexpr uintptr_t destroyRva=0xfb2480,disconnectRva=0xfb2d80;
+constexpr uintptr_t destroyRva=0xfb2540,disconnectRva=0xfb2e40;
 constexpr const char* destroyPattern="48 89 5C 24 08 48 89 6C 24 10 48 89 74 24 18 57 48 83 EC 20 33 ED 48 8B DA 48 8B F1";
 constexpr const char* disconnectPattern="48 89 5C 24 08 48 89 7C 24 18 89 54 24 10 55 48 8D 6C";
 inline void fail(const char* reason) noexcept {++failures;try{logFile->event("controller_owner_exit_failure","\"reason\":"+jsonString(reason));}catch(...){} }
@@ -60,10 +60,10 @@ __declspec(noinline) void __fastcall destroy(void* allocator,void* object){
 }
 inline void install(){
  for(const auto& p:std::array<std::pair<uintptr_t,const char*>,2>{{{destroyRva,destroyPattern},{disconnectRva,disconnectPattern}}}){const auto bytes=parsePattern(p.second);if(scan(reinterpret_cast<const uint8_t*>(baseAddress+p.first),bytes.size(),bytes)!=std::vector<size_t>{0})throw std::runtime_error("input owner signature differs");}
- for(const auto& p:std::array<std::pair<uintptr_t,uintptr_t>,2>{{{0xdc4682,destroyRva},{0xdc4030,disconnectRva}}})if(read<uint8_t>(baseAddress+p.first)!=0xe8||uintptr_t(int64_t(p.first+5)+read<int32_t>(baseAddress+p.first+1))!=p.second)throw std::runtime_error("input owner direct call differs");
+ for(const auto& p:std::array<std::pair<uintptr_t,uintptr_t>,2>{{{0xdc4742,destroyRva},{0xdc40f0,disconnectRva}}})if(read<uint8_t>(baseAddress+p.first)!=0xe8||uintptr_t(int64_t(p.first+5)+read<int32_t>(baseAddress+p.first+1))!=p.second)throw std::runtime_error("input owner direct call differs");
  if(MH_CreateHook(reinterpret_cast<void*>(baseAddress+destroyRva),reinterpret_cast<void*>(&destroy),reinterpret_cast<void**>(&originalDestroy))!=MH_OK||MH_CreateHook(reinterpret_cast<void*>(baseAddress+disconnectRva),reinterpret_cast<void*>(&disconnect),reinterpret_cast<void**>(&originalDisconnect))!=MH_OK)throw std::runtime_error("input owner hook create failed");
  enabled=true;
  if(MH_EnableHook(reinterpret_cast<void*>(baseAddress+destroyRva))!=MH_OK||MH_EnableHook(reinterpret_cast<void*>(baseAddress+disconnectRva))!=MH_OK)throw std::runtime_error("input owner hook enable failed");
- logFile->event("controller_owner_exit_enabled","\"destroy_rva\":\"0xfb2480\",\"disconnect_rva\":\"0xfb2d80\",\"expected_caller\":\"0xfb2ae4\",\"neutral_only\":"+std::string(controllerUiFixture::motionAttackRequested?"false":"true")+",\"system_settings_unchanged\":true");
+ logFile->event("controller_owner_exit_enabled","\"destroy_rva\":\"0xfb2540\",\"disconnect_rva\":\"0xfb2e40\",\"expected_caller\":\"0xfb2ba4\",\"neutral_only\":"+std::string(controllerUiFixture::motionAttackRequested?"false":"true")+",\"system_settings_unchanged\":true");
 }
 }

@@ -8,7 +8,7 @@ namespace vfxCpuDrawProbe {
 using Record=void(__fastcall*)(void*,void*,void*,uint32_t,void*);
 inline Record original=nullptr;inline bool enabled=false;inline unsigned skip=0;
 inline std::array<std::atomic<unsigned>,3> calls{},skipped{};
-constexpr uintptr_t rva=0x1b2db0;constexpr std::array<uintptr_t,3> callers{0x1031a3,0x103828,0xf71fc};
+constexpr uintptr_t rva=0x1b2e80;constexpr std::array<uintptr_t,3> callers{0x103273,0x1038f8,0xf72cc};
 constexpr const char* pattern="48 8B C4 55 56 57 41 54 41 55 41 56 48 8D A8 A8 FC FF FF";
 void __fastcall record(void* view,void* graph,void* parameters,uint32_t pass,void* extra){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());
@@ -24,7 +24,7 @@ void __fastcall record(void* view,void* graph,void* parameters,uint32_t pass,voi
 namespace modelCulling {
 using Cull=void*(__fastcall*)(void*,void*,void*,void*);
 inline Cull original=nullptr;inline bool enabled=false;inline std::atomic<unsigned> skipped{0};
-constexpr uintptr_t rva=0x1739fe,caller=0x1358cd;
+constexpr uintptr_t rva=0x173ace,caller=0x13599d;
 constexpr const char* pattern="48 8B C4 48 89 50 10 55 56 41 55 41 56 48 8D A8 B8 FB FF FF";
 void* __fastcall cull(void* a,void* b,void* c,void* d){
     if(reinterpret_cast<uintptr_t>(_ReturnAddress())==baseAddress+caller){++skipped;return nullptr;}
@@ -71,9 +71,9 @@ namespace writeback {
 using Write=void(__fastcall*)(void*,void*,void*,void*);
 struct Target {uintptr_t rva,caller;const char* pattern;const char* name;Write original=nullptr;bool enabled=false;std::atomic<unsigned> calls{0},skipped{0};};
 inline std::array<Target,3> targets{{
-    {0x1b20b0,0x18b59e,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24","decals_sort_data"},
-    {0x18aebe,0x18b57b,"48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 55 41 54 41 55","inject_instances"},
-    {0x18b06e,0x18b565,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57","transparent_instances"}}};
+    {0x1b2180,0x18b66e,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57 48 8D 6C 24","decals_sort_data"},
+    {0x18af8e,0x18b64b,"48 89 5C 24 10 48 89 74 24 18 48 89 7C 24 20 55 41 54 41 55","inject_instances"},
+    {0x18b13e,0x18b635,"48 89 5C 24 18 55 56 57 41 54 41 55 41 56 41 57","transparent_instances"}}};
 inline unsigned skip=0;
 template<size_t I> void __fastcall write(void* graph,void* view,void* programs,void* parameters){
     auto& t=targets[I];
