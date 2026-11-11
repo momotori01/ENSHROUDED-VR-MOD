@@ -131,6 +131,10 @@ inline std::vector<std::pair<std::string,std::string>> entries(const std::string
 // item is "View fit", not a runtime): Auto - the mod fits only when it finds ALVR (the headset's name, or ALVR's driver in
 // SteamVR's server: include/evr/fov_fit.hpp); Normal - the picture as always; Fit - always fitted ([Picture] FitView; the
 // earlier forms' ALVR / On read as Fit, SteamVR / Off as Normal).
+// levelCatchUp (2026-11-10; user, 11-09: "to close the level gap with friends who play now and then: when you join a host's
+// world three or more levels below the host, you are raised to the host's level - 1; switched in the exe, off by default"):
+// on the host's side - the host's game raises such a guest with the game's own admin action (hooks/level_catch_up.hpp;
+// [Online] LevelCatchUp). The guest needs nothing. Works with VR on or off; off unless set.
 enum class FitView {Auto,Normal,Fit};
 inline const std::vector<std::string>& fitViewNames(){static const std::vector<std::string> names{"Auto","Normal","Fit"};return names;}
 enum class Style {Motion,PadFirst,PadThird};
@@ -140,7 +144,7 @@ struct Values {bool vr=false,online=true;double renderScale=.8;std::string dlss;
     bool realCrouch=true;int crouchDrop=30;int swingSpeed=100;bool armSwim=true;bool hitStop=true;bool uiAutoHide=true;bool menuRefresh=false;
     bool snapTurn=false;int snapTurnAngle=motion::snapAngleDefault;
     double afwRenderScale=0;std::string afwDlss;int afwPacing=0;
-    Style style=Style::Motion;bool padPitchLock=true;int padTilt=0;FitView fitView=FitView::Auto;};
+    Style style=Style::Motion;bool padPitchLock=true;int padTilt=0;FitView fitView=FitView::Auto;bool levelCatchUp=false;};
 inline bool padStyle(const Values& v){return v.style!=Style::Motion;}
 constexpr int swingSpeedLow=50,swingSpeedHigh=150,swingSpeedStep=5;
 inline int clampSwingSpeed(int percent){
@@ -153,7 +157,7 @@ inline Values read(const std::string& ini){
     const auto flag=[&](const char* section,const char* key,bool fallback){const auto v=get(ini,section,key);return v=="1"?true:v=="0"?false:fallback;};
     const auto number=[&](const char* section,const char* key,double fallback,double low,double high){const auto v=get(ini,section,key);
         char* end=nullptr;const double x=std::strtod(v.c_str(),&end);return !v.empty()&&end&&!*end&&std::isfinite(x)&&x>=low&&x<=high?x:fallback;};
-    out.vr=flag("Mode","VR",d.vr);out.online=flag("Online","Sync",d.online);out.alternateEyes=flag("Picture","AlternateEyes",d.alternateEyes);out.eyeWarp=int(number("Picture","EyeWarp",d.eyeWarp,0.,2.));
+    out.vr=flag("Mode","VR",d.vr);out.online=flag("Online","Sync",d.online);out.levelCatchUp=flag("Online","LevelCatchUp",d.levelCatchUp);out.alternateEyes=flag("Picture","AlternateEyes",d.alternateEyes);out.eyeWarp=int(number("Picture","EyeWarp",d.eyeWarp,0.,2.));
     out.renderScale=number("Picture","RenderScale",d.renderScale,.25,2.);out.sharpness=number("Picture","Sharpness",d.sharpness,0.,1.);
     out.keepLogs=int(number("Log","Keep",d.keepLogs,0.,100.));
     out.realCrouch=flag("Body","RealCrouch",d.realCrouch);out.crouchDrop=int(number("Body","CrouchDrop",d.crouchDrop,10.,50.));

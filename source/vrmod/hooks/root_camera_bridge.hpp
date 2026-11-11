@@ -156,6 +156,12 @@ __declspec(noinline) void __fastcall build(void* output,void* controller){
     const auto caller=reinterpret_cast<uintptr_t>(_ReturnAddress());
     const auto callerRsp=reinterpret_cast<uintptr_t>(_AddressOfReturnAddress())+sizeof(uintptr_t);
     callbacks.fetch_add(1,std::memory_order_acq_rel);
+    // Test (2026-11-11, the stick-turn motion vector bursts come only while the game's own third-person camera swings round
+    // the player): EVR_TEST_GAME_CAMERA_DISTANCE=<metres> puts the camera's distance (+0x14a4) to that and its shoulder
+    // (+0x148c) to 0 before each build - the game camera stays at the head.
+    {static const float testDistance=[]{char v[16]{};return GetEnvironmentVariableA("EVR_TEST_GAME_CAMERA_DISTANCE",v,sizeof v)?float(std::atof(v)):-1.f;}();
+     if(testDistance>=0&&controller){const auto c=reinterpret_cast<uintptr_t>(controller);
+         *reinterpret_cast<float*>(c+0x14a4)=testDistance;*reinterpret_cast<Vec3*>(c+0x148c)=Vec3{0,0,0};}}
     original(output,controller);
     {const ObserverLastError lastError;
      if(accepting.load(std::memory_order_acquire)&&caller==baseAddress+0x2b7a37){

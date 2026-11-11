@@ -5,6 +5,7 @@ Fight by swinging your sword, cast spells by swinging your wand, draw and loose 
 ## Features
 - Native stereo rendering
 - Multiplayer: other players' full-body IK is shown - including the fish they just caught
+- Level catch-up for guests (host option, off by default) - **experimental, it may not work yet**: when you host, a player who joins three or more levels below you is raised to your level - 1. Only the host needs the mod.
 - Four play modes: motion VR (full VR with motion controllers), controller VR in first person (FPS) or third person (TPS) - also lying down -, and desktop. VR and desktop players can play together
 - Combat by motion controls: melee, wand, bow, throwing
 - Rising slashes, downward slashes, and the movement of skill attacks follow your swing.

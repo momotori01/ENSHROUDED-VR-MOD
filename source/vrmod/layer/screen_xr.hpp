@@ -23,6 +23,8 @@
 // use - inside the game's own present call, so the queue is the game's to use at that moment.
 namespace screenXr {
 inline bool requested(){static const bool on=[]{const auto f=std::getenv("EVR_SCREEN_XR");return f&&!std::strcmp(f,"1");}();return on;}
+// The present that makes the session (30). EVR_SCREEN_XR_FIRST_PRESENT (tests, 2026-11-09): a later one, as on a slow start.
+inline uint64_t firstPresent(){static const uint64_t n=[]{const auto f=std::getenv("EVR_SCREEN_XR_FIRST_PRESENT");const auto v=f?std::strtoull(f,nullptr,10):0ull;return v>=30&&v<=100000?v:30ull;}();return n;}
 inline float eyeScale(){static const float s=[]{const auto f=std::getenv("EVR_SCREEN_XR_SCALE");const float v=f?float(std::atof(f)):1.f;return std::isfinite(v)&&v>=.25f&&v<=2.f?v:1.f;}();return s;}
 constexpr float plateDistance=2.f,plateWidth=3.f;   // metres: about 74 degrees wide (VHVR: 5.33 m at 3 m, 83 degrees)
 struct Slot {VkCommandPool pool{};VkCommandBuffer cmd{};VkFence fence{};VkSemaphore done{};};
@@ -428,12 +430,16 @@ inline void present(VkQueue queue,const VkPresentInfoKHR* p,VkPresentInfoKHR& re
             if(!state.formatTold){state.formatTold=true;note("screen_xr_off","\"reason\":\"the game's swapchain cannot be copied as it is\",\"format\":"+std::to_string(swap.format)+",\"usage\":"+std::to_string(swap.usage));}
             return;}
         if(!liveNativeXr){
-            if(presents.load()<30)return;                                          // the game's window first
+            if(presents.load()<firstPresent())return;                              // the game's window first
+            // The steps up to the session, each written at once (2026-11-09: a player's start stopped here, before the
+            // native-xr folder, without a trace of which step).
+            note("screen_xr_begin","\"present\":"+std::to_string(presents.load())+",\"thread\":"+std::to_string(GetCurrentThreadId()));
             // The session's binding wants the GPU's application-level handle (what the hooks hand over from the game).
             std::shared_ptr<diagnostic::XrPreflight> preflight;
             {std::lock_guard<std::mutex> lock(mutex);auto parent=instances.find(key(dd.instance));if(parent!=instances.end()&&!parent->second.fixture)preflight=parent->second.preflight;}
             if(!preflight){state.failed=true;note("screen_xr_failed","\"where\":\"session\",\"reason\":\"OpenXR was not prepared for this instance\"");return;}
             const auto gpu=preflight->runtimeGpu(dd.instance);
+            note("screen_xr_gpu","\"present\":"+std::to_string(presents.load()));
             const int made=createLiveNativeXr(dd.instance,gpu,dd.device,dd.fixtureBinding->queueFamily,eyeScale(),diagnostic::maximumNativeDiagnosticFrames);
             if(made||!liveNativeXr){state.failed=true;note("screen_xr_failed","\"where\":\"session\",\"result\":"+std::to_string(made));return;}
             liveNativeXr->log->event("screen_xr_session","\"eye_scale\":"+std::to_string(eyeScale())+",\"present\":"+std::to_string(presents.load())+",\"thread\":"+std::to_string(GetCurrentThreadId()));

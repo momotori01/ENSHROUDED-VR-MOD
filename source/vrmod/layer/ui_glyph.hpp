@@ -53,10 +53,14 @@ inline void memoryUnmapped(VkDeviceMemory memory) noexcept {if(!active())return;
 inline void copied(VkCommandBuffer cmd,VkBuffer src,VkImage dst,VkImageLayout layout,uint32_t count,const VkBufferImageCopy* regions) noexcept {
     if(!active()||own||!regions)return;
     try{
-        Candidate c;const uint8_t* base=nullptr;VkDeviceSize memoryOffset=0;
+        Candidate c;const uint8_t* base=nullptr;VkDeviceSize memoryOffset=0;VkDeviceMemory memory{};bool buffered=false;
         {std::lock_guard<std::mutex> lock(guard);auto f=candidates.find(dst);if(f==candidates.end())return;c=f->second;++f->second.uploads;}
+        // The buffer's memory under the layer's lock, then its mapping under the pictures' own - never one lock inside the
+        // other (2026-11-11: this took `mutex` then `guard`, while the known picture's note below takes `mutex` inside
+        // `guard`; two threads uploading pictures at once would stop each other and then every present).
         {std::lock_guard<std::mutex> lock(mutex);for(auto& d:bufferAudits){auto b=d.second.find(src);if(b!=d.second.end()){
-            std::lock_guard<std::mutex> g(guard);auto m=mapped.find(b->second.memory);if(m!=mapped.end()){base=m->second;memoryOffset=b->second.memoryOffset;}break;}}}
+            memory=b->second.memory;memoryOffset=b->second.memoryOffset;buffered=true;break;}}}
+        if(buffered){std::lock_guard<std::mutex> g(guard);auto m=mapped.find(memory);if(m!=mapped.end())base=m->second;}
         for(uint32_t r=0;r<count;++r){const auto& g=regions[r];
             const uint32_t w=g.imageExtent.width,h=g.imageExtent.height,row=g.bufferRowLength?g.bufferRowLength:w;
             uint64_t hash=0;std::string head;const uint8_t* p=nullptr;
@@ -64,10 +68,11 @@ inline void copied(VkCommandBuffer cmd,VkBuffer src,VkImage dst,VkImageLayout la
                 static const char* d="0123456789abcdef";for(size_t i=0;i<16;++i){head+=d[p[i]>>4];head+=d[p[i]&15];}}
             const auto pic=p&&g.imageOffset.x==0&&g.imageOffset.y==0&&w==c.width&&h==c.height?evr::glyph::findPicture(hash,w,h):evr::glyph::Pic::None;
             if(pic!=evr::glyph::Pic::None&&replace){
-                std::lock_guard<std::mutex> lock(guard);
-                Glyph* found=nullptr;for(auto& e:glyphs)if(e.image==dst)found=&e;
-                if(!found&&glyphs.size()<256){glyphs.emplace_back();found=&glyphs.back();}
-                if(found){*found={};found->image=dst;found->pic=pic;found->width=w;found->height=h;found->original.assign(p,p+size_t(w)*h*4);found->uploadCmd=cmd;}
+                {std::lock_guard<std::mutex> lock(guard);
+                 Glyph* found=nullptr;for(auto& e:glyphs)if(e.image==dst)found=&e;
+                 if(!found&&glyphs.size()<256){glyphs.emplace_back();found=&glyphs.back();}
+                 if(found){*found={};found->image=dst;found->pic=pic;found->width=w;found->height=h;found->original.assign(p,p+size_t(w)*h*4);found->uploadCmd=cmd;}}
+                // the note (it takes the layer's `mutex`) after `guard` is let go
                 if(knownLogs.fetch_add(1)<64)note("ui_glyph_known","\"image\":"+handleText(dst)+",\"picture\":"+std::to_string(unsigned(pic))+",\"width\":"+std::to_string(w)+",\"height\":"+std::to_string(h)+
                     ",\"concurrent\":"+(c.concurrent?"true":"false")+",\"families\":["+std::to_string(int(c.families[0]))+","+std::to_string(int(c.families[1]))+","+std::to_string(int(c.families[2]))+"]");
             }

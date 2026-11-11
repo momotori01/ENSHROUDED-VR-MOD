@@ -275,11 +275,23 @@ void runFlat(const wchar_t* folder){
     const DWORD result=run("EVR_OnlineFlat",directory);
     status(result==0?"Normal mode: ended":"Normal mode: the other players' VR bodies stopped (result "+std::to_string(result)+", see the log)");
 }
+// The level catch-up for guests (2026-11-10; [Online] LevelCatchUp, hooks/level_catch_up.hpp): the host's game raises a
+// player who joins three or more levels below the host to the host's level - 1. Its hooks are put in once and stay until
+// the game closes (they act only where the game runs the server, i.e. while hosting), whatever the play mode.
+void levelCatchUp(){
+    if(!g.values.levelCatchUp)return;
+    const DWORD result=run("EVR_LevelCatchUp",g.session);
+    if(result)say("the level catch-up for guests could not start (result "+std::to_string(result)+", see level-catch-up.jsonl)");
+}
 DWORD WINAPI flatWorker(void*){
-    pruneLogs();Sleep(5000);runFlat(L"flat");return 0;
+    pruneLogs();Sleep(5000);levelCatchUp();runFlat(L"flat");return 0;
+}
+// VR off and [Online] Sync=0, but the level catch-up on: only that.
+DWORD WINAPI levelWorker(void*){
+    pruneLogs();Sleep(5000);levelCatchUp();status("Off: VR is off and [Online] Sync=0; the level catch-up for guests is on");return 0;
 }
 DWORD WINAPI vrWorker(void*){
-    pruneLogs();Sleep(5000);
+    pruneLogs();Sleep(5000);levelCatchUp();
     bool eyesRan=false;std::string why;
     // The layer prepares OpenXR when the game makes its Vulkan device, in the first seconds. Without a runtime or a
     // headset the game goes on as it is; that is said now, and the other players' bodies are shown instead.
@@ -354,7 +366,7 @@ void begin(){
     if(!readFile(g.ini,g.iniText))say("settings: "+narrow(g.ini)+" is not there; the defaults are used (VR off)");
     g.values=evr::settings::forStart(evr::settings::read(g.iniText));   // with the alternate eyes, their own picture (2026-10-23)
     say("settings: VR="+std::to_string(int(g.values.vr))+" Sync="+std::to_string(int(g.values.online))+" RenderScale="+evr::settings::text(g.values.renderScale)+" Dlss="+g.values.dlss+
-        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+" SnapTurn="+std::to_string(int(g.values.snapTurn))+" SnapTurnAngle="+std::to_string(g.values.snapTurnAngle)+" UiAutoHide="+std::to_string(int(g.values.uiAutoHide))+" MenuRefresh="+std::to_string(int(g.values.menuRefresh))+" AlternateEyes="+std::to_string(int(g.values.alternateEyes))+" AfwPacing="+std::to_string(g.values.afwPacing)+" FitView="+evr::settings::fitViewNames()[size_t(g.values.fitView)]+(given?" (from EVR_AUTO_INI)":""));
+        " Sharpness="+evr::settings::text(g.values.sharpness)+" GiQuality="+g.values.giQuality+" LogKeep="+std::to_string(g.values.keepLogs)+" RealCrouch="+std::to_string(int(g.values.realCrouch))+" CrouchDrop="+std::to_string(g.values.crouchDrop)+" SwingSpeed="+std::to_string(g.values.swingSpeed)+" ArmSwim="+std::to_string(int(g.values.armSwim))+" SnapTurn="+std::to_string(int(g.values.snapTurn))+" SnapTurnAngle="+std::to_string(g.values.snapTurnAngle)+" UiAutoHide="+std::to_string(int(g.values.uiAutoHide))+" MenuRefresh="+std::to_string(int(g.values.menuRefresh))+" AlternateEyes="+std::to_string(int(g.values.alternateEyes))+" AfwPacing="+std::to_string(g.values.afwPacing)+" FitView="+evr::settings::fitViewNames()[size_t(g.values.fitView)]+" LevelCatchUp="+std::to_string(int(g.values.levelCatchUp))+(given?" (from EVR_AUTO_INI)":""));
     say("settings: Style="+evr::settings::styleNames()[size_t(g.values.style)]+" PitchLock="+std::to_string(int(g.values.padPitchLock))+" Tilt="+std::to_string(g.values.padTilt));
     if(!supportedBuild()){restoreRenderSettings();status("Off: this version of the game is not the one the mod was made for (the game was updated?); the game runs without the mod");return;}
     applyRecommendedGraphics();
@@ -374,8 +386,9 @@ void begin(){
         if(!whyNot.empty()){g.vr=false;say("VR is not started: "+whyNot);}
     }
     g.flat=!g.vr&&g.values.online&&hooks&&runtime;
+    const bool levelOnly=!g.vr&&!g.flat&&g.values.levelCatchUp&&hooks&&runtime;
     if(!g.vr)restoreRenderSettings();
-    if(!g.vr&&!g.flat){status(!whyNot.empty()?"Off: VR could not be started - "+whyNot:g.values.online?"Off: the hook library or the Visual C++ runtime is missing":"Off: VR is off and [Online] Sync=0");return;}
+    if(!g.vr&&!g.flat&&!levelOnly){status(!whyNot.empty()?"Off: VR could not be started - "+whyNot:g.values.online?"Off: the hook library or the Visual C++ runtime is missing":"Off: VR is off and [Online] Sync=0");return;}
     g.session=g.logs+L"\\"+wide(stamp(true));CreateDirectoryW(g.session.c_str(),nullptr);g.paths.log=g.session;
     say("this start's folder: logs\\"+narrow(g.session.substr(g.logs.size()+1)));
     g_note=whyNot;
@@ -410,7 +423,15 @@ void begin(){
     for(const auto& entry:evr::settings::entries(g.iniText,"Environment")){
         if(!start::overridable(entry.first)){say("[Environment] "+entry.first+" is not one of the mod's switches; left out");continue;}
         setEnvironment(wide(entry.first),start::expanded(wide(entry.second),g.paths));say("[Environment] "+entry.first+"="+entry.second);}
-    const HANDLE thread=CreateThread(nullptr,0,g.vr?vrWorker:flatWorker,nullptr,0,nullptr);
+    // Test only (2026-11-11, the motion vector bursts): [Environment] EVR_TEST_RENDERDOC=<folder of the portable RenderDoc>
+    // puts RenderDoc's Vulkan layer under the mod's (as launch_diagnostics.ps1 -RenderDoc), for GPU captures that the
+    // layer asks for (EVR_RENDERDOC_CAPTURE_*). Never in a player's settings file.
+    if(g.vr){wchar_t renderDoc[MAX_PATH]{};const DWORD n=GetEnvironmentVariableW(L"EVR_TEST_RENDERDOC",renderDoc,MAX_PATH);
+        if(n&&n<MAX_PATH&&GetFileAttributesW((std::wstring(renderDoc)+L"\\renderdoc.json").c_str())!=INVALID_FILE_ATTRIBUTES){
+            setEnvironment(L"VK_LAYER_PATH",std::wstring(renderDoc)+L";"+g.paths.bin);
+            setEnvironment(L"VK_INSTANCE_LAYERS",L"VK_LAYER_EVR_diagnostic;VK_LAYER_RENDERDOC_Capture");
+            setEnvironment(L"ENABLE_VULKAN_RENDERDOC_CAPTURE",L"1");say("test: RenderDoc's layer under the mod's");}}
+    const HANDLE thread=CreateThread(nullptr,0,g.vr?vrWorker:g.flat?flatWorker:levelWorker,nullptr,0,nullptr);
     if(thread)CloseHandle(thread);else status("Off: the loader's thread could not be started ("+lastError()+")");
 }
 } // namespace

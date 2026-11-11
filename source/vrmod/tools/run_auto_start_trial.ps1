@@ -10,6 +10,7 @@ param(
     [ValidateSet('Motion','PadFirst','PadThird')][string]$Style='Motion',   # MockVr: [Mode] Style (2026-10-25: the pad styles)
     [ValidateRange(0,90)][int]$PadTilt=0,            # [Pad] Tilt
     [ValidateRange(0,1)][int]$PadPitchLock=1,        # [Pad] PitchLock
+    [switch]$LevelCatchUp,                           # [Online] LevelCatchUp=1 (2026-11-10: the host's level catch-up for guests)
     [switch]$FakeBody,                               # Flat: the in-process self test - a made-up body with waving arms on the own character
     [switch]$NoRuntime,                              # MockVr: an OpenXR runtime that is not there (a PC without a headset's runtime)
     [string]$PlateDump=''                            # MockVr: "n,m" - the plate's image of the n-th screen frame and the m-th world frame with the plate, read back (EVR_SCREEN_XR_DUMP)
@@ -44,7 +45,7 @@ $out=Join-Path $mod ('output/auto-start-'+(Get-Date -Format 'yyyyMMdd-HHmmss'));
 $ini=$null
 if($Mode -ne 'Installed'){
     $number={param($v) $v.ToString([Globalization.CultureInfo]::InvariantCulture)}
-    $lines=@('; a test''s settings (tools/run_auto_start_trial.ps1)','[Mode]',"VR=$(if($Mode -eq 'MockVr'){1}else{0})","Style=$Style",'[Pad]',"PitchLock=$PadPitchLock","Tilt=$PadTilt",'[Online]',"Sync=$(if($Mode -eq 'Off'){0}else{1})",'[Picture]',"RenderScale=$(& $number $RenderScale)",'Dlss=Quality','Sharpness=0.2','[Log]','Keep=0','[Environment]')
+    $lines=@('; a test''s settings (tools/run_auto_start_trial.ps1)','[Mode]',"VR=$(if($Mode -eq 'MockVr'){1}else{0})","Style=$Style",'[Pad]',"PitchLock=$PadPitchLock","Tilt=$PadTilt",'[Online]',"Sync=$(if($Mode -eq 'Off'){0}else{1})","LevelCatchUp=$(if($LevelCatchUp){1}else{0})",'[Picture]',"RenderScale=$(& $number $RenderScale)",'Dlss=Quality','Sharpness=0.2','[Log]','Keep=0','[Environment]')
     if($Mode -eq 'MockVr'){
         & 'S:/stable/Python31011/python.exe' vrmod/tools/validate_mock_hands.py $Hands;if($LASTEXITCODE -ne 0){throw 'The hand script failed its preflight.'}
         Copy-Item -LiteralPath $Hands -Destination (Join-Path $out 'mock-hands.csv');Copy-Item -LiteralPath $Pose -Destination (Join-Path $out 'mock-pose.csv')
@@ -65,6 +66,10 @@ try{
     $env:SteamAppId='1203620';$env:SteamGameId='1203620';Remove-Item Env:EVR_LAYER_OUTPUT -ErrorAction SilentlyContinue
     if($ini){$env:EVR_AUTO_INI=$ini}else{Remove-Item Env:EVR_AUTO_INI -ErrorAction SilentlyContinue}
     $arguments=@{};if(!$Menu){$arguments.ArgumentList='--play'}
+    # Test only (2026-11-11): EVR_TEST_GAME_ARGS in the caller's environment adds the game's own command line options
+    # (for example --disable-async-compute).
+    $testArgs=[Environment]::GetEnvironmentVariable('EVR_TEST_GAME_ARGS','Process')
+    if($testArgs){$arguments.ArgumentList=((@($arguments.ArgumentList)+@($testArgs)) | Where-Object { $_ }) -join ' ';"game arguments: $($arguments.ArgumentList)"}
     $process=Start-Process -FilePath (Join-Path $game 'enshrouded.exe') -WorkingDirectory $game -WindowStyle Normal -PassThru @arguments
 }finally{foreach($key in $previous.Keys){[Environment]::SetEnvironmentVariable($key,$previous[$key],'Process')}}
 @{pid=$process.Id;output=$out;mode="auto_start_$Mode";creation_filetime=$process.StartTime.ToUniversalTime().ToFileTimeUtc().ToString();started=(Get-Date).ToString('o')} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $out 'launch.json')

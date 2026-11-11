@@ -216,6 +216,9 @@ void giReprojectModuleDestroyed(VkShaderModule module) noexcept;void giReproject
 void gpuTimingBegin(VkCommandBuffer cmd) noexcept;void gpuTimingEnd(VkCommandBuffer cmd) noexcept;void gpuTimingNote(VkCommandBuffer cmd,uint32_t kind,uint32_t width=0,uint32_t height=0) noexcept;void gpuTimingRenderBegin(VkCommandBuffer cmd,const VkRenderingInfo* info) noexcept;void gpuTimingRenderEnd(VkCommandBuffer cmd) noexcept;void gpuTimingBind(VkCommandBuffer cmd,VkPipelineBindPoint point,VkPipeline pipeline) noexcept;void gpuTimingDispatch(VkCommandBuffer cmd,uint32_t x,uint32_t y,uint32_t z) noexcept;void gpuTimingSets(VkCommandBuffer cmd,VkPipelineBindPoint point,uint32_t first,uint32_t count,const VkDescriptorSet* sets,uint32_t dynamicCount,const uint32_t* offsets) noexcept;void gpuTimingDescriptorWrites(uint32_t count,const VkWriteDescriptorSet* writes) noexcept;
 void giReprojectModule(VkShaderModule module,const VkShaderModuleCreateInfo* info) noexcept;void giReprojectPipeline(VkShaderModule module,VkPipeline pipeline) noexcept;void giReprojectWrites(uint32_t count,const VkWriteDescriptorSet* writes,uint32_t copies,const VkCopyDescriptorSet* copy) noexcept;void giReprojectReset(VkCommandBuffer c) noexcept;void giReprojectBind(VkCommandBuffer c,VkPipelineBindPoint point,VkPipeline pipeline) noexcept;void giReprojectSets(VkCommandBuffer c,VkPipelineBindPoint point,VkPipelineLayout layout,uint32_t first,uint32_t count,const VkDescriptorSet* sets,uint32_t dynamicCount,const uint32_t* offsets) noexcept;void giReprojectForget(VkDevice device,VkImage image) noexcept;void giReprojectDispatch(VkCommandBuffer c,uint32_t gx,uint32_t gy,uint32_t gz) noexcept;void giReprojectAfterDispatch(VkCommandBuffer c,uint32_t gx,uint32_t gy,uint32_t gz) noexcept;void giReprojectDestroy(VkDevice device) noexcept;
 bool atmosphereShareCreate(const VkImageCreateInfo& in,VkImageCreateInfo& out) noexcept;void atmosphereShareBarrier(VkCommandBuffer c,uint32_t count,const VkImageMemoryBarrier* images) noexcept;void atmosphereShareBarrier2(VkCommandBuffer c,const VkDependencyInfo* info) noexcept;void atmosphereShareForget(VkImage image) noexcept;bool shadowShareCreate(const VkImageCreateInfo& in,VkImageCreateInfo& out) noexcept;void shadowShareBarrier(VkCommandBuffer c,uint32_t count,const VkImageMemoryBarrier* images) noexcept;void shadowShareBarrier2(VkCommandBuffer c,const VkDependencyInfo* info) noexcept;void shadowShareForget(VkImage image) noexcept;
+#include "skip_compute_test.hpp"
+void mrpShader(VkShaderModule m,size_t bytes) noexcept;void mrpPipeline(VkShaderModule m,VkPipeline p) noexcept;void mrpWrites(uint32_t count,const VkWriteDescriptorSet* w,uint32_t copies,const VkCopyDescriptorSet* c) noexcept;void mrpReset(VkCommandBuffer c) noexcept;void mrpBind(VkCommandBuffer c,VkPipelineBindPoint point,VkPipeline p) noexcept;void mrpSets(VkCommandBuffer c,VkPipelineBindPoint point,uint32_t first,uint32_t count,const VkDescriptorSet* s,uint32_t dynamicCount,const uint32_t* offsets) noexcept;void mrpDispatch(VkCommandBuffer c,uint32_t gx,uint32_t gy) noexcept;void mrpSubmitted(VkCommandBuffer c) noexcept;
+bool mrpFlagsFor(VkImageView motionView,VkImage* image,VkImageLayout* layout) noexcept;
 #include "render_trace.hpp"
 #include "ui_glyph.hpp"
 #include "image_state.hpp"
@@ -229,6 +232,7 @@ void sweepDepthClearAttachments(VkCommandBuffer cmd,uint32_t count,const VkClear
 #include "gpu_timing.hpp"
 #include "gi_reproject.hpp"
 #include "eye_motion_fix.hpp"
+#include "motion_reproj_probe.hpp"
 #include "shadow_share.hpp"
 #include "atmosphere_share.hpp"
 void desktopMirrorSource(VkDevice device,VkImage right) noexcept;
@@ -237,6 +241,7 @@ void desktopMirrorOwnedSource(VkDevice device,VkImage image,uint32_t width,uint3
 #include "desktop_mirror.hpp"
 #include "mod_update_check.hpp"
 #include "screen_xr.hpp"
+#include "hang_watch.hpp"
 extern "C"
     __declspec(dllexport) PFN_vkVoidFunction VKAPI_CALL evrGetInstanceProcAddr(VkInstance, const char *);
 extern "C" __declspec(dllexport) PFN_vkVoidFunction VKAPI_CALL evrGetDeviceProcAddr(VkDevice, const char *);
@@ -814,6 +819,7 @@ VKAPI_ATTR VkResult VKAPI_CALL evrQueuePresentKHR(VkQueue q, const VkPresentInfo
     presentRetirement::pump(0);
     uiDraw::presented(q,p,r);
     auto f = ++presents;
+    hangWatch::start();hangWatch::testStop(f);   // the stop watch (hang_watch.hpp)
     pollTraceRequest(f);
     auto d = draws.exchange(0), i = indirects.exchange(0), c = dispatches.exchange(0);
     if (f <= 10 || f % 120 == 0)
@@ -921,6 +927,8 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateShaderModule(VkDevice d, const VkShaderM
     }
     if(!replaced)r=fn(d,info,a,module);
     if(r==VK_SUCCESS){uiCapture::shaderCreated(d,info,*module);pipelineCensus::shaderCreated(info,*module);}
+    if(r==VK_SUCCESS)skipCompute::shaderCreated(*module,info->codeSize);
+    if(r==VK_SUCCESS)mrpShader(*module,info->codeSize);
     uint64_t h = 14695981039346656037ull;
     for (size_t i = 0; i < info->codeSize / 4; i++)
     {
@@ -994,12 +1002,16 @@ VKAPI_ATTR void VKAPI_CALL evrCmdDrawIndexedIndirect(VkCommandBuffer c, VkBuffer
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdDispatch(VkCommandBuffer c, uint32_t x, uint32_t y, uint32_t z)
 {
+    if(skipCompute::skip(c))return;
+    mrpDispatch(c,x,y);
     dispatches++;gpuTimingDispatch(c,x,y,z);cmdStack("dispatch","\"d\":0");giReprojectDispatch(c,x,y,z);
     deviceFn<PFN_vkCmdDispatch>(c, "vkCmdDispatch")(c, x, y, z);
     giReprojectAfterDispatch(c,x,y,z);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdDispatchIndirect(VkCommandBuffer c, VkBuffer b, VkDeviceSize o)
 {
+    if(skipCompute::skip(c))return;
+    mrpDispatch(c,0,0);
     dispatches++;gpuTimingNote(c,1);cmdStack("dispatch_indirect","\"d\":0");
     deviceFn<PFN_vkCmdDispatchIndirect>(c, "vkCmdDispatchIndirect")(c, b, o);
     giReprojectAfterDispatch(c,0,0,0);

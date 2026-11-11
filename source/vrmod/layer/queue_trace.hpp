@@ -93,6 +93,7 @@ VKAPI_ATTR VkResult VKAPI_CALL evrQueueSubmit(VkQueue queue, uint32_t count, con
 {
     exitProgress::Scope exitTrace("submit",reinterpret_cast<uint64_t>(queue));
     uiGlyph::beforeSubmit(queue);
+    for(uint32_t b=0;b<count&&submits;++b)for(uint32_t k=0;k<submits[b].commandBufferCount;++k)mrpSubmitted(submits[b].pCommandBuffers[k]);
     auto fn = deviceFn<PFN_vkQueueSubmit>(queue, "vkQueueSubmit");
     const bool record = traceQueueEnabled();
     std::string metadata;
@@ -141,6 +142,7 @@ VKAPI_ATTR VkResult VKAPI_CALL evrQueueSubmit(VkQueue queue, uint32_t count, con
     const auto started = std::chrono::steady_clock::now();
     const auto result = fn(queue, count, submits, fence);
     exitTrace.end(result);
+    testWaitAfterSubmit(queue);
     for(uint32_t batch=0;batch<count;++batch)
         for(uint32_t command=0;command<submits[batch].commandBufferCount;++command)
             nativeCommandSubmitted(queue,submits[batch].pCommandBuffers[command],result);

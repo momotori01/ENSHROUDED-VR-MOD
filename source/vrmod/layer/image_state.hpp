@@ -43,7 +43,7 @@ VKAPI_ATTR VkResult VKAPI_CALL evrAllocateCommandBuffers(VkDevice device,const V
 VKAPI_ATTR VkResult VKAPI_CALL evrBeginCommandBuffer(VkCommandBuffer cmd,const VkCommandBufferBeginInfo* info)
 {
     auto result=deviceFn<PFN_vkBeginCommandBuffer>(cmd,"vkBeginCommandBuffer")(cmd,info);
-    if(result==VK_SUCCESS){{std::lock_guard<std::mutex> lock(mutex);resetNativeCommandLocked(cmd);}gpuTimingBegin(cmd);giReprojectReset(cmd);}
+    if(result==VK_SUCCESS){{std::lock_guard<std::mutex> lock(mutex);resetNativeCommandLocked(cmd);}gpuTimingBegin(cmd);giReprojectReset(cmd);mrpReset(cmd);}
     return result;
 }
 VKAPI_ATTR VkResult VKAPI_CALL evrEndCommandBuffer(VkCommandBuffer cmd)
@@ -54,7 +54,7 @@ VKAPI_ATTR VkResult VKAPI_CALL evrEndCommandBuffer(VkCommandBuffer cmd)
 VKAPI_ATTR VkResult VKAPI_CALL evrResetCommandBuffer(VkCommandBuffer cmd,VkCommandBufferResetFlags flags)
 {
     auto result=deviceFn<PFN_vkResetCommandBuffer>(cmd,"vkResetCommandBuffer")(cmd,flags);
-    if(result==VK_SUCCESS){{std::lock_guard<std::mutex> lock(mutex);resetNativeCommandLocked(cmd);}giReprojectReset(cmd);}
+    if(result==VK_SUCCESS){{std::lock_guard<std::mutex> lock(mutex);resetNativeCommandLocked(cmd);}giReprojectReset(cmd);mrpReset(cmd);}
     return result;
 }
 void resetNativePoolLocked(VkDevice device,VkCommandPool pool,bool erase)
@@ -149,7 +149,14 @@ extern "C" __declspec(dllexport) int evrGetNativeImageEvidence(VkDevice device,V
 void nativeSubmit2Images(VkQueue queue,uint32_t count,const VkSubmitInfo2* submits,VkResult result) noexcept
 {for(uint32_t b=0;b<count;++b)for(uint32_t c=0;c<submits[b].commandBufferInfoCount;++c)
     nativeCommandSubmitted(queue,submits[b].pCommandBufferInfos[c].commandBuffer,result);}
+// Test only (2026-11-11, the motion vector bursts that come with DLSS but not in a RenderDoc capture): EVR_TEST_WAIT_AFTER_SUBMIT=1
+// waits for each queue after every submit, so the CPU never runs ahead of the GPU (slow; a check for a CPU/GPU race).
+inline void testWaitAfterSubmit(VkQueue queue)
+{
+    static const bool on=[]{const char* v=std::getenv("EVR_TEST_WAIT_AFTER_SUBMIT");return v&&v[0]=='1';}();
+    if(on)deviceFn<PFN_vkQueueWaitIdle>(queue,"vkQueueWaitIdle")(queue);
+}
 VKAPI_ATTR VkResult VKAPI_CALL evrQueueSubmit2(VkQueue queue,uint32_t count,const VkSubmitInfo2* submits,VkFence fence)
-{exitProgress::Scope exitTrace("QueueSubmit2",reinterpret_cast<uint64_t>(queue));uiGlyph::beforeSubmit(queue);auto result=deviceFn<PFN_vkQueueSubmit2>(queue,"vkQueueSubmit2")(queue,count,submits,fence);exitTrace.end(result);nativeSubmit2Images(queue,count,submits,result);return result;}
+{for(uint32_t b=0;b<count&&submits;++b)for(uint32_t k=0;k<submits[b].commandBufferInfoCount;++k)mrpSubmitted(submits[b].pCommandBufferInfos[k].commandBuffer);exitProgress::Scope exitTrace("QueueSubmit2",reinterpret_cast<uint64_t>(queue));uiGlyph::beforeSubmit(queue);auto result=deviceFn<PFN_vkQueueSubmit2>(queue,"vkQueueSubmit2")(queue,count,submits,fence);exitTrace.end(result);testWaitAfterSubmit(queue);nativeSubmit2Images(queue,count,submits,result);return result;}
 VKAPI_ATTR VkResult VKAPI_CALL evrQueueSubmit2KHR(VkQueue queue,uint32_t count,const VkSubmitInfo2* submits,VkFence fence)
-{exitProgress::Scope exitTrace("QueueSubmit2KHR",reinterpret_cast<uint64_t>(queue));uiGlyph::beforeSubmit(queue);auto result=deviceFn<PFN_vkQueueSubmit2KHR>(queue,"vkQueueSubmit2KHR")(queue,count,submits,fence);exitTrace.end(result);nativeSubmit2Images(queue,count,submits,result);return result;}
+{for(uint32_t b=0;b<count&&submits;++b)for(uint32_t k=0;k<submits[b].commandBufferInfoCount;++k)mrpSubmitted(submits[b].pCommandBufferInfos[k].commandBuffer);exitProgress::Scope exitTrace("QueueSubmit2KHR",reinterpret_cast<uint64_t>(queue));uiGlyph::beforeSubmit(queue);auto result=deviceFn<PFN_vkQueueSubmit2KHR>(queue,"vkQueueSubmit2KHR")(queue,count,submits,fence);exitTrace.end(result);testWaitAfterSubmit(queue);nativeSubmit2Images(queue,count,submits,result);return result;}

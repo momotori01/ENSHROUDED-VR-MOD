@@ -71,6 +71,11 @@ PLAYING ONLINE
 - Players without the mod can play with you as usual. They do not see VR movements.
 - The mod talks only to other copies of the mod (Steam friends in your session and
   the members of your lobby), directly through Steam.
+- Level catch-up for guests - EXPERIMENTAL, it may not work yet (off unless you switch
+  it on in "Enshrouded VR setting.exe"):
+  when you host, a player who joins your world three or more levels below you is raised
+  to your level - 1, about 15 seconds after joining. Only the host needs the mod and the
+  setting; VR on or off. It does not work on a dedicated server.
 
 REQUIREMENTS
 - The game version this package was made for (see EnshroudedVR\version.txt). After a

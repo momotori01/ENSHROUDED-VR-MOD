@@ -57,15 +57,24 @@ inline bool invert(Matrix m,Matrix& out){
     }
     out=r;return true;
 }
+// The main mode's check (2026-11-11; a player: "as soon as you move the distance turns low-res, stop and it is sharp at once";
+// no DLSS reset while moving, Mock 20261111-092734): EVR_MOTION_CHECK_BOTH=1 runs the same pass for both eyes drawn every
+// frame, the eye told by its DLSS feature handle (eyeFeatures, view_resource_probe.cpp), with the eye's camera of the last
+// frame - only to compare: the evaluation keeps the game's own motion vectors. With EVR_AFW_MOTION_CHECK=N the layer logs
+// how far the game's motion is from the camera's (afw_motion_check) - near 0 on still things when the game's camera motion
+// is right; a residual while turning or walking would be motion DLSS takes wrongly.
+inline const bool checkBoth=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_MOTION_CHECK_BOTH",v,sizeof v);return n==1&&v[0]=='1';}();
+inline std::array<std::atomic<uintptr_t>,2> eyeFeatures{};inline std::atomic<unsigned> bothChecked{0};
 // Returns the evaluation's own motion vector resource pointer when it was swapped for the layer's (0: left as it was).
-inline uintptr_t fixMotion(void* command,uintptr_t p){
+// checkEye: the main mode's check of that eye (nothing swapped).
+inline uintptr_t fixMotion(void* command,uintptr_t p,int checkEye=-1){
     const auto out=read<uintptr_t>(p+8),motion=read<uintptr_t>(p+0x20),depth=read<uintptr_t>(p+0x18);
     if(!out||!motion||!depth)return 0;
-    const uint32_t eye=liveFrame.eyeMask==1?0u:1u;
+    const uint32_t eye=checkEye>=0?uint32_t(checkEye):liveFrame.eyeMask==1?0u:1u;
     if(read<uint32_t>(out+0x28)!=eyeWidth(eye)||read<uint32_t>(out+0x2c)!=eyeHeight(eye))return 0;
     const auto& before=alternateEyes::drawn[eye];const auto& now=alternateEyes::current.eyes[eye];
     if(!before.valid||before.session!=liveFrame.sessionGeneration||alternateEyes::currentFrame!=liveFrame.frame||!before.frame||liveFrame.frame<=before.frame)return 0;
-    const uint64_t frames=liveFrame.frame-before.frame;if(frames<2||frames>4)return 0;
+    const uint64_t frames=liveFrame.frame-before.frame;if(checkEye>=0?frames!=1:(frames<2||frames>4))return 0;
     const auto projection=rowsOf(game::projection(now.fov,alternateEyes::nearZ,alternateEyes::farZ));
     const Matrix nowClip=multiply(rowsOf(game::cameraRelativeView(now.position,now.orientation,now.position)),projection);
     const Matrix beforeClip=multiply(rowsOf(game::cameraRelativeView(before.position,before.orientation,now.position)),projection);
@@ -82,6 +91,15 @@ inline uintptr_t fixMotion(void* command,uintptr_t p){
     const int result=fix(reinterpret_cast<VkCommandBuffer>(command),eye,read<VkImageView>(motion),read<VkImageView>(depth),read<uint32_t>(motion+0x28),read<uint32_t>(motion+0x2c),
         r.data(),float(frames),ySign,layoutIn,&image,&view);
     if(result||!image||!view){++motionFailures;return 0;}
+    static const std::pair<uint64_t,uint64_t> matrixRange=[]{char v[48]{};const auto n=GetEnvironmentVariableA("EVR_LOG_MOTION_MATRICES",v,sizeof v);
+        uint64_t a=0,b=0;if(n&&n<sizeof v&&std::sscanf(v,"%llu-%llu",&a,&b)==2&&a<=b)return std::pair<uint64_t,uint64_t>{a,b};return std::pair<uint64_t,uint64_t>{0,0};}();
+    if(checkEye>=0&&matrixRange.second&&liveFrame.frame>=matrixRange.first&&liveFrame.frame<=matrixRange.second){
+        // the check's own reprojection (EVR_LOG_MOTION_MATRICES, 2026-11-11): against the game's (motion_matrices) - is the check right in a burst?
+        std::ostringstream o;o<<std::setprecision(9)<<"\"frame\":"<<liveFrame.frame<<",\"eye\":"<<eye<<",\"before_frame\":"<<before.frame<<",\"motion_image\":"<<hex(read<uintptr_t>(motion+8))<<",\"depth_image\":"<<hex(read<uintptr_t>(depth+8))<<",\"r\":[";
+        for(int i=0;i<16;i++)o<<(i?",":"")<<reproject[i];o<<"]";logFile->event("motion_check_matrix",o.str());}
+    if(checkEye>=0){const auto n=++bothChecked;
+        if(n<=3||n%3600==0)logFile->event("motion_check_both","\"count\":"+std::to_string(n)+",\"eye\":"+std::to_string(eye)+",\"frame\":"+std::to_string(liveFrame.frame));
+        return 0;}   // compared only: the game's motion vectors stay
     std::memcpy(motionResource.data(),reinterpret_cast<const void*>(motion),motionResource.size());
     std::memcpy(motionResource.data(),&view,sizeof view);std::memcpy(motionResource.data()+8,&image,sizeof image);
     const uint32_t format=VK_FORMAT_R16G16_SFLOAT;std::memcpy(motionResource.data()+0x24,&format,sizeof format);
@@ -166,6 +184,9 @@ __declspec(noinline) int __fastcall evaluate(void* command,void* handle,void* pa
     // evaluation reads the layer's corrected copy.
     uintptr_t savedMotion=0;
     if(motionFix&&from==caller&&(liveFrame.eyeMask==1||liveFrame.eyeMask==2))try{savedMotion=fixMotion(command,reinterpret_cast<uintptr_t>(eval));}catch(...){savedMotion=0;++motionFailures;}
+    if(checkBoth&&from==caller&&liveFrame.eyeMask==3&&handle)try{
+        const auto h=reinterpret_cast<uintptr_t>(handle);const int eye=h==eyeFeatures[0].load()?0:h==eyeFeatures[1].load()?1:-1;
+        if(eye>=0)fixMotion(command,reinterpret_cast<uintptr_t>(eval),eye);}catch(...){++motionFailures;}
     int32_t savedReset=0;bool resetSet=false;
     if(resetRightEvery>0&&from==caller&&handle&&reinterpret_cast<uintptr_t>(handle)==rightFeature.load()&&liveFrame.eyeMask==3)try{
         const auto now=GetTickCount64();

@@ -72,6 +72,8 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateComputePipelines(VkDevice d, VkPipelineC
         if (pipelines[i])
         {
             giReprojectPipeline(info[i].stage.module, pipelines[i]);
+            skipCompute::pipelineCreated(info[i].stage.module, pipelines[i]);
+            mrpPipeline(info[i].stage.module, pipelines[i]);
             note("compute_pipeline", "\"pipeline\":" + handleText(pipelines[i]) +
                                          ",\"layout\":" + handleText(info[i].layout) +
                                          ",\"module\":" + handleText(info[i].stage.module));
@@ -85,7 +87,7 @@ VKAPI_ATTR void VKAPI_CALL evrCmdBindPipeline(VkCommandBuffer c, VkPipelineBindP
         note("trace_pipeline", "\"cmd\":" + handleText(c) + ",\"bind_point\":" + std::to_string(point) +
                                    ",\"pipeline\":" + handleText(pipeline) +
                                    ",\"game_rva_stack\":" + stack());
-    uiDraw::bind(c,point,pipeline);gpuTimingBind(c,point,pipeline);meshDrawGuard::bind(c,point,pipeline);giReprojectBind(c,point,pipeline);pipelineCensus::bind(c,point,pipeline);
+    skipCompute::bind(c,point,pipeline);mrpBind(c,point,pipeline);    uiDraw::bind(c,point,pipeline);gpuTimingBind(c,point,pipeline);meshDrawGuard::bind(c,point,pipeline);giReprojectBind(c,point,pipeline);pipelineCensus::bind(c,point,pipeline);
     deviceFn<PFN_vkCmdBindPipeline>(c, "vkCmdBindPipeline")(c, point, pipeline);
 }
 VKAPI_ATTR void VKAPI_CALL evrCmdBindDescriptorSets(VkCommandBuffer c, VkPipelineBindPoint point,
@@ -116,6 +118,7 @@ VKAPI_ATTR void VKAPI_CALL evrCmdBindDescriptorSets(VkCommandBuffer c, VkPipelin
     }
     gpuTimingSets(c, point, first, count, sets, dynamicCount, offsets);
     giReprojectSets(c, point, layout, first, count, sets, dynamicCount, offsets);
+    mrpSets(c, point, first, count, sets, dynamicCount, offsets);
     deviceFn<PFN_vkCmdBindDescriptorSets>(c, "vkCmdBindDescriptorSets")(c, point, layout, first, count, sets,
                                                                         dynamicCount, offsets);
 }
@@ -146,5 +149,6 @@ VKAPI_ATTR void VKAPI_CALL evrUpdateDescriptorSets(VkDevice d, uint32_t count,
     }
     gpuTimingDescriptorWrites(count, writes);
     giReprojectWrites(count, writes, copies, copy);
+    mrpWrites(count, writes, copies, copy);
     deviceFn<PFN_vkUpdateDescriptorSets>(d, "vkUpdateDescriptorSets")(d, count, writes, copies, copy);
 }

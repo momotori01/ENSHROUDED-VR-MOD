@@ -673,6 +673,9 @@ namespace inputActor {inline const bool clientTicksSet=[]{clientWorldTicks=[](ui
 #include "pad_settings.hpp"
 #include <tlhelp32.h>
 #include "data_watch.hpp"
+#include "prev_view_scan.hpp"
+#include "rd_trigger.hpp"
+#include "motion_matrix_watch.hpp"
 // VR status tint (2026-10-06): colour/coverage handed to the layer once per eye pair (evrSetEdgeTint).
 namespace edgeTintBridge {
 using SetFn=int(*)(float,float,float,float,float);
@@ -1530,6 +1533,8 @@ void submitLiveFrame(PairResources& pair){
         }
         // The right eye's DLSS feature handle (dlssEval::resetRightEvery, diagnostic).
         if(dlssEval::resetRightEvery>0)try{const auto ctx=read<uintptr_t>(pair.created[1]+layout::viewUpscaler+0x10);dlssEval::rightFeature=ctx?read<uintptr_t>(ctx+0xe8):0;}catch(...){dlssEval::rightFeature=0;}
+        // Both eyes' DLSS feature handles (dlssEval::checkBoth, the main mode's motion check, diagnostic).
+        if(dlssEval::checkBoth)for(int eye=0;eye<2;++eye)try{const auto ctx=read<uintptr_t>(pair.created[eye]+layout::viewUpscaler+0x10);dlssEval::eyeFeatures[eye]=ctx?read<uintptr_t>(ctx+0xe8):0;}catch(...){dlssEval::eyeFeatures[eye]=0;}
         if(pair.pairedFrames==10||pair.pairedFrames==300){
             // Read-only upscaler ownership snapshot (2026-10-05 DLSS investigation): View+9b0 kind
             // (1 FSR3, 2 DLSS, 3 XeSS), +9b8 FSR object, +9c0 DLSS context, +9c8 XeSS context.
@@ -1940,7 +1945,21 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
             put<int64_t>(pair.parameters[eye],0x38+n*8,originalPosition+int64_t(std::llround((translation[n]+distance*axis[n])*4294967296.0)));
         }
         if(runtimeEyes()){put<WorldPositionQ32>(pair.parameters[eye],0x38,runtimeCameras.eyes[eye].position);
-            put<Quat>(pair.parameters[eye],0x50,runtimeCameras.eyes[eye].orientation);}
+            auto q=runtimeCameras.eyes[eye].orientation;
+            // Test (2026-11-11, the stick-turn motion vector bursts near a 180 degree heading): EVR_TEST_EYE_QUAT_SIGN=
+            // cont (same hemisphere as this eye's last one), neg (always the other sign), game (same hemisphere as the
+            // game's own camera at +0x50), log (unchanged). Logs the first 3000 eye frames as eye_quat_sign.
+            {static const int mode=[]{char v[16]{};GetEnvironmentVariableA("EVR_TEST_EYE_QUAT_SIGN",v,sizeof v);const std::string s=v;
+                return s=="cont"?1:s=="neg"?2:s=="game"?3:s=="log"?4:0;}();
+             static Quat last[2]{};static bool have[2]{};static unsigned logs=0;
+             if(mode){const auto game=read<Quat>(input+0x50);const auto dot=[](const Quat& a,const Quat& b){return a.x*b.x+a.y*b.y+a.z*b.z+a.w*b.w;};
+                bool flip=false;
+                if(mode==1)flip=have[eye]&&dot(q,last[eye])<0;else if(mode==2)flip=true;else if(mode==3)flip=dot(q,game)<0;
+                if(flip)q={-q.x,-q.y,-q.z,-q.w};
+                last[eye]=q;have[eye]=true;
+                if(logs<3000){++logs;std::ostringstream f;f<<std::setprecision(5)<<"\"frame\":"<<liveFrame.frame<<",\"eye\":"<<eye<<",\"flip\":"<<(flip?"true":"false")
+                    <<",\"q\":["<<q.x<<','<<q.y<<','<<q.z<<','<<q.w<<"],\"game\":["<<game.x<<','<<game.y<<','<<game.z<<','<<game.w<<']';logFile->event("eye_quat_sign",f.str());}}}
+            put<Quat>(pair.parameters[eye],0x50,q);}
         if(matchCameraFov){
             const auto &fov=runtimeCameras.eyes[eye].fov;
             const float envelope=2*std::max(std::abs(fov.angleUp),std::abs(fov.angleDown));
@@ -2128,6 +2147,18 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
              {static std::atomic<uint64_t> lends{0};if(streamingLend->lent){const auto n=++lends;if(n<=3||n%1800==0)logFile->event("eye_streaming_lent","\"serial\":"+std::to_string(pair.serial)+
                  ",\"lends\":"+std::to_string(n)+",\"own\":"+hex(streamingLend->own)+",\"left\":"+hex(read<uintptr_t>(pair.created[1]+layout::viewStreaming)));}}
              fieldLends.emplace(eye==1?pair.created[1]:0,pair.created[0],eye==1&&leftShared);
+             // Diagnostic (2026-11-11, the stick-turn motion bursts): EVR_LOG_HISTORY_VALID=<first>-<last> (XR frames) logs the
+             // View's history flag (+0x1110) just before the eye's update - 0 makes the game draw the motion with no camera
+             // turn (its previous camera taken as this one: 0x12d7fb).
+             {static const std::pair<uint64_t,uint64_t> range=[]{char v[48]{};const auto n=GetEnvironmentVariableA("EVR_LOG_HISTORY_VALID",v,sizeof v);
+                  uint64_t a=0,b=0;if(n&&n<sizeof v&&std::sscanf(v,"%llu-%llu",&a,&b)==2&&a<=b)return std::pair<uint64_t,uint64_t>{a,b};return std::pair<uint64_t,uint64_t>{0,0};}();
+              if(range.second&&liveFrame.frame>=range.first&&liveFrame.frame<=range.second)
+                  logFile->event("eye_history_before","\"frame\":"+std::to_string(liveFrame.frame)+",\"eye\":"+std::to_string(eye)+",\"valid\":"+
+                      std::to_string(read<uint8_t>(pair.created[eye]+layout::viewHistoryValid))+",\"serial\":"+std::to_string(read<uint64_t>(pair.created[eye]+layout::viewSerial))+
+                      // the previous camera the game's motion will start from (View+0xfc0: Q32 position, quaternion) and the camera given now (+0x38, +0x50)
+                      ",\"view\":"+hex(pair.created[eye])+",\"prev_q32\":["+std::to_string(read<int64_t>(pair.created[eye]+0xfc0))+","+std::to_string(read<int64_t>(pair.created[eye]+0xfc8))+","+std::to_string(read<int64_t>(pair.created[eye]+0xfd0))+"]"+
+                      ",\"now_q32\":["+std::to_string(read<int64_t>(reinterpret_cast<uintptr_t>(pair.parameters[eye].data())+0x38))+","+std::to_string(read<int64_t>(reinterpret_cast<uintptr_t>(pair.parameters[eye].data())+0x40))+","+std::to_string(read<int64_t>(reinterpret_cast<uintptr_t>(pair.parameters[eye].data())+0x48))+"]"+
+                      ",\"prev_q\":["+std::to_string(read<float>(pair.created[eye]+0xfd8))+","+std::to_string(read<float>(pair.created[eye]+0xfdc))+","+std::to_string(read<float>(pair.created[eye]+0xfe0))+","+std::to_string(read<float>(pair.created[eye]+0xfe4))+"]");}
              original(pair.results[eye].data(),context,reinterpret_cast<void*>(pair.created[eye]),pair.parameters[eye].data(),pair.targetArguments[eye].data());}}
         if(stableFrustumBridge::observeEyes&&(eyeFrustum.failed||(projectionCalls==1&&(eyeFrustum.calls!=2||eyeFrustum.mask!=3))))
             throw std::runtime_error("eye frustum diagnostic boundary differs");
@@ -2237,6 +2268,22 @@ void recordPair(PairResources &pair,void* context,void* parameters,void* target)
         }
         transforms<<",\"camera_q32\":[";for(size_t n=0;n<3;n++){if(n)transforms<<',';transforms<<read<int64_t>(reinterpret_cast<uintptr_t>(pair.parameters[eye].data())+0x38+n*8);}transforms<<']';
         logFile->event("calibration_eye_transform",transforms.str());
+        if(eye==0){static const bool scanInstalled=(prevViewScan::install(),true);(void)scanInstalled;prevViewScan::after(pair.created[0],pair.parameters[0].data(),liveFrame.frame);rdTrigger::tick(liveFrame.frame,calibrationDirectory,runtimeCameras.eyes[0].orientation);}
+        // Diagnostic (2026-11-11, the eyes' motion vectors off by about half a frame's turn in stretches of ~40 frames while
+        // the stick turns - dlss_eval_observer.hpp checkBoth): EVR_DUMP_EYE_VIEWS=<first>-<last> (XR frames) writes each eye's
+        // View after its update and the camera arguments the mod gave it to <probe folder>/eye-views.bin, to find where the
+        // game keeps the previous camera its motion vectors start from. Record: frame u64, serial u64, eye u32, view bytes u32,
+        // parameter bytes u32, the View, the arguments.
+        {static const std::pair<uint64_t,uint64_t> range=[]{char v[48]{};const auto n=GetEnvironmentVariableA("EVR_DUMP_EYE_VIEWS",v,sizeof v);
+             uint64_t a=0,b=0;if(n&&n<sizeof v&&std::sscanf(v,"%llu-%llu",&a,&b)==2&&a<=b&&b-a<=4000)return std::pair<uint64_t,uint64_t>{a,b};return std::pair<uint64_t,uint64_t>{0,0};}();
+         if(range.second&&liveFrame.frame>=range.first&&liveFrame.frame<=range.second)try{
+             static std::ofstream out(calibrationDirectory/"eye-views.bin",std::ios::binary);
+             const auto viewBytes=read<std::array<uint8_t,layout::viewBytes>>(pair.created[eye]);
+             const uint64_t head[2]{liveFrame.frame,pair.serial};const uint32_t sizes[3]{uint32_t(eye),uint32_t(layout::viewBytes),uint32_t(layout::parameterBytes)};
+             out.write(reinterpret_cast<const char*>(head),sizeof head);out.write(reinterpret_cast<const char*>(sizes),sizeof sizes);
+             out.write(reinterpret_cast<const char*>(viewBytes.data()),std::streamsize(viewBytes.size()));
+             out.write(reinterpret_cast<const char*>(pair.parameters[eye].data()),std::streamsize(layout::parameterBytes));out.flush();
+         }catch(...){}}
     }
     selectView(pair.scene,pair.originalView);
     if(read<std::array<uint8_t,layout::parameterBytes>>(input)!=originalParameters)throw std::runtime_error("source render camera arguments changed during eye calls");
@@ -3853,7 +3900,8 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
         if(privateWaterFeedback)optional("water_feedback",[&]{waterFeedback::install();},[&]{privateWaterFeedback=false;});
         if(waterFeedback::waterObserve::wanted()&&!waterFeedback::enabled)optional("water_feedback_observe",[&]{waterFeedback::waterObserve::install();},[&]{});
         if(cullingHistory::requested&&worldNativeDiagnostic)optional("culling_history",[&]{cullingHistory::install();},[&]{cullingHistory::requested=false;});
-        if(detailBinding::requested)optional("detail_binding",[&]{detailBinding::install();},[&]{detailBinding::requested=false;});   // 1.0: skipped, not failed (the eye check below ends the session on failed)
+        if(detailBinding::requested)optional("detail_binding",[&]{detailBinding::install();},[&]{detailBinding::requested=false;});
+        if(motionMatrixWatch::wanted())optional("motion_matrix_watch",[&]{motionMatrixWatch::install();},[&]{});   // 1.0: skipped, not failed (the eye check below ends the session on failed)
         if(shadowProjection::requested)optional("shadow_projection",[&]{shadowProjection::install();},[&]{shadowProjection::requested=false;});
         if(headVisibility::requested)optional("head_visibility",[&]{headVisibility::install();},[&]{headVisibility::requested=false;headVisibility::failed=true;});
         if(bodyUpload::requested)optional("body_upload",[&]{bodyUpload::install();},[&]{bodyUpload::requested=false;});
@@ -4361,7 +4409,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             require(MH_EnableHook(destroyOwnerTarget),"MH_EnableHook scene lifecycle");destroyOwnerEnabled=true;
             logFile->event("calibration_scene_hook_enabled","\"rva\":\"0xf5760\",\"pattern\":\"40 53 48 83 EC 20 48 8B 19 48 85 DB\"");
         }
-        if(dlssEval::requested||((dlssEval::depthNotes||dlssEval::resetRightEvery>0)&&liveXr))dlssEval::install();
+        if(dlssEval::requested||((dlssEval::depthNotes||dlssEval::resetRightEvery>0||dlssEval::checkBoth)&&liveXr))dlssEval::install();
         active=true; require(MH_EnableHook(target),"MH_EnableHook");enabled=true;renderWasEnabled=true;
         logFile->event("view_resource_hook_enabled","\"mode\":"+jsonString(detailFactoryProbe?"unused_detail_factory":renderCalibration?"native_retained_calibration":"unused_view_lifecycle_only")+",\"rva\":\"0x12c3b0\"");
         const unsigned budgetSeconds=worldSession?(sessionMinutes?sessionMinutes*60:400u*86400u):worldEndurance?420:renderCalibration?60:preparedSessionProbe?40:10;
@@ -5027,6 +5075,30 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_AwaitWorld(void* directory){
         if(hooked&&target)MH_DisableHook(target);
         try{rootCamera::disable();}catch(...){}
         if(logFile)try{logFile->event("await_world_failure","\"reason\":"+jsonString(e.what()));}catch(...){}
+        return 1;
+    }
+}
+
+#include "level_catch_up.hpp"
+// The level catch-up for guests ([Online] LevelCatchUp; hooks/level_catch_up.hpp): its hooks are put in and stay until the game
+// closes (this copy of the library is pinned). <directory> is the start's log folder; the record is level-catch-up.jsonl.
+extern "C" __declspec(dllexport) DWORD WINAPI EVR_LevelCatchUp(void* directory){
+    if(!directory||started.exchange(true))return 2;
+    HMODULE pinned{};
+    if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN|GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,reinterpret_cast<LPCWSTR>(&EVR_LevelCatchUp),&pinned))return 3;
+    try{
+        const auto path=std::filesystem::path(static_cast<wchar_t*>(directory));
+        logFile=new Log((path/"level-catch-up.jsonl").string(),true);
+        baseAddress=reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
+        const auto dos=read<IMAGE_DOS_HEADER>(baseAddress);
+        if(dos.e_magic!=IMAGE_DOS_SIGNATURE||dos.e_lfanew<0||dos.e_lfanew>4096)throw std::runtime_error("level catch-up PE header");
+        const auto nt=read<IMAGE_NT_HEADERS64>(baseAddress+dos.e_lfanew);
+        if(nt.Signature!=IMAGE_NT_SIGNATURE||nt.FileHeader.TimeDateStamp!=evr::gameBuild::timeDateStamp||nt.OptionalHeader.SizeOfImage!=evr::gameBuild::sizeOfImage)throw std::runtime_error("unsupported loaded executable build");
+        require(MH_Initialize(),"level catch-up MH_Initialize");
+        levelCatchUp::install();
+        return 0;
+    }catch(const std::exception& e){
+        if(logFile)try{logFile->event("level_catch_up_failure","\"reason\":"+jsonString(e.what()));}catch(...){}
         return 1;
     }
 }

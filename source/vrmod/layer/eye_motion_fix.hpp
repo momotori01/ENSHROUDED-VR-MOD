@@ -21,7 +21,7 @@ namespace eyeMotion {
  X(vkBindBufferMemory) X(vkMapMemory) X(vkCmdCopyImageToBuffer)
 constexpr uint32_t ring=16,checkRing=4;
 struct Output {VkImage image{},residual{};VkImageView view{},residualView{};uint32_t width=0,height=0;};
-struct Check {VkBuffer buffer{};void* mapped=nullptr;uint32_t width=0,height=0;uint64_t call=0;bool pending=false;};
+struct Check {VkBuffer buffer{};void* mapped=nullptr;uint32_t width=0,height=0;uint64_t call=0;bool pending=false;uint32_t eye=0;VkBuffer flags{};void* flagsMapped=nullptr;bool flagsValid=false;};
 struct Device {
     VkDevice handle{};VkPhysicalDeviceMemoryProperties memory{};bool ready=false;
 #define EYE_MOTION_DECL(n) PFN_##n n=nullptr;
@@ -37,6 +37,7 @@ struct Device {
 };
 inline std::mutex fixMutex;inline std::unordered_map<VkDevice,std::shared_ptr<Device>> fixDevices;
 inline uint64_t calls=0,failures=0;
+inline std::atomic<uint64_t> badChecks{0};   // checks with under half the picture under 1 pixel (hooks/rd_trigger.hpp reads it)
 // The mod's own frames for every refresh (include/evr/afw_pacing.hpp, pacing 2; 2026-10-23): each pass also writes the things'
 // own motion (the game's less the camera's, UV) into the eye's residual image, and the eye's copy keeps it with the picture
 // (native_xr.hpp takeObjectMotion) - the refreshes carry a moving thing on by it. Set when the mod's own queue is made.
@@ -128,9 +129,34 @@ inline void readChecks(Device& d){
         if(mags.empty())continue;
         const auto at=[](std::vector<float> v,double q){std::nth_element(v.begin(),v.begin()+size_t(q*(v.size()-1)),v.end());return v[size_t(q*(v.size()-1))];};
         size_t still=0,small=0;for(const float m:mags){if(m<.25f)++still;if(m<1.f)++small;}
-        std::ostringstream o;o<<std::setprecision(4)<<"\"pass\":"<<c.call<<",\"median_px\":["<<at(xs,.5)<<','<<at(ys,.5)<<"],\"p10_px\":["<<at(xs,.1)<<','<<at(ys,.1)
+        std::ostringstream o;o<<std::setprecision(4)<<"\"pass\":"<<c.call<<",\"eye\":"<<c.eye<<",\"median_px\":["<<at(xs,.5)<<','<<at(ys,.5)<<"],\"p10_px\":["<<at(xs,.1)<<','<<at(ys,.1)
             <<"],\"p90_px\":["<<at(xs,.9)<<','<<at(ys,.9)<<"],\"under_quarter_px\":"<<double(still)/mags.size()<<",\"under_1px\":"<<double(small)/mags.size()<<",\"magnitude_p90\":"<<at(mags,.9);
         note("afw_motion_check",o.str());
+        // EVR_AFW_MOTION_CHECK_DUMP=1 (2026-11-11, the stick-turn bursts): the residual field (every 4th pixel, pixels) of up
+        // to 120 checks with under half the picture under 1 pixel, and the first 8 others, to <log folder>/motion-residual.bin.
+        // Record: us u64, pass u64, eye u32, columns u32, rows u32, width u32, height u32, then columns*rows (x, y) floats.
+        static const bool dump=[]{const char* v=std::getenv("EVR_AFW_MOTION_CHECK_DUMP");return v&&v[0]=='1';}();
+        static unsigned badDumps=0,goodDumps=0;
+        const bool bad=double(small)/mags.size()<.5;
+        if(bad)++badChecks;
+        if(dump&&(bad?badDumps<120:goodDumps<8)){
+            (bad?badDumps:goodDumps)++;
+            static std::ofstream out(output+"/motion-residual.bin",std::ios::binary);
+            const uint32_t cols=(c.width+3)/4,rows=(c.height+3)/4;
+            const uint64_t head[2]{uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()),c.call};
+            const uint32_t sizes[5]{c.eye,cols,rows,c.width,c.height};
+            out.write(reinterpret_cast<const char*>(head),sizeof head);out.write(reinterpret_cast<const char*>(sizes),sizeof sizes);
+            std::vector<float> field;field.reserve(size_t(cols)*rows*2);
+            for(uint32_t y=0;y<c.height;y+=4)for(uint32_t x=0;x<c.width;x+=4){
+                field.push_back(half(p[(size_t(y)*c.width+x)*2]));field.push_back(half(p[(size_t(y)*c.width+x)*2+1]));}
+            out.write(reinterpret_cast<const char*>(field.data()),std::streamsize(field.size()*sizeof(float)));
+            // then four bytes a sample: the game's flags image (RGBA8 uint; alpha bit 8 = the pixel has its own motion,
+            // motion_reproj_probe.hpp), all 255 when unknown
+            std::vector<uint8_t> flags;flags.reserve(size_t(cols)*rows*4);
+            const auto* fp=static_cast<const uint8_t*>(c.flagsMapped);
+            for(uint32_t y=0;y<c.height;y+=4)for(uint32_t x=0;x<c.width;x+=4)for(int k=0;k<4;k++)flags.push_back(c.flagsValid&&fp?fp[(size_t(y)*c.width+x)*4+k]:uint8_t(255));
+            out.write(reinterpret_cast<const char*>(flags.data()),std::streamsize(flags.size()));out.flush();
+        }
     }
 }
 } // namespace eyeMotion
@@ -138,6 +164,7 @@ inline void readChecks(Device& d){
 // pass into `command` and returns the layer's image (R16G16_SFLOAT, SHADER_READ_ONLY_OPTIMAL afterwards) and its view for
 // the evaluation's motion vectors. reproject: 16 floats, row-major (this frame's clip -> the last drawing's clip, the
 // mod's row-vector convention). inputLayout: the layout of the game's motion and depth images there. 0 done, else not.
+extern "C" __declspec(dllexport) uint64_t evrMotionBadChecks() noexcept {return eyeMotion::badChecks.load();}
 extern "C" __declspec(dllexport) int evrFixEyeMotion(VkCommandBuffer command,uint32_t eye,VkImageView motionView,VkImageView depthView,uint32_t width,uint32_t height,
                                                      const float* reproject,float frames,float ySign,uint32_t inputLayout,VkImage* outImage,VkImageView* outView) noexcept {
     using namespace eyeMotion;
@@ -191,7 +218,25 @@ extern "C" __declspec(dllexport) int evrFixEyeMotion(VkCommandBuffer command,uin
             d.vkCmdCopyImageToBuffer(command,o.residual,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,c.buffer,1,&region);
             VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
             d.vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
-            c.call=calls;c.pending=true;
+            c.call=calls;c.pending=true;c.eye=eye;c.flagsValid=false;
+            // the game's own-motion flags of this eye (EVR_AFW_MOTION_CHECK_DUMP): its flags image as the motion reprojection bound it
+            {static const bool dumpFlags=[]{const char* v=std::getenv("EVR_AFW_MOTION_CHECK_DUMP");return v&&v[0]=='1';}();
+             VkImage flagsImage{};VkImageLayout flagsLayout{};
+             if(dumpFlags&&mrpFlagsFor(motionView,&flagsImage,&flagsLayout)&&flagsImage){
+                if(!c.flags){VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};bi.size=VkDeviceSize(width)*height*4;bi.usage=VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+                    check(d.vkCreateBuffer(d.handle,&bi,nullptr,&c.flags),"eye motion flags buffer");VkMemoryRequirements req{};d.vkGetBufferMemoryRequirements(d.handle,c.flags,&req);
+                    VkMemoryAllocateInfo a{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};a.allocationSize=req.size;a.memoryTypeIndex=d.memoryType(req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+                    VkDeviceMemory m{};check(d.vkAllocateMemory(d.handle,&a,nullptr,&m),"eye motion flags memory");check(d.vkBindBufferMemory(d.handle,c.flags,m,0),"eye motion flags bind");
+                    check(d.vkMapMemory(d.handle,m,0,VK_WHOLE_SIZE,0,&c.flagsMapped),"eye motion flags map");}
+                VkImageMemoryBarrier to{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};to.srcAccessMask=VK_ACCESS_MEMORY_WRITE_BIT;to.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+                to.oldLayout=flagsLayout;to.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;to.srcQueueFamilyIndex=to.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;to.image=flagsImage;to.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+                d.vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&to);
+                VkBufferImageCopy region{};region.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};region.imageExtent={width,height,1};
+                d.vkCmdCopyImageToBuffer(command,flagsImage,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,c.flags,1,&region);
+                VkImageMemoryBarrier back=to;back.srcAccessMask=VK_ACCESS_TRANSFER_READ_BIT;back.dstAccessMask=VK_ACCESS_MEMORY_READ_BIT;back.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;back.newLayout=flagsLayout;
+                VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+                d.vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT|VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,1,&back);
+                c.flagsValid=true;}}
         }
         if(keepObject)objectMotion[eye&1]={o.residual,width,height,true};   // left in GENERAL; the copy waits for this queue
         *outImage=o.image;*outView=o.view;
