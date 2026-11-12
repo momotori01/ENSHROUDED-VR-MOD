@@ -132,17 +132,36 @@ bool preflightCandidate(const VkInstanceCreateInfo &info, bool &fixture)
     return std::find(names.begin(), names.end(), "VK_KHR_win32_surface") != names.end() &&
            std::find(names.begin(), names.end(), "VK_KHR_surface") != names.end();
 }
+// The next link's function is asked for outside the lock (2026-11-12, three players' freezes at "preprocessing", the
+// same stacks in hang-stacks.txt): the game's streaming thread held this lock in deviceFn while the next GDPA (the
+// Vulkan loader) waited for the loader's own lock, which the present thread held - SteamVR, asked for the plate's GPU
+// (xrGetVulkanGraphicsDeviceKHR), was inside the loader and called vkGetPhysicalDeviceProperties of this layer, which
+// waited for this lock. Nothing below this layer is called with the lock held.
 template <class F, class H> F deviceFn(H h, const char *name)
 {
-    std::lock_guard<std::mutex> l(mutex);
-    auto it = devices.find(key(h));
-    return it == devices.end() ? nullptr : reinterpret_cast<F>(it->second.gdpa(it->second.device, name));
+    PFN_vkGetDeviceProcAddr gdpa = nullptr;
+    VkDevice device{};
+    {
+        std::lock_guard<std::mutex> l(mutex);
+        auto it = devices.find(key(h));
+        if (it == devices.end())
+            return nullptr;
+        gdpa = it->second.gdpa;
+        device = it->second.device;
+    }
+    return reinterpret_cast<F>(gdpa(device, name));
 }
 template <class F> F instanceFn(VkInstance h, const char *name)
 {
-    std::lock_guard<std::mutex> l(mutex);
-    auto it = instances.find(key(h));
-    return it == instances.end() ? nullptr : reinterpret_cast<F>(it->second.gipa(h, name));
+    PFN_vkGetInstanceProcAddr gipa = nullptr;
+    {
+        std::lock_guard<std::mutex> l(mutex);
+        auto it = instances.find(key(h));
+        if (it == instances.end())
+            return nullptr;
+        gipa = it->second.gipa;
+    }
+    return reinterpret_cast<F>(gipa(h, name));
 }
 std::string stack()
 {
@@ -1260,6 +1279,88 @@ VKAPI_ATTR void VKAPI_CALL evrCmdFillBuffer(VkCommandBuffer c,VkBuffer b,VkDevic
     }catch(...){}
     deviceFn<PFN_vkCmdFillBuffer>(c,"vkCmdFillBuffer")(c,b,offset,size,value);
 }
+// A process that is not the game (2026-11-12): the layer reaches another program only through an environment handed on
+// by mistake (2026-11-11: the Steam the game had started again carried VK_INSTANCE_LAYERS and VK_LAYER_PATH to the
+// games and SteamVR it started). There it is only a link of the chain - nothing observed, nothing changed. The game and
+// the mod's own programs (inside the game's folder, the nearest folder above this library that holds enshrouded.exe)
+// keep the layer; so does a layer outside any game's folder (tests).
+static bool foreignProcess()
+{
+    static const bool value = [] {
+        static wchar_t exe[32768], self[32768];
+        if (!GetModuleFileNameW(nullptr, exe, DWORD(std::size(exe))))
+            return false;
+        const std::filesystem::path program(exe);
+        if (!_wcsicmp(program.filename().c_str(), L"enshrouded.exe"))
+            return false;
+        HMODULE module = nullptr;
+        if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                reinterpret_cast<LPCWSTR>(&foreignProcess), &module) ||
+            !GetModuleFileNameW(module, self, DWORD(std::size(self))))
+            return false;
+        std::error_code ec;
+        for (auto folder = std::filesystem::path(self).parent_path(); !folder.empty() && folder != folder.root_path(); folder = folder.parent_path())
+            if (std::filesystem::exists(folder / L"enshrouded.exe", ec))
+            {
+                const std::wstring p = program.wstring(), f = folder.wstring();
+                const bool inside = p.size() > f.size() + 1 && !_wcsnicmp(p.c_str(), f.c_str(), f.size()) && (p[f.size()] == L'\\' || p[f.size()] == L'/');
+                return !inside;
+            }
+        return false;
+    }();
+    return value;
+}
+VKAPI_ATTR VkResult VKAPI_CALL evrCreateInstanceForeign(const VkInstanceCreateInfo *info, const VkAllocationCallbacks *allocator, VkInstance *result)
+{
+    auto *link = reinterpret_cast<VkLayerInstanceCreateInfo *>(const_cast<void *>(info->pNext));
+    while (link && (link->sType != VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO || link->function != VK_LAYER_LINK_INFO))
+        link = reinterpret_cast<VkLayerInstanceCreateInfo *>(const_cast<void *>(link->pNext));
+    if (!link)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    const auto next = link->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+    const auto create = reinterpret_cast<PFN_vkCreateInstance>(next(VK_NULL_HANDLE, "vkCreateInstance"));
+    if (!create)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    link->u.pLayerInfo = link->u.pLayerInfo->pNext;
+    const auto r = create(info, allocator, result);
+    if (r == VK_SUCCESS)
+    {
+        std::lock_guard<std::mutex> l(mutex);
+        InstanceDispatch d;d.instance = *result;d.gipa = next;
+        instances[key(*result)] = d;
+    }
+    return r;
+}
+VKAPI_ATTR VkResult VKAPI_CALL evrCreateDeviceForeign(VkPhysicalDevice physical, const VkDeviceCreateInfo *info, const VkAllocationCallbacks *allocator, VkDevice *result)
+{
+    auto *link = reinterpret_cast<VkLayerDeviceCreateInfo *>(const_cast<void *>(info->pNext));
+    while (link && (link->sType != VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO || link->function != VK_LAYER_LINK_INFO))
+        link = reinterpret_cast<VkLayerDeviceCreateInfo *>(const_cast<void *>(link->pNext));
+    if (!link)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    const auto nextI = link->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+    const auto nextD = link->u.pLayerInfo->pfnNextGetDeviceProcAddr;
+    VkInstance instance{};
+    {
+        std::lock_guard<std::mutex> l(mutex);
+        const auto it = instances.find(key(physical));
+        if (it == instances.end())
+            return VK_ERROR_INITIALIZATION_FAILED;
+        instance = it->second.instance;
+    }
+    const auto create = reinterpret_cast<PFN_vkCreateDevice>(nextI(instance, "vkCreateDevice"));
+    if (!create)
+        return VK_ERROR_INITIALIZATION_FAILED;
+    link->u.pLayerInfo = link->u.pLayerInfo->pNext;
+    const auto r = create(physical, info, allocator, result);
+    if (r == VK_SUCCESS)
+    {
+        std::lock_guard<std::mutex> l(mutex);
+        DeviceDispatch d;d.device = *result;d.gdpa = nextD;d.instance = instance;d.physical = physical;d.gipa = nextI;
+        devices[key(*result)] = d;
+    }
+    return r;
+}
 static PFN_vkVoidFunction intercept(const char *name)
 {
     // clang-format off
@@ -1352,6 +1453,16 @@ static PFN_vkVoidFunction intercept(const char *name)
 extern "C" __declspec(dllexport) PFN_vkVoidFunction VKAPI_CALL evrGetInstanceProcAddr(VkInstance i,
                                                                                       const char *n)
 {
+    if (foreignProcess())
+    {
+        if (!std::strcmp(n, "vkGetInstanceProcAddr")) return reinterpret_cast<PFN_vkVoidFunction>(evrGetInstanceProcAddr);
+        if (!std::strcmp(n, "vkGetDeviceProcAddr")) return reinterpret_cast<PFN_vkVoidFunction>(evrGetDeviceProcAddr);
+        if (!std::strcmp(n, "vkCreateInstance")) return reinterpret_cast<PFN_vkVoidFunction>(evrCreateInstanceForeign);
+        if (!std::strcmp(n, "vkCreateDevice")) return reinterpret_cast<PFN_vkVoidFunction>(evrCreateDeviceForeign);
+        if (!std::strcmp(n, "vkEnumerateInstanceExtensionProperties")) return reinterpret_cast<PFN_vkVoidFunction>(evrEnumerateInstanceExtensionProperties);
+        if (!std::strcmp(n, "vkEnumerateDeviceExtensionProperties")) return reinterpret_cast<PFN_vkVoidFunction>(evrEnumerateDeviceExtensionProperties);
+        return i ? instanceFn<PFN_vkVoidFunction>(i, n) : nullptr;
+    }
     if ((!std::strcmp(n,"vkCmdDrawIndirectCount") || !std::strcmp(n,"vkCmdDrawIndexedIndirectCount") ||
          !std::strcmp(n,"vkCmdDrawIndirectCountKHR") || !std::strcmp(n,"vkCmdDrawIndexedIndirectCountKHR") || !std::strcmp(n,"vkBindBufferMemory2") || !std::strcmp(n,"vkBindBufferMemory2KHR") || !std::strcmp(n,"vkBindImageMemory2") || !std::strcmp(n,"vkBindImageMemory2KHR") || !std::strcmp(n, "vkCmdBeginRendering") || !std::strcmp(n, "vkCmdBeginRenderingKHR") ||
          !std::strcmp(n, "vkCmdEndRendering") || !std::strcmp(n, "vkCmdEndRenderingKHR") || !std::strcmp(n,"vkSetDebugUtilsObjectNameEXT") || !std::strcmp(n,"vkCmdPipelineBarrier2") || !std::strcmp(n,"vkCmdPipelineBarrier2KHR") || !std::strcmp(n,"vkQueueSubmit2") || !std::strcmp(n,"vkQueueSubmit2KHR") || !std::strcmp(n,"vkCmdDrawMeshTasksIndirectCountEXT") || !std::strcmp(n,"vkCmdDrawMeshTasksIndirectEXT") || !std::strcmp(n,"vkCmdDrawMeshTasksEXT")) &&
@@ -1362,6 +1473,8 @@ extern "C" __declspec(dllexport) PFN_vkVoidFunction VKAPI_CALL evrGetInstancePro
 }
 extern "C" __declspec(dllexport) PFN_vkVoidFunction VKAPI_CALL evrGetDeviceProcAddr(VkDevice d, const char *n)
 {
+    if (foreignProcess())
+        return !std::strcmp(n, "vkGetDeviceProcAddr") ? reinterpret_cast<PFN_vkVoidFunction>(evrGetDeviceProcAddr) : deviceFn<PFN_vkVoidFunction>(d, n);
     if ((!std::strcmp(n,"vkCmdDrawIndirectCount") || !std::strcmp(n,"vkCmdDrawIndexedIndirectCount") ||
          !std::strcmp(n,"vkCmdDrawIndirectCountKHR") || !std::strcmp(n,"vkCmdDrawIndexedIndirectCountKHR") || !std::strcmp(n,"vkBindBufferMemory2") || !std::strcmp(n,"vkBindBufferMemory2KHR") || !std::strcmp(n,"vkBindImageMemory2") || !std::strcmp(n,"vkBindImageMemory2KHR") || !std::strcmp(n, "vkCmdBeginRendering") || !std::strcmp(n, "vkCmdBeginRenderingKHR") ||
          !std::strcmp(n, "vkCmdEndRendering") || !std::strcmp(n, "vkCmdEndRenderingKHR") || !std::strcmp(n,"vkSetDebugUtilsObjectNameEXT") || !std::strcmp(n,"vkCmdPipelineBarrier2") || !std::strcmp(n,"vkCmdPipelineBarrier2KHR") || !std::strcmp(n,"vkQueueSubmit2") || !std::strcmp(n,"vkQueueSubmit2KHR") || !std::strcmp(n,"vkCmdDrawMeshTasksIndirectCountEXT") || !std::strcmp(n,"vkCmdDrawMeshTasksIndirectEXT") || !std::strcmp(n,"vkCmdDrawMeshTasksEXT")) &&

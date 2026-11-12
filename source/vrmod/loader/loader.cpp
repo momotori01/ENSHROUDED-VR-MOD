@@ -18,6 +18,8 @@
 #include <evr/auto_start.hpp>
 #include <evr/recommended_graphics.hpp>
 #include <evr/game_build.hpp>
+#include <evr/child_environment.hpp>
+#include <MinHook.h>
 #include <algorithm>
 #include <string>
 #include <vector>
@@ -76,7 +78,68 @@ std::string lastError(){return "error "+std::to_string(GetLastError());}
 // likely - so the variable is given to it as well; loading it here makes sure it is initialised.
 using PutEnvironment=int(__cdecl*)(const wchar_t*,const wchar_t*);
 PutEnvironment g_put=nullptr;bool g_putLooked=false;
+
+// ---- programs started from the game get the environment without the mod (include/evr/child_environment.hpp) ----
+// 2026-11-12, user: EDF6VR did not start - the Steam the game had started again after a crash carried the mod's
+// variables (a test's mock OpenXR runtime, the Vulkan layers) to the games and SteamVR it started. Every process the
+// game creates goes through kernelbase's CreateProcessInternalW (CreateProcess A/W, ShellExecute, the Steam API's start
+// of Steam, OpenXR's start of SteamVR); there the environment is given without EVR_* and with the variables the loader
+// changed as they were before. The mod's own programs in the game's folder get it unchanged.
+SRWLOCK g_envLock=SRWLOCK_INIT;
+std::vector<evr::childenv::Original> g_originals;
+using CreateProcessInternal=BOOL(WINAPI*)(HANDLE,LPCWSTR,LPWSTR,LPSECURITY_ATTRIBUTES,LPSECURITY_ATTRIBUTES,BOOL,DWORD,LPVOID,LPCWSTR,LPSTARTUPINFOW,LPPROCESS_INFORMATION,PHANDLE);
+CreateProcessInternal g_createProcess=nullptr;
+thread_local bool g_inCreateProcess=false;
+void rememberOriginal(const std::wstring& name){
+    AcquireSRWLockExclusive(&g_envLock);
+    bool known=false;for(const auto& o:g_originals)if(evr::childenv::sameName(o.name,name)){known=true;break;}
+    if(!known){evr::childenv::Original o;o.name=name;
+        SetLastError(0);const DWORD n=GetEnvironmentVariableW(name.c_str(),nullptr,0);
+        if(n){std::wstring v(n,L'\0');const DWORD got=GetEnvironmentVariableW(name.c_str(),v.data(),n);if(got<n){v.resize(got);o.present=true;o.value=v;}}
+        else if(GetLastError()!=ERROR_ENVVAR_NOT_FOUND)o.present=true;   // there, and empty
+        g_originals.push_back(o);}
+    ReleaseSRWLockExclusive(&g_envLock);
+}
+BOOL WINAPI createProcessWithout(HANDLE token,LPCWSTR application,LPWSTR command,LPSECURITY_ATTRIBUTES processAttributes,LPSECURITY_ATTRIBUTES threadAttributes,
+                                 BOOL inherit,DWORD flags,LPVOID environment,LPCWSTR directory,LPSTARTUPINFOW startup,LPPROCESS_INFORMATION information,PHANDLE newToken){
+    const auto pass=[&](DWORD f,LPVOID e){return g_createProcess(token,application,command,processAttributes,threadAttributes,inherit,f,e,directory,startup,information,newToken);};
+    if(g_inCreateProcess)return pass(flags,environment);
+    g_inCreateProcess=true;
+    const DWORD lastError=GetLastError();
+    BOOL result=FALSE;bool done=false;
+    try{
+        const auto program=evr::childenv::programOf(application,command);
+        if(!g.paths.game.empty()&&evr::childenv::insideFolder(program,g.paths.game)){result=pass(flags,environment);done=true;}   // the mod's own (the game's folder)
+        else{
+            std::vector<std::wstring> list;
+            if(!environment){if(wchar_t* own=GetEnvironmentStringsW()){list=evr::childenv::entries(own);FreeEnvironmentStringsW(own);}}
+            else if(flags&CREATE_UNICODE_ENVIRONMENT)list=evr::childenv::entries(static_cast<const wchar_t*>(environment));
+            else list=evr::childenv::entriesAnsi(static_cast<const char*>(environment));
+            std::vector<evr::childenv::Original> originals;
+            AcquireSRWLockShared(&g_envLock);originals=g_originals;ReleaseSRWLockShared(&g_envLock);
+            size_t changed=0;auto clean=evr::childenv::block(evr::childenv::cleaned(list,originals,&changed));
+            say("a program started from the game ("+narrow(evr::childenv::fileName(program))+") gets the environment without the mod's variables ("+std::to_string(changed)+" left out or put back)");
+            if(changed){SetLastError(lastError);result=pass(flags|CREATE_UNICODE_ENVIRONMENT,clean.data());done=true;}
+        }
+    }catch(...){}
+    if(!done){SetLastError(lastError);result=pass(flags,environment);}
+    g_inCreateProcess=false;
+    return result;
+}
+void guardChildren(){
+    static bool tried=false;if(tried)return;tried=true;
+    const HMODULE kernelBase=GetModuleHandleW(L"kernelbase.dll");
+    void* target=kernelBase?reinterpret_cast<void*>(GetProcAddress(kernelBase,"CreateProcessInternalW")):nullptr;
+    if(!target){say("programs started from the game: kernelbase has no CreateProcessInternalW; their environment is not cleaned");return;}
+    const MH_STATUS init=MH_Initialize();
+    if(init!=MH_OK&&init!=MH_ERROR_ALREADY_INITIALIZED){say("programs started from the game: the hook could not be prepared ("+std::string(MH_StatusToString(init))+")");return;}
+    MH_STATUS s=MH_CreateHook(target,reinterpret_cast<void*>(&createProcessWithout),reinterpret_cast<void**>(&g_createProcess));
+    if(s==MH_OK)s=MH_EnableHook(target);
+    say(s==MH_OK?"programs started from the game get the environment without the mod's variables":"programs started from the game: the hook failed ("+std::string(MH_StatusToString(s))+")");
+}
+
 void setEnvironment(const std::wstring& name,const std::wstring& value){
+    rememberOriginal(name);guardChildren();
     SetEnvironmentVariableW(name.c_str(),value.empty()?nullptr:value.c_str());
     if(!g_putLooked){g_putLooked=true;
         wchar_t system[MAX_PATH]{};const UINT n=GetSystemDirectoryW(system,MAX_PATH);
@@ -346,6 +409,33 @@ DWORD WINAPI vrWorker(void*){
     return 0;
 }
 
+DWORD WINAPI childEnvironmentTest(void* where){
+    const std::wstring folder=*static_cast<const std::wstring*>(where);CreateDirectoryW(folder.c_str(),nullptr);
+    wchar_t system[MAX_PATH]{};GetSystemDirectoryW(system,MAX_PATH);const std::wstring cmd=std::wstring(system)+L"\\cmd.exe";
+    std::string own;
+    if(wchar_t* block=GetEnvironmentStringsW()){for(const auto& e:evr::childenv::entries(block))own+=narrow(e)+"\r\n";FreeEnvironmentStringsW(block);}
+    writeFile(folder+L"\\own.txt",own);
+    const auto run=[&](const wchar_t* name,bool block){
+        std::wstring line=L"\""+cmd+L"\" /d /c set > \""+folder+L"\\"+name+L"\"";
+        std::vector<wchar_t> env;
+        if(block){if(wchar_t* mine=GetEnvironmentStringsW()){for(const auto& e:evr::childenv::entries(mine)){env.insert(env.end(),e.begin(),e.end());env.push_back(L'\0');}FreeEnvironmentStringsW(mine);}
+            env.push_back(L'\0');env.push_back(L'\0');}
+        STARTUPINFOW si{};si.cb=sizeof si;PROCESS_INFORMATION pi{};
+        const BOOL ok=CreateProcessW(nullptr,line.data(),nullptr,nullptr,FALSE,CREATE_NO_WINDOW|(block?CREATE_UNICODE_ENVIRONMENT:0),block?env.data():nullptr,nullptr,&si,&pi);
+        if(ok){WaitForSingleObject(pi.hProcess,10000);CloseHandle(pi.hThread);CloseHandle(pi.hProcess);}
+        say(std::string("test: child environment ")+narrow(name)+(ok?" written":" not started ("+lastError()+")"));
+    };
+    run(L"inherited.txt",false);run(L"block.txt",true);
+    const HRESULT com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED|COINIT_DISABLE_OLE1DDE);
+    const std::wstring parameters=L"/d /c set > \""+folder+L"\\shell.txt\"";
+    SHELLEXECUTEINFOW info{};info.cbSize=sizeof info;info.fMask=SEE_MASK_NOCLOSEPROCESS|SEE_MASK_FLAG_NO_UI|SEE_MASK_NOASYNC;info.lpFile=cmd.c_str();info.lpParameters=parameters.c_str();info.nShow=SW_HIDE;
+    const BOOL shell=ShellExecuteExW(&info);
+    if(shell&&info.hProcess){WaitForSingleObject(info.hProcess,10000);CloseHandle(info.hProcess);}
+    say(std::string("test: child environment shell.txt")+(shell?" written":" not started ("+lastError()+")"));
+    if(SUCCEEDED(com))CoUninitialize();
+    return 0;
+}
+
 void begin(){
     wchar_t exe[MAX_PATH*2]{};const DWORD length=GetModuleFileNameW(nullptr,exe,DWORD(std::size(exe)));
     if(!length||length>=std::size(exe))return;
@@ -353,7 +443,14 @@ void begin(){
     if(_wcsicmp(path.c_str()+slash+1,L"enshrouded.exe"))return;                 // any other program: only the forwarding
     g.paths.game=path.substr(0,slash);g.paths.mod=g.paths.game+L"\\EnshroudedVR";g.paths.bin=g.paths.mod+L"\\bin";g.paths.data=g.paths.mod+L"\\data";
     if(!exists(g.paths.mod))return;                                             // the library alone, without the mod's folder
-    if(environmentHas(L"EVR_LAYER_OUTPUT"))return;                              // a launch by the development scripts
+    if(environmentHas(L"EVR_LAYER_OUTPUT")){                                    // a launch by the development scripts
+        // They set the layers and the runtime around the game; a program the game starts (Steam, if it had gone) gets
+        // none of them, nor EVR_*. (2026-11-11: the Steam a test's game started again carried a mock runtime.)
+        AcquireSRWLockExclusive(&g_envLock);
+        for(const wchar_t* name:{L"VK_INSTANCE_LAYERS",L"VK_LAYER_PATH",L"VK_ADD_LAYER_PATH",L"VK_LOADER_LAYERS_ENABLE",L"VK_LOADER_LAYERS_DISABLE",
+                                 L"ENABLE_VULKAN_RENDERDOC_CAPTURE",L"XR_RUNTIME_JSON",L"XR_API_LAYER_PATH",L"XR_ENABLE_API_LAYERS"}){evr::childenv::Original o;o.name=name;g_originals.push_back(o);}
+        ReleaseSRWLockExclusive(&g_envLock);
+        guardChildren();return;}
     g.logs=g.paths.mod+L"\\logs";CreateDirectoryW(g.logs.c_str(),nullptr);
     {WIN32_FILE_ATTRIBUTE_DATA info{};const std::wstring log=g.logs+L"\\loader.log";   // loader.log starts over beyond 1 MB
         if(GetFileAttributesExW(log.c_str(),GetFileExInfoStandard,&info)&&(info.nFileSizeHigh||info.nFileSizeLow>(1u<<20)))MoveFileExW(log.c_str(),(g.logs+L"\\loader.old.log").c_str(),MOVEFILE_REPLACE_EXISTING);}
@@ -431,6 +528,10 @@ void begin(){
             setEnvironment(L"VK_LAYER_PATH",std::wstring(renderDoc)+L";"+g.paths.bin);
             setEnvironment(L"VK_INSTANCE_LAYERS",L"VK_LAYER_EVR_diagnostic;VK_LAYER_RENDERDOC_Capture");
             setEnvironment(L"ENABLE_VULKAN_RENDERDOC_CAPTURE",L"1");say("test: RenderDoc's layer under the mod's");}}
+    // Test only (2026-11-12): [Environment] EVR_TEST_CHILD_ENV=<folder> - programs outside the game's folder write the
+    // environment they got (cmd's "set"): inherited, given as a block, and through ShellExecuteEx; own.txt is the game's.
+    {wchar_t folder[MAX_PATH]{};const DWORD n=GetEnvironmentVariableW(L"EVR_TEST_CHILD_ENV",folder,MAX_PATH);
+        if(n&&n<MAX_PATH){static std::wstring where;where=folder;if(const HANDLE test=CreateThread(nullptr,0,childEnvironmentTest,&where,0,nullptr))CloseHandle(test);}}
     const HANDLE thread=CreateThread(nullptr,0,g.vr?vrWorker:g.flat?flatWorker:levelWorker,nullptr,0,nullptr);
     if(thread)CloseHandle(thread);else status("Off: the loader's thread could not be started ("+lastError()+")");
 }

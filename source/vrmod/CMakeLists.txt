@@ -672,6 +672,19 @@ target_compile_definitions(evr_loader PRIVATE UNICODE _UNICODE NOMINMAX)
 target_compile_options(evr_loader PRIVATE /utf-8 /W4 /EHsc)
 set_target_properties(evr_loader PROPERTIES OUTPUT_NAME "dinput8" ARCHIVE_OUTPUT_NAME "evr_loader" PDB_NAME "evr_loader" MSVC_RUNTIME_LIBRARY "MultiThreaded"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/dist" RUNTIME_OUTPUT_DIRECTORY_RELEASE "${CMAKE_SOURCE_DIR}/dist")
+# MinHook of its own for the loader (the static C runtime, as the loader's): the hook on process creation that gives the
+# programs started from the game the environment without the mod (include/evr/child_environment.hpp, 2026-11-12).
+add_library(evr_loader_minhook STATIC "${REF}/minhook/src/buffer.c" "${REF}/minhook/src/hook.c" "${REF}/minhook/src/trampoline.c" "${REF}/minhook/src/hde/hde64.c")
+target_include_directories(evr_loader_minhook PUBLIC "${REF}/minhook/include" PRIVATE "${REF}/minhook/src" "${REF}/minhook/src/hde")
+set_target_properties(evr_loader_minhook PROPERTIES MSVC_RUNTIME_LIBRARY "MultiThreaded")
+target_link_libraries(evr_loader PRIVATE evr_loader_minhook)
+add_executable(evr_child_environment_tests tests/child_environment_tests.cpp)
+target_include_directories(evr_child_environment_tests PRIVATE include)
+target_compile_options(evr_child_environment_tests PRIVATE /utf-8 /W4 /EHsc)
+add_test(NAME child_environment COMMAND evr_child_environment_tests)
+add_executable(evr_child_environment_process_check tests/child_environment_process_check.cpp)   # not a ctest: tools/check_child_environment.sh
+target_compile_definitions(evr_child_environment_process_check PRIVATE UNICODE _UNICODE NOMINMAX)
+target_compile_options(evr_child_environment_process_check PRIVATE /utf-8 /W4 /EHsc)
 add_executable(evr_auto_start_tests tests/auto_start_tests.cpp)
 target_include_directories(evr_auto_start_tests PRIVATE include)
 target_compile_options(evr_auto_start_tests PRIVATE /utf-8 /W4 /EHsc)

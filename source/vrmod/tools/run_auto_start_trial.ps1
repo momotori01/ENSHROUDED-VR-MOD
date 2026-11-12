@@ -27,6 +27,9 @@ $ErrorActionPreference='Stop'
 $mod=Split-Path $PSScriptRoot -Parent;$game=Split-Path $mod -Parent
 Set-Location -LiteralPath $game
 if(Get-Process enshrouded -ErrorAction SilentlyContinue){throw 'The game is already running; close it first.'}
+# Without Steam the game starts Steam itself, and that Steam keeps the test's environment for every game it starts
+# (2026-11-11: a mock runtime and RenderDoc's layer reached EDF6VR). Steam is started by the user, never from here.
+if(!(Get-Process steam -ErrorAction SilentlyContinue)){throw 'Steam is not running; start Steam yourself first (a Steam started by the game would keep the test''s environment).'}
 if(!(Test-Path -LiteralPath 'dinput8.dll') -or !(Test-Path -LiteralPath 'EnshroudedVR/bin/evr_hooks.dll')){throw 'The package is not in the game folder (tools/pack_release.ps1 -Install).'}
 # The reference through Steam's own storage (2026-10-20: restore_scenery_backup.ps1 copies behind Steam's back - 1.0 cannot read
 # such a save, and it had put back an old user_settings.json; tools/steam_save_write.py writes the .ksd files only).

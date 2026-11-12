@@ -21,6 +21,9 @@ Set-Location -LiteralPath (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
 $pw=(Get-Process -Id $PID).Path
 $py='S:/stable/Python31011/python.exe'
 if(Get-Process enshrouded -ErrorAction SilentlyContinue){throw 'The game is already running; close it first.'}
+# Without Steam the game starts Steam itself, and that Steam keeps the test's environment for every game it starts
+# (2026-11-11: a mock runtime and RenderDoc's layer reached EDF6VR). Steam is started by the user, never from here.
+if(!(Get-Process steam -ErrorAction SilentlyContinue)){throw 'Steam is not running; start Steam yourself first (a Steam started by the game would keep the test''s environment).'}
 # The reference through Steam's own storage (2026-10-20: restore_scenery_backup.ps1 copies behind Steam's back - 1.0 cannot read
 # such a save, and it had put back an old user_settings.json; tools/steam_save_write.py writes the .ksd files only).
 if($SaveReference){& python -I (Join-Path $PSScriptRoot 'steam_save_write.py') $SaveReference;if($LASTEXITCODE -ne 0){throw 'The save reference could not be written through Steam (steam_save_write.py).'}}

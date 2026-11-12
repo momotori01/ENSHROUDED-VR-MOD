@@ -33,6 +33,9 @@ if ($HeadVisibilityShader -and !$LiveStereo) { throw 'HeadVisibilityShader requi
 if ($VfxTransparentShader -and !$LiveStereo) { throw 'VfxTransparentShader requires explicit live stereo diagnostics.' }
 $gameDir=Split-Path $PSScriptRoot -Parent
 if (Get-Process enshrouded -ErrorAction SilentlyContinue) { throw 'Enshrouded is already running; diagnostic launch skipped.' }
+# Without Steam the game starts Steam itself, and that Steam keeps this launch's environment (the layers, the mock
+# runtime) for every game it starts (2026-11-11, EDF6VR). Steam is started by the user, never from here.
+if (!(Get-Process steam -ErrorAction SilentlyContinue)) { throw 'Steam is not running; start Steam yourself first (a Steam started by the game would keep this launch''s environment).' }
 $bin=Join-Path $PSScriptRoot 'build/bin/Release'
 $manifestPath=Join-Path $bin 'evr_layer.json'
 if (!(Test-Path -LiteralPath $manifestPath)) { throw 'Build the diagnostic layer first.' }
