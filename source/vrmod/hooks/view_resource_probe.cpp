@@ -4409,7 +4409,7 @@ extern "C" __declspec(dllexport) DWORD WINAPI EVR_ProbeViewResources(void *direc
             require(MH_EnableHook(destroyOwnerTarget),"MH_EnableHook scene lifecycle");destroyOwnerEnabled=true;
             logFile->event("calibration_scene_hook_enabled","\"rva\":\"0xf5760\",\"pattern\":\"40 53 48 83 EC 20 48 8B 19 48 85 DB\"");
         }
-        if(dlssEval::requested||((dlssEval::depthNotes||dlssEval::resetRightEvery>0||dlssEval::checkBoth)&&liveXr))dlssEval::install();
+        if(dlssEval::requested||((dlssEval::depthNotes||dlssEval::resetRightEvery>0||dlssEval::checkBoth||dlssEval::presetOverride>=0)&&liveXr))dlssEval::install();
         active=true; require(MH_EnableHook(target),"MH_EnableHook");enabled=true;renderWasEnabled=true;
         logFile->event("view_resource_hook_enabled","\"mode\":"+jsonString(detailFactoryProbe?"unused_detail_factory":renderCalibration?"native_retained_calibration":"unused_view_lifecycle_only")+",\"rva\":\"0x12c3b0\"");
         const unsigned budgetSeconds=worldSession?(sessionMinutes?sessionMinutes*60:400u*86400u):worldEndurance?420:renderCalibration?60:preparedSessionProbe?40:10;

@@ -81,6 +81,7 @@ The program next to enshrouded.exe holds the settings that cannot be changed in 
 | View fit (VR) | How each eye's picture is fitted to the headset's view. **Auto** (the default): fitted only when the mod finds ALVR (with ALVR the view is cross-eyed without it). **Normal**: as always. **Fit (if cross-eyed)**: always fitted - choose it if the view is cross-eyed. |
 | Snap turn (VR) | Off by default. On: the right stick turns you in steps instead of smoothly. **Snap turn angle (VR)**: 10-90° a step, 30° by default. Both also in the game's VR settings. |
 | Menu flicker fix (VR) | Off by default. Turn it on if the character in the inventory flickers black: while a menu is open, the game's own view is not drawn (the character's black frames come from it). |
+| DLSS model (VR) | K by default: DLSS's newer (transformer) model - less blur while moving in wide outdoor places, a little more work for the graphics card. Game: what the game chooses. |
 | Frame mode (VR) | Both eyes every frame (normal), or one eye a frame (a test for more FPS) |
 | Problem report | **Make zip**: the mod's logs, its settings and the game's log in one zip next to the program, to send with a description. It also finishes a VR bug report that a crash cut short. |
 | Put settings back | All settings back to how they came. |

@@ -39,6 +39,8 @@ VR ON / OFF
 - "Menu flicker fix (VR)": off by default. Turn it on if the character in the inventory
   flickers black: while a menu is open, the game's own view is not drawn (the character's
   black frames come from it).
+- "DLSS model (VR)": K by default - DLSS's newer (transformer) model, less blur while moving in wide
+  outdoor places, a little more work for the graphics card. "Game" uses what the game chooses.
 - "Frame mode (VR)": "One eye a frame" draws the left and the right eye in turn, and the
   other eye shows the picture it had. It gives more frames a second; things that move
   can look a little doubled. It is a test - switch back to "Both eyes every frame" if it
@@ -139,6 +141,8 @@ VR の入・切
   ではそうしないと寄り目になります）。寄り目になったら「Fit」を選んでください。
 - 「Menu flicker fix (VR)」：既定は切。持ち物のキャラクターが黒くちらつく時は入にしてください。
   メニューを開いている間、ゲーム自身の画面を描きません（キャラクターが黒くなるのはその画面の回です）。
+- 「DLSS model (VR)」：既定は K（DLSS の新しいトランスフォーマー型のモデル。広い屋外で動いた時のぶれが少なく、
+  グラフィックカードの負担が少し増えます）。「Game」はゲームの選択のままです。
 - 「Frame mode (VR)」の「One eye a frame」は、左右の目を 1 コマずつ交互に描き、描かない
   方の目は前の絵を見せます。1 秒あたりのコマ数が増えます。動く物は少し二重に見える事が
   あります。試験中の機能です。合わなければ「Both eyes every frame」に戻してください。

@@ -283,14 +283,23 @@ inline void onCopy(uintptr_t rsp) noexcept {
            motionBowVisual::profile()){
             const auto model=motionVisual::object(motionVisual::handle);
             const auto pose=read<uint32_t>(model+layout::modelPose);
-            bool owned=false;
-            for(const auto& entry:motionBowVisual::owned)if(entry.model==motionVisual::handle&&entry.pose==pose&&pose)owned=true;
-            if(!owned||hand!=(motionVisual::handle&0xffffff)||
+            bool owned=false,privatePose=false;
+            for(const auto& entry:motionBowVisual::owned){if(entry.model==motionVisual::handle&&entry.pose)privatePose=true;
+                if(entry.model==motionVisual::handle&&entry.pose==pose&&pose)owned=true;}
+            // No private pose of the mod on this bow or wand yet (2026-11-18, a player's Apple Vision Pro through StrandXR: the
+            // left hand never tracked, so the mod's hands - and with them the ranged pose (motionBowVisual::prepare) - were
+            // never made, and this check ended every frame's eyes with a fire wand in the hand; VR stayed on the plate):
+            // there is nothing of the mod's to check, the weapon shows as the game poses it.
+            if(!privatePose){
+                static unsigned told=0;if(told++<4)logFile->event("motion_ranged_eye_payload_without_private_pose","\"eye\":"+std::to_string(eye)+",\"serial\":"+std::to_string(pair.serial)+
+                    ",\"item\":"+std::to_string(motionVisual::item)+",\"hands_ready\":"+(motionHandVisual::ready?"true":"false"));
+            }
+            else if(!owned||hand!=(motionVisual::handle&0xffffff)||
                std::find(indices.begin(),indices.end(),motionVisual::sourceHandle&0xffffff)==indices.end())
                 throw std::runtime_error("private bow culling ownership differs");
             // Native graph may upload this payload twice for one eye. Validate
             // every call, but record one same-frame proof per eye/serial.
-            if(bowPayloadSerial[eye]!=pair.serial){
+            if(privatePose&&bowPayloadSerial[eye]!=pair.serial){
                 bowPayloadSerial[eye]=pair.serial;
                 logFile->event((motion::reviewedBowFacing(motionVisual::item,motionVisual::guid)||(motionVisual::rangedAnimationRequested&&motion::catalogBowAsset(motionVisual::item,motionVisual::guid)))?"motion_bow_eye_payload":"motion_ranged_eye_payload",out.str()+",\"frame\":"+std::to_string(liveFrame.frame)+
                     ",\"pose_handle\":"+std::to_string(pose));

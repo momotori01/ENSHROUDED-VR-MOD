@@ -136,11 +136,16 @@ inline void readChecks(Device& d){
         // to 120 checks with under half the picture under 1 pixel, and the first 8 others, to <log folder>/motion-residual.bin.
         // Record: us u64, pass u64, eye u32, columns u32, rows u32, width u32, height u32, then columns*rows (x, y) floats.
         static const bool dump=[]{const char* v=std::getenv("EVR_AFW_MOTION_CHECK_DUMP");return v&&v[0]=='1';}();
-        static unsigned badDumps=0,goodDumps=0;
+        static unsigned badDumps=0,goodDumps=0,windowDumps=0;
         const bool bad=double(small)/mags.size()<.5;
         if(bad)++badChecks;
-        if(dump&&(bad?badDumps<120:goodDumps<8)){
-            (bad?badDumps:goodDumps)++;
+        // EVR_AFW_MOTION_CHECK_DUMP_PASSES=<first>-<last> (2026-11-18, the blur behind a swung sword): every check of those
+        // passes (the DLSS calls counted from the world's first, two a frame), at most 400, whatever its result.
+        static const auto window=[]{std::pair<uint64_t,uint64_t> w{1,0};const char* v=std::getenv("EVR_AFW_MOTION_CHECK_DUMP_PASSES");
+            if(v){unsigned long long a=0,b=0;if(std::sscanf(v,"%llu-%llu",&a,&b)==2&&b>=a)w={a,b};}return w;}();
+        const bool inWindow=c.call>=window.first&&c.call<=window.second&&windowDumps<400;
+        if((dump||inWindow)&&(inWindow||(bad?badDumps<120:goodDumps<8))){
+            if(inWindow)++windowDumps;else (bad?badDumps:goodDumps)++;
             static std::ofstream out(output+"/motion-residual.bin",std::ios::binary);
             const uint32_t cols=(c.width+3)/4,rows=(c.height+3)/4;
             const uint64_t head[2]{uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()),c.call};

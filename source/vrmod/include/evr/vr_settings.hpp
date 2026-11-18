@@ -135,6 +135,10 @@ inline std::vector<std::pair<std::string,std::string>> entries(const std::string
 // world three or more levels below the host, you are raised to the host's level - 1; switched in the exe, off by default"):
 // on the host's side - the host's game raises such a guest with the game's own admin action (hooks/level_catch_up.hpp;
 // [Online] LevelCatchUp). The guest needs nothing. Works with VR on or off; off unless set.
+// dlssTransformer (2026-11-18, user: "the DLSS model as a choice in the setting exe, K by default"): the DLSS model of the VR
+// start - true = the transformer model (preset K, hooks/dlss_eval_observer.hpp EVR_DLSS_PRESET), false = the game's own
+// choice (its default preset). The blur of a wide outdoor place while moving was less with K on the headset ([Picture]
+// DlssModel = K or Default). K unless set to Default. The game's DLSS library (310.9.1) has the model; FSR 3 is not touched.
 enum class FitView {Auto,Normal,Fit};
 inline const std::vector<std::string>& fitViewNames(){static const std::vector<std::string> names{"Auto","Normal","Fit"};return names;}
 enum class Style {Motion,PadFirst,PadThird};
@@ -144,7 +148,7 @@ struct Values {bool vr=false,online=true;double renderScale=.8;std::string dlss;
     bool realCrouch=true;int crouchDrop=30;int swingSpeed=100;bool armSwim=true;bool hitStop=true;bool uiAutoHide=true;bool menuRefresh=false;
     bool snapTurn=false;int snapTurnAngle=motion::snapAngleDefault;
     double afwRenderScale=0;std::string afwDlss;int afwPacing=0;
-    Style style=Style::Motion;bool padPitchLock=true;int padTilt=0;FitView fitView=FitView::Auto;bool levelCatchUp=false;};
+    Style style=Style::Motion;bool padPitchLock=true;int padTilt=0;FitView fitView=FitView::Auto;bool levelCatchUp=false;bool dlssTransformer=true;};
 inline bool padStyle(const Values& v){return v.style!=Style::Motion;}
 constexpr int swingSpeedLow=50,swingSpeedHigh=150,swingSpeedStep=5;
 inline int clampSwingSpeed(int percent){
@@ -169,6 +173,7 @@ inline Values read(const std::string& ini){
     out.afwRenderScale=number("Picture","AfwRenderScale",0.,.25,2.);if(get(ini,"Picture","AfwRenderScale")=="0")out.afwRenderScale=0;
     {const auto m=get(ini,"Picture","AfwDlss");for(const auto& known:dlssModes())if(sameText(known,m))out.afwDlss=known;}
     out.afwPacing=int(number("Picture","AfwPacing",d.afwPacing,0.,2.));
+    {const auto m=get(ini,"Picture","DlssModel");if(sameText(m,"Default")||sameText(m,"Game"))out.dlssTransformer=false;}
     {const auto st=get(ini,"Mode","Style");for(size_t i=0;i<styleNames().size();++i)if(sameText(styleNames()[i],st))out.style=Style(i);}
     out.padPitchLock=flag("Pad","PitchLock",d.padPitchLock);out.padTilt=int(std::lround(number("Pad","Tilt",d.padTilt,padTiltLow,padTiltHigh)));
     {const auto fv=get(ini,"Picture","FitView");

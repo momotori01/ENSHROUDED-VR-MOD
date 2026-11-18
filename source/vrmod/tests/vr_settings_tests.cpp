@@ -36,6 +36,8 @@ int main(){try{unsigned n=0;auto ck=[&](bool b,int line=__builtin_LINE()){++n;if
     !read(set(ini,"Body","ArmSwim","0")).armSwim&&clampSwingSpeed(149)==150&&clampSwingSpeed(10)==50);
  // [Picture] UiAutoHide (2026-10-23): on unless set; 0 = the HUD always shown; anything else keeps the default.
  ck(read(ini).uiAutoHide&&!read(set(ini,"Picture","UiAutoHide","0")).uiAutoHide&&read(set(ini,"Picture","UiAutoHide","1")).uiAutoHide&&read(set(ini,"Picture","UiAutoHide","x")).uiAutoHide);
+ // [Picture] DlssModel (2026-11-18): the transformer model (K) unless set to Default
+ ck(read(ini).dlssTransformer&&read(set(ini,"Picture","DlssModel","K")).dlssTransformer&&!read(set(ini,"Picture","DlssModel","Default")).dlssTransformer&&!read(set(ini,"Picture","DlssModel","default")).dlssTransformer);
  // [Picture] MenuRefresh (2026-10-27): off unless set to 1
  ck(!read(ini).menuRefresh&&read(set(ini,"Picture","MenuRefresh","1")).menuRefresh&&!read(set(ini,"Picture","MenuRefresh","0")).menuRefresh);
  // The alternate eyes' own picture and pacing (2026-10-23): unset = the usual picture, pacing 0; only with AlternateEyes=1.

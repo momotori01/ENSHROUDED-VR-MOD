@@ -38,13 +38,13 @@ HWND g_rbMode[4],g_rbLockOn,g_rbLockOff,g_tbTilt,g_stTilt,g_coSize,g_coSharp,g_c
 // The stroke's speed (a slider, 5 % a step) and swimming by the arms (2026-10-20; also in the game's start menu).
 // The alternate eyes' own picture and pacing (2026-10-23, include/evr/afw_pacing.hpp).
 HWND g_coAfwPacing,g_coAfwSize,g_coAfwDlss;
-HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff,g_rbMenuRefreshOn,g_rbMenuRefreshOff,g_btRecommend,g_stRecommend;
+HWND g_tbSwing,g_stSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbHudOn,g_rbHudOff,g_rbMenuRefreshOn,g_rbMenuRefreshOff,g_rbDlssK,g_rbDlssGame,g_btRecommend,g_stRecommend;
 // The snap turn and its degrees a step (2026-11-01, include/evr/snap_turn.hpp; also in the game's start menu).
 HWND g_rbSnapOn,g_rbSnapOff,g_tbSnap,g_stSnap;
 // The level catch-up for guests, the host's (2026-11-10, hooks/level_catch_up.hpp; [Online] LevelCatchUp, off unless set).
 HWND g_rbLevelOn,g_rbLevelOff;
 evr::recommend::Machine g_machine;   // the graphics card, read once at the start
-enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS,ID_MODE_MOTION,ID_LOCK_ON,ID_LOCK_OFF,ID_TILT,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP,ID_FIT_VIEW,ID_START,ID_MENU_REFRESH_ON,ID_MENU_REFRESH_OFF,ID_SNAP_ON,ID_SNAP_OFF,ID_SNAP_ANGLE,ID_LEVEL_ON,ID_LEVEL_OFF};
+enum {ID_VR=100,ID_FLAT,ID_SIZE,ID_DLSS,ID_SHARP,ID_ZIP,ID_DEFAULTS,ID_EYES,ID_UPDATE,ID_SWING,ID_SWIM_ON,ID_SWIM_OFF,ID_HITSTOP_ON,ID_HITSTOP_OFF,ID_RECOMMEND,ID_HUD_ON,ID_HUD_OFF,ID_AFW_PACING,ID_AFW_SIZE,ID_AFW_DLSS,ID_MODE_MOTION,ID_LOCK_ON,ID_LOCK_OFF,ID_TILT,ID_MODE_FIRST,ID_MODE_THIRD,ID_MODE_DESKTOP,ID_FIT_VIEW,ID_START,ID_MENU_REFRESH_ON,ID_MENU_REFRESH_OFF,ID_SNAP_ON,ID_SNAP_OFF,ID_SNAP_ANGLE,ID_LEVEL_ON,ID_LEVEL_OFF,ID_DLSS_K,ID_DLSS_GAME};
 constexpr UINT WM_APP_ZIP_DONE=WM_APP+1;     // wParam: exit code, lParam: new std::wstring (the zip's path)
 constexpr UINT WM_APP_LATEST=WM_APP+2;       // lParam: new std::wstring (the newest release's version, or "" when it could not be checked)
 constexpr UINT WM_APP_UPDATE_LINE=WM_APP+3;  // lParam: new std::wstring (a line the updater wrote)
@@ -156,10 +156,10 @@ void show(){
     check(g_rbSnapOn,v.snapTurn);check(g_rbSnapOff,!v.snapTurn);
     check(g_rbLevelOn,v.levelCatchUp);check(g_rbLevelOff,!v.levelCatchUp);   // in every play mode (the host's game does it)
     SendMessageW(g_tbSnap,TBM_SETPOS,TRUE,v.snapTurnAngle/evr::motion::snapAngleStep);SetWindowTextW(g_stSnap,(std::to_wstring(v.snapTurnAngle)+L"°").c_str());
-    check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);check(g_rbHudOn,v.uiAutoHide);check(g_rbHudOff,!v.uiAutoHide);check(g_rbMenuRefreshOn,v.menuRefresh);check(g_rbMenuRefreshOff,!v.menuRefresh);
+    check(g_rbSwimOn,v.armSwim);check(g_rbSwimOff,!v.armSwim);check(g_rbHitStopOn,v.hitStop);check(g_rbHitStopOff,!v.hitStop);check(g_rbHudOn,v.uiAutoHide);check(g_rbHudOff,!v.uiAutoHide);check(g_rbMenuRefreshOn,v.menuRefresh);check(g_rbMenuRefreshOff,!v.menuRefresh);check(g_rbDlssK,v.dlssTransformer);check(g_rbDlssGame,!v.dlssTransformer);
     for(HWND h:{g_coAfwPacing,g_coAfwSize})EnableWindow(h,!g_running&&v.vr&&v.alternateEyes);
     SendMessageW(g_coFit,CB_SETCURSEL,size_t(v.fitView),0);
-    for(HWND h:{g_coSize,g_coSharp,g_coFit,g_coEyes,g_rbHudOn,g_rbHudOff,g_rbMenuRefreshOn,g_rbMenuRefreshOff})EnableWindow(h,!g_running&&v.vr);
+    for(HWND h:{g_coSize,g_coSharp,g_coFit,g_coEyes,g_rbHudOn,g_rbHudOff,g_rbMenuRefreshOn,g_rbMenuRefreshOff,g_rbDlssK,g_rbDlssGame})EnableWindow(h,!g_running&&v.vr);
     // The motion controllers' rows are off in the gamepad modes; the pad rows only there (FPS and TPS alike).
     for(HWND h:{g_tbSwing,g_rbSwimOn,g_rbSwimOff,g_rbHitStopOn,g_rbHitStopOff,g_rbSnapOn,g_rbSnapOff,g_tbSnap})EnableWindow(h,!g_running&&v.vr&&!pad);
     for(HWND h:{g_rbLockOn,g_rbLockOff})EnableWindow(h,!g_running&&pad);   // FPS too: RT switches to TPS in the game
@@ -788,6 +788,11 @@ void build(){
     g_rbMenuRefreshOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_MENU_REFRESH_ON));
     g_rbMenuRefreshOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_MENU_REFRESH_OFF));
     next(kRowHeight-16);
+    // [Picture] DlssModel (2026-11-18, user: "a choice in the exe, K by default"): K = DLSS's transformer model
+    row(L"DLSS model (VR)",L"K: the newer model, less blur while moving (a little more GPU work). Game: what the game chooses.\nK：新しいモデル、動いた時のぶれが少ない（GPU の負担が少し増える）。Game：ゲームの選択");
+    g_rbDlssK=control(part(L"BUTTON",L"K",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_DLSS_K));
+    g_rbDlssGame=control(part(L"BUTTON",L"Game",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_DLSS_GAME));
+    next(kRowHeight-16);
     row(L"Level catch-up for guests (host, experimental)",L"Experimental, may not work yet. When you host: a player who joins your world three or more levels below you is raised to your level - 1. Only the host needs it; works with VR on or off.\n試験中（まだ働かないかもしれない）。ホストの時：3 レベル以上低い人が入ると、ホスト－1 まで上げる（ホストだけ。VR の入・切に関係なし）");
     g_rbLevelOn=control(part(L"BUTTON",L"On",BS_AUTORADIOBUTTON|WS_TABSTOP|WS_GROUP,kRight,g_y+8,80,22,ID_LEVEL_ON));
     g_rbLevelOff=control(part(L"BUTTON",L"Off",BS_AUTORADIOBUTTON|WS_TABSTOP,kRight+90,g_y+8,80,22,ID_LEVEL_OFF));
@@ -836,6 +841,7 @@ LRESULT CALLBACK windowProc(HWND hwnd,UINT message,WPARAM wParam,LPARAM lParam){
             case ID_HITSTOP_ON:store("Melee","HitStop","1");break;case ID_HITSTOP_OFF:store("Melee","HitStop","0");break;
             case ID_HUD_ON:store("Picture","UiAutoHide","1");break;case ID_HUD_OFF:store("Picture","UiAutoHide","0");break;
             case ID_MENU_REFRESH_ON:store("Picture","MenuRefresh","1");break;case ID_MENU_REFRESH_OFF:store("Picture","MenuRefresh","0");break;
+            case ID_DLSS_K:store("Picture","DlssModel","K");break;case ID_DLSS_GAME:store("Picture","DlssModel","Default");break;
             case ID_ZIP:startZip();break;
             case ID_RECOMMEND:applyRecommended(hwnd);break;
             case ID_UPDATE:startUpdate();break;

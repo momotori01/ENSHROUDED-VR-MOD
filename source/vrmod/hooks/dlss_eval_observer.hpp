@@ -124,11 +124,14 @@ inline std::string resource(uintptr_t r){
     std::ostringstream o;o<<"{\"image\":"<<hex(read<uintptr_t>(r+8))<<",\"w\":"<<read<uint32_t>(r+0x28)<<",\"h\":"<<read<uint32_t>(r+0x2c)
         <<",\"format\":"<<read<uint32_t>(r+0x24)<<",\"type\":"<<read<uint32_t>(r+0x30)<<'}';return o.str();
 }
+// Installed only for the DLSS model (EVR_DLSS_PRESET, set by every VR start since 2026-11-18): a few evaluations are logged,
+// not the 4000 of a diagnostic run.
+inline unsigned evalLogLimit(){return requested||depthNotes||checkBoth||resetRightEvery>0?logLimit:8u;}
 __declspec(noinline) int __fastcall evaluate(void* command,void* handle,void* parameters,void* eval){
     const CallbackScope callback;
     const auto from=reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress;
     std::string fields;
-    if(accepting&&from==caller&&logged.load()<logLimit){
+    if(accepting&&from==caller&&logged.load()<evalLogLimit()){
         const ObserverLastError preserve;
         try{
             const auto p=reinterpret_cast<uintptr_t>(eval),h=reinterpret_cast<uintptr_t>(handle),params=reinterpret_cast<uintptr_t>(parameters);
@@ -229,8 +232,23 @@ inline void logSet(const char* kind,void* params,const char* name,uint32_t value
             ",\"value\":"+std::to_string(value)+",\"caller\":"+hex(reinterpret_cast<uintptr_t>(_ReturnAddress())-baseAddress)+",\"thread\":"+std::to_string(GetCurrentThreadId()));
     }catch(...){++failures;}
 }
-__declspec(noinline) void __fastcall setUI(void* params,const char* name,uint32_t value){const CallbackScope callback;logSet("ui",params,name,value);originalSetUI(params,name,value);}
-__declspec(noinline) void __fastcall setI(void* params,const char* name,uint32_t value){const CallbackScope callback;logSet("i",params,name,value);originalSetI(params,name,value);}
+// EVR_DLSS_PRESET=<letter A..O or number> (2026-11-18, test: the blur while moving in wide outdoor places): every
+// "DLSS.Hint.Render.Preset.<mode>" the game sets (it sets 0, the library's default, for all modes before it creates a DLSS
+// feature) becomes this preset - J/K the transformer model, E the convolutional one of DLSS 3 (NVSDK_NGX_DLSS_Hint_Render_Preset:
+// A=1 .. O=15). Read when a feature is created, so it holds for the eyes' features made at the world's start.
+inline const int presetOverride=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_DLSS_PRESET",v,sizeof v);if(!n||n>=sizeof v)return -1;
+    if(v[0]>='A'&&v[0]<='O'&&!v[1])return v[0]-'A'+1;if(v[0]>='a'&&v[0]<='o'&&!v[1])return v[0]-'a'+1;
+    char* end=nullptr;const long x=std::strtol(v,&end,10);return end&&!*end&&x>=0&&x<=15?int(x):-1;}();
+inline std::atomic<unsigned> presetOverrides{0};
+inline uint32_t presetFor(const char* name,uint32_t value){
+    if(presetOverride<0||!name||std::strncmp(name,"DLSS.Hint.Render.Preset.",24))return value;
+    if(presetOverrides.fetch_add(1)<12){const ObserverLastError preserve;
+        try{std::string n;for(size_t i=0;i<64&&name[i];++i)n.push_back(name[i]);
+            logFile->event("dlss_preset_override","\"name\":"+jsonString(n)+",\"game\":"+std::to_string(value)+",\"set\":"+std::to_string(presetOverride));}catch(...){}}
+    return uint32_t(presetOverride);
+}
+__declspec(noinline) void __fastcall setUI(void* params,const char* name,uint32_t value){const CallbackScope callback;logSet("ui",params,name,value);originalSetUI(params,name,presetFor(name,value));}
+__declspec(noinline) void __fastcall setI(void* params,const char* name,uint32_t value){const CallbackScope callback;logSet("i",params,name,value);originalSetI(params,name,presetFor(name,value));}
 inline void verify(){
     for(const auto& [r,pat]:{std::pair<uintptr_t,const char*>{setUIRva,setUIPattern},{setIRva,setIPattern}}){
         const auto bytes=parsePattern(pat);
