@@ -94,6 +94,7 @@ int main(int argc,char** argv){try{unsigned n=0;
   ck(value(e,L"EVR_LIVE_NATIVE_XR")==L"1"&&value(e,L"EVR_PREPARE_OPENXR")==L"1"&&value(e,L"EVR_UI_QUAD")==L"1"&&value(e,L"EVR_ONLINE_SYNC")==L"1"&&value(e,L"EVR_PLAY_LOG")==L"1"&&value(e,L"EVR_MOCK_HAND_SEQUENCE").empty());
   ck(value(e,L"EVR_SHADOW_RECEIVER_SHADER")==L"G:\\game\\EnshroudedVR\\data\\shadow_receiver.spv"&&value(e,L"EVR_SHADOW_RECEIVER_SHADER_SHA256")==L"aa"&&value(e,L"EVR_GI_PROBE_SHADER_SHA256")==L"bb");
   ck(value(e,L"XR_RUNTIME_JSON")==L"?");   // the PC's own OpenXR runtime unless the settings file names one
+  ck(value(e,L"DISABLE_LAYER_NV_PRESENT_1")==L"1"&&value(vrEnvironment(p,{},false),L"DISABLE_LAYER_NV_PRESENT_1")==L"1");   // the NVIDIA presentation layer stays out (2026-11-24)
   const auto bare=vrEnvironment(p,{},false);ck(value(bare,L"EVR_SHADOW_RECEIVER_SHADER").empty()&&value(bare,L"EVR_GI_PROBE_SHADER_SHA256").empty()&&value(bare,L"EVR_ONLINE_SYNC").empty());
   ck(value(bare,L"EVR_ALTERNATE_EYES").empty()&&value(vrEnvironment(p,{},false,.8,true),L"EVR_ALTERNATE_EYES")==L"1");   // one eye a frame only when switched on
   ck(value(vrEnvironment(p,{},false,.8,true,1),L"EVR_EYE_WARP")==L"1"&&value(vrEnvironment(p,{},false,.8,true,2),L"EVR_EYE_WARP")==L"2"&&value(vrEnvironment(p,{},false,.8,false,2),L"EVR_EYE_WARP").empty()&&value(vrEnvironment(p,{},false,.8,true),L"EVR_EYE_WARP").empty());   // the warp only with one eye a frame

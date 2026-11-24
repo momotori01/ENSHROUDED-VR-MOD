@@ -447,7 +447,8 @@ inline void present(VkQueue queue,const VkPresentInfoKHR* p,VkPresentInfoKHR& re
         auto& live=*liveNativeXr;
         modUpdate::start();                                                        // once: is a newer mod out?
         if(live.thread!=GetCurrentThreadId()||live.device!=dd.device||queue!=(live.ownQueue?live.own.game:live.xr->vk.queue)){
-            if(!state.threadTold){state.threadTold=true;note("screen_xr_off","\"reason\":\"another thread, device or queue presents than the session's\",\"thread\":"+std::to_string(GetCurrentThreadId())+",\"session_thread\":"+std::to_string(live.thread));}
+            if(!state.threadTold){state.threadTold=true;note("screen_xr_off","\"reason\":\"another thread, device or queue presents than the session's\",\"thread\":"+std::to_string(GetCurrentThreadId())+",\"session_thread\":"+std::to_string(live.thread)+
+                ",\"same_device\":"+(live.device==dd.device?"true":"false")+",\"present_queue_family\":"+std::to_string(family)+",\"session_queue_family\":"+std::to_string(live.xr->vk.family));}
             return;}
         const bool worldFrame=live.xr->hasPendingFrame();
         const bool hooksDriving=live.worldSession&&GetTickCount64()-live.lastWorldBegin<=500;

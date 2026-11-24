@@ -141,6 +141,12 @@ inline Environment vrEnvironment(const Paths& p,const Shaders& s,bool online,dou
         // first frame (include/evr/openxr_client.hpp fovCache): the picture fits the lens from the next start.
         {L"EVR_FOV_CACHE_FILE",p.mod+L"\\run\\fov-cache.txt"},
         {L"EVR_LAYER_OUTPUT",p.log},{L"VK_LAYER_PATH",p.bin},{L"VK_INSTANCE_LAYERS",L"VK_LAYER_EVR_diagnostic"},
+        // The NVIDIA driver's presentation layer (VK_LAYER_NV_present: Smooth Motion, the "layered on DXGI" present method)
+        // stays out of the game (its manifest's disable_environment). 2026-11-24, a player's RTX 5070: it sat above the mod's
+        // layer, asked for two more queues and presented from a thread and queue of its own, so the plate went off at once
+        // and the world's first pair failed ("native XR thread/device changed") - VR never began. Programs the game starts get
+        // the variable back as it was (loader.cpp).
+        {L"DISABLE_LAYER_NV_PRESENT_1",L"1"},
         {L"EVR_PREPARE_OPENXR",L"1"},{L"EVR_PREPARE_LOADER",p.bin+L"\\openxr_loader.dll"},{L"EVR_PREPARE_FIXTURE",L"0"},{L"EVR_PREPARE_FAIL_DEVICE",L"0"},
         {L"EVR_PREPARE_SESSION_FIXTURE",L"0"},{L"EVR_PREPARE_GAME_SESSION",L"0"},{L"EVR_LIVE_NATIVE_XR",L"1"},
         {L"EVR_NATIVE_MOTION_HANDS",L"1"},{L"EVR_HANDS_ONLY",L"1"},{L"EVR_GRIP_TRIM",L"4.47,-59.27,3.61"},

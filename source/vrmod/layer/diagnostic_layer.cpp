@@ -607,9 +607,15 @@ VKAPI_ATTR VkResult VKAPI_CALL evrCreateDevice(VkPhysicalDevice physical, const 
         catch (...) { fields << ",\"feature_metadata_error\":true"; }
         fields << ",\"openxr_extensions_prepared\":" << (prepared ? "true" : "false");
         note("create_device", fields.str());
+        // A layer above the mod's that presents by itself (2026-11-24, a player's RTX 5070: NVIDIA's presentation layer,
+        // with two more queues and a present thread of its own; the loader keeps it out with DISABLE_LAYER_NV_PRESENT_1).
+        for (uint32_t i = 0; i < info->enabledExtensionCount; ++i)
+            if (info->ppEnabledExtensionNames[i] && !std::strcmp(info->ppEnabledExtensionNames[i], "VK_NV_internal_nvpresent"))
+                note("present_layer_above_the_mod", "\"extension\":\"VK_NV_internal_nvpresent\",\"layer\":\"VK_LAYER_NV_present\",\"disabled_by_environment\":" +
+                     std::string(std::getenv("DISABLE_LAYER_NV_PRESENT_1") ? "true" : "false"));
         try
         {
-            auto getProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(nextI(instance, "vkGetPhysicalDeviceProperties"));
+            auto getProperties =reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(nextI(instance, "vkGetPhysicalDeviceProperties"));
             auto getQueues = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(nextI(instance, "vkGetPhysicalDeviceQueueFamilyProperties"));
             if (getProperties && getQueues)
             {
