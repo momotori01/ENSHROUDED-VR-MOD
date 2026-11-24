@@ -33,7 +33,20 @@ int main(){unsigned n=0;try{
  auto recycled=original;recycled.resource++;pick=selectRetainedVisual(cache,recycled,true);require(pick.valid&&pick.create&&pick.slot==2);
  auto differentGuid=original;differentGuid.guid[0]++;pick=selectRetainedVisual(cache,differentGuid,true);require(pick.valid&&pick.create&&pick.slot==2);
  for(size_t i=2;i<cache.size();++i){auto key=original;key.item+=uint32_t(i)+100;cache[i]={key,uint32_t(i)+1000};}
- require(!selectRetainedVisual(cache,recycled,true).valid); // Capacity never authorizes eviction.
+ // All taken (2026-11-23): the least recently used slot other than the shown one is handed back for the new item.
+ for(size_t i=0;i<cache.size();++i)cache[i].used=100+i;cache[5].used=3;cache[9].used=1;
+ pick=selectRetainedVisual(cache,recycled,true);require(pick.valid&&pick.create&&pick.evict&&pick.slot==9);
+ pick=selectRetainedVisual(cache,recycled,true,cache[9].clone);require(pick.valid&&pick.create&&pick.evict&&pick.slot==5);   // never the shown clone
+ {std::array<RetainedVisual,retainedVisualCapacity> one{};one[0]={original,0x1000100,7};
+  auto other=original;other.item+=7;pick=selectRetainedVisual(one,other,true,0x1000100);require(pick.valid&&pick.create&&!pick.evict&&pick.slot==1);
+  // the test limit: two usable slots, both taken, the shown one kept
+  one[1]={other,0x1000101,9};auto third=original;third.item+=8;
+  pick=selectRetainedVisual(one,third,true,0x1000101,2);require(pick.valid&&pick.evict&&pick.slot==0);
+  pick=selectRetainedVisual(one,third,true,0x1000100,2);require(pick.valid&&pick.evict&&pick.slot==1);
+  require(!selectRetainedVisual(one,third,true,0x1000100,1).valid);   // one usable slot, and it is shown
+  std::array<RetainedVisual,retainedVisualCapacity> none{};   // the limit with empty slots: the first empty one, no eviction
+  pick=selectRetainedVisual(none,third,true,0,2);require(pick.valid&&pick.create&&!pick.evict&&pick.slot==0);
+  none[0]={original,0x1000100,1};pick=selectRetainedVisual(none,third,true,0x1000100,2);require(pick.valid&&pick.create&&!pick.evict&&pick.slot==1);}
  pick=selectRetainedVisual(cache,original,true);require(pick.valid&&!pick.create&&pick.slot==0);
  require(!selectRetainedVisual(cache,original,false).valid);
  for(unsigned k=0;k<5;k++){auto missing=original;switch(k){case 0:missing.item=0;break;case 1:missing.source=0;break;case 2:missing.child=0;break;case 3:missing.resource=0;break;case 4:missing.guid={};break;}require(!selectRetainedVisual(cache,missing,true).valid);}

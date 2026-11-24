@@ -146,9 +146,7 @@ inline void prepare(uint64_t serial){
   ",\"source_joints_bytes\":"+jsonString(nativeImpactComponents::asHex(sourceRaw).substr(0,before.size()*2))+
   ",\"source_unchanged\":true,\"private_pose_only\":true");
 }
-inline void dispose(uintptr_t scene){
- if(scene!=motionVisual::scene)return;
- for(auto& e:owned)if(e.pose){
+inline void releaseEntry(uintptr_t scene,Owned& e){
   const auto id=e.pose;const auto record=handPoseMetadata::pose(scene,id);const auto refs=read<uint32_t>(e.owner+16);
   if(read<uint64_t>(record+0x58))throw std::runtime_error("private bow pose still bound");
   reinterpret_cast<motionHandVisual::PoseRemove>(baseAddress+0x110300)(reinterpret_cast<void*>(scene),id);e.pose=0;
@@ -157,6 +155,14 @@ inline void dispose(uintptr_t scene){
   logFile->event(e.type==4?"motion_bow_pose_disposed":"motion_ranged_pose_disposed","\"handle\":"+std::to_string(e.model)+",\"pose_handle\":"+std::to_string(id)+",\"generation_invalidated\":"+(invalid?"true":"false")+
    ",\"reference_released\":"+(released?"true":"false")+",\"updates\":"+std::to_string(e.updates));
   if(!invalid||!released)throw std::runtime_error("bow pose retirement failed");e={};
- }
 }
+inline void dispose(uintptr_t scene){
+ if(scene!=motionVisual::scene)return;
+ for(auto& e:owned)if(e.pose)releaseEntry(scene,e);
+}
+// The clone of a retained slot handed back (motion_visual_bridge.hpp evictRetained, 2026-11-23): its private pose, after it.
+inline void releaseFor(uintptr_t scene,uint32_t model){
+ for(auto& e:owned)if(e.model==model){if(e.pose)releaseEntry(scene,e);else e={};}
+}
+inline const bool releaseRegistered=(motionVisual::releaseModelPoses=&releaseFor,true);
 }

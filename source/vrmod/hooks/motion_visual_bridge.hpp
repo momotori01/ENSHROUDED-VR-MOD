@@ -55,6 +55,10 @@ inline motion::ColliderPose pendingColliderPose;
 inline std::array<uint8_t,0x1b0> hiddenSourceBytes{};
 inline std::array<uint32_t,4> guid{};
 inline std::array<motion::RetainedVisual,motion::retainedVisualCapacity> retainedVisuals{};
+inline uint64_t retainedUse=0;   // the "used" counter of the retained slots (motion_visual_binding.hpp)
+// A private pose of the mod bound to a clone that leaves (motion_bow_visual.hpp sets it): released after the clone.
+inline void(*releaseModelPoses)(uintptr_t scene,uint32_t model)=nullptr;
+inline void evictRetained(motion::RetainedVisual& e);
 // The hand items as shown this frame: attachmentObserver::shownItem (2026-10-15, online 2.1).
 inline bool liveEquipment(){return liveWeaponMount&&!weaponGripPreview::requested;}
 using Create=uint32_t(__fastcall*)(void*,const void*,const void*);
@@ -218,8 +222,13 @@ inline void prepare(uintptr_t s,uintptr_t v,const game::StableAnchor& anchor,uin
             (current.slot==8||current.slot==9)&&ready;
         const auto sourceGuid=ready?read<std::array<uint32_t,4>>(res+0x18):std::array<uint32_t,4>{};
         const motion::VisualIdentity selected{current.item,current.handle,current.entity,res,sourceGuid};
-        liveSelection=motion::selectRetainedVisual(retainedVisuals,selected,supported);
+        // EVR_TEST_RETAINED_SLOTS=<1..24> (test only): fewer usable slots, so a few switches exercise the eviction.
+        static const size_t usableSlots=[]{char v[8]{};const auto n=GetEnvironmentVariableA("EVR_TEST_RETAINED_SLOTS",v,sizeof v);
+            const long x=n&&n<sizeof v?std::strtol(v,nullptr,10):0;return x>=1&&x<=long(motion::retainedVisualCapacity)?size_t(x):motion::retainedVisualCapacity;}();
+        liveSelection=motion::selectRetainedVisual(retainedVisuals,selected,supported,handle,usableSlots);
         if(!liveSelection.valid){dormant(supported?"retained_visual_capacity":"unsupported_live_appearance",current.item);return;}
+        if(liveSelection.evict)evictRetained(retainedVisuals[liveSelection.slot]);
+        if(!liveSelection.create)retainedVisuals[liveSelection.slot].used=++retainedUse;
         const auto next=liveSelection.create?0:retainedVisuals[liveSelection.slot].clone;
         if(next!=handle){
             logFile->event("motion_visual_equipment_switch","\"frame\":"+std::to_string(liveFrame.frame)+",\"previous_handle\":"+std::to_string(handle)+
@@ -367,7 +376,7 @@ inline void prepare(uintptr_t s,uintptr_t v,const game::StableAnchor& anchor,uin
         logFile->event("motion_visual_invariant","\"item\":"+std::to_string(item)+",\"frame\":"+std::to_string(liveFrame.frame)+",\"source_changed_offsets\":["+where+"],\"clone_pose_differs\":"+(std::memcmp(cloneAfter.data(),transform.data(),52)?"true":"false")+
             ",\"source_pose\":"+std::to_string(read<uint32_t>(object(sourceHandle)+layout::modelPose))+",\"clone_bytes\":"+jsonString(nativeImpactComponents::asHex(cloneAfter))+",\"wanted_bytes\":"+jsonString(nativeImpactComponents::asHex(transform)));
         throw std::runtime_error("motion visual original changed or clone pose differs");}}
-    if(liveEquipment())retainedVisuals[liveSelection.slot]={{item,sourceHandle,child,resource,guid},handle};
+    if(liveEquipment())retainedVisuals[liveSelection.slot]={{item,sourceHandle,child,resource,guid},handle,++retainedUse};
     poseReady=true;updatedSerial=serial;updatedFrame=liveFrame.frame;++updates;
     attachmentObserver::shownItem[1].serial=serial;attachmentObserver::shownItem[1].frame=liveFrame.frame;std::memcpy(attachmentObserver::shownItem[1].transform.data(),transform.data(),40);
     // Experiment: the game's own entity of the shown hand item follows the tracked item (attachment_observer.hpp).
@@ -476,6 +485,18 @@ inline void disposeActive(){
     logFile->event("motion_visual_disposed","\"handle\":"+std::to_string(id)+",\"generation_invalidated\":"+(invalid?"true":"false")+
         ",\"reference_released\":"+(released?"true":"false")+",\"scene_disposal\":true,\"updates\":"+std::to_string(updates));
     if(!invalid||!released)throw std::runtime_error("motion visual disposal failed");
+}
+// All retained slots taken (2026-11-23, motion_visual_binding.hpp): the least recently used clone, never the one shown, leaves
+// the Scene as at its disposal (disposeActive's checks), then a private pose that was bound to it.
+inline void evictRetained(motion::RetainedVisual& e){
+    const auto evicted=e.clone,evictedItem=e.identity.item;
+    if(!evicted||evicted==handle)throw std::runtime_error("retained visual eviction of the shown clone");
+    struct Restore {uint32_t h;uintptr_t r;~Restore(){handle=h;resource=r;}} restore{handle,resource};
+    handle=evicted;resource=e.identity.resource;
+    disposeActive();
+    e={};
+    if(releaseModelPoses)releaseModelPoses(scene,evicted);
+    logFile->event("motion_visual_evicted","\"handle\":"+std::to_string(evicted)+",\"item\":"+std::to_string(evictedItem)+",\"frame\":"+std::to_string(liveFrame.frame)+",\"reason\":\"all retained slots taken\"");
 }
 inline void dispose(uintptr_t s){
     motionColliderChannel::invalidate();
